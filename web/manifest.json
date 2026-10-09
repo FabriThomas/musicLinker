@@ -1,0 +1,17 @@
+{
+  "name": "MusicLinker Player",
+  "short_name": "MusicLinker",
+  "description": "Offline-First Cross-Platform Music Player & Personal Sync",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#e50914",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

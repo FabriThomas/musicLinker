@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#121212">
+  <title>MusicLinker Player</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <style>
+    body {
+      background-color: #0c0c0e;
+      color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #18181b;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #27272a;
+      border-radius: 3px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #3f3f46;
+    }
+    input[type=range] {
+      accent-color: #e50914;
+    }
+    /* Animated Karaoke Lyrics */
+    .lyric-line {
+      transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      cursor: pointer;
+    }
+    .lyric-line.active {
+      color: #ffffff;
+      font-size: 1.45rem;
+      font-weight: 700;
+      opacity: 1 !important;
+      transform: scale(1.04);
+      text-shadow: 0 0 25px rgba(229, 9, 20, 0.6);
+    }
+    .lyric-line.inactive {
+      opacity: 0.35;
+      font-size: 1.15rem;
+      filter: blur(0.5px);
+    }
+    .lyric-line:hover {
+      opacity: 0.8 !important;
+    }
+    /* Ambient Glow for Car Mode */
+    .ambient-glow {
+      background: radial-gradient(circle at 50% 50%, rgba(229, 9, 20, 0.18) 0%, rgba(12, 12, 14, 0.95) 75%);
+    }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+  <!-- TOP HEADER / NAV -->
+  <header class="bg-zinc-900 border-b border-zinc-800 px-4 py-2.5 flex items-center justify-between shrink-0 z-20">
+    <div class="flex items-center space-x-3">
+      <div class="w-8 h-8 rounded-xl bg-red-600/20 border border-red-500/30 flex items-center justify-center text-red-500 font-bold">
+        <i data-lucide="music" class="w-4 h-4"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-sm sm:text-base tracking-wide flex items-center space-x-2">
+          <span>MusicLinker</span>
+          <span id="connectionBadge" class="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Online</span>
+        </h1>
+      </div>
+    </div>
+    <div class="flex items-center space-x-2">
+      <!-- Car Mode Button -->
+      <button onclick="toggleCarMode()" class="px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 text-xs font-semibold flex items-center space-x-1.5 transition">
+        <i data-lucide="car" class="w-4 h-4"></i>
+        <span class="hidden sm:inline">Car Mode</span>
+      </button>
+      <button onclick="switchTab('downloader')" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium flex items-center space-x-1.5 transition">
+        <i data-lucide="download-cloud" class="w-4 h-4 text-red-400"></i>
+        <span class="hidden sm:inline">Downloader</span>
+      </button>
+      <button onclick="switchTab('transitions')" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium flex items-center space-x-1.5 transition">
+        <i data-lucide="git-merge" class="w-4 h-4 text-purple-400"></i>
+        <span class="hidden sm:inline">Transitions</span>
+      </button>
+      <button onclick="switchTab('phone')" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium flex items-center space-x-1.5 transition">
+        <i data-lucide="smartphone" class="w-4 h-4 text-blue-400"></i>
+        <span class="hidden sm:inline">Phone Sync</span>
+      </button>
+      <button onclick="switchTab('settings')" class="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition">
+        <i data-lucide="settings" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN BODY -->
+  <div class="flex-1 flex overflow-hidden relative">
+    <!-- Desktop Sidebar -->
+    <aside class="w-56 bg-zinc-900/60 border-r border-zinc-800/80 p-4 hidden md:flex flex-col justify-between shrink-0">
+      <div class="space-y-6">
+        <div>
+          <p class="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 px-3 mb-2">Library</p>
+          <nav class="space-y-1">
+            <button onclick="switchTab('tracks')" id="nav-tracks" class="w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition bg-red-600/10 text-red-400">
+              <i data-lucide="list-music" class="w-4 h-4"></i>
+              <span>Tracks</span>
+              <span id="trackCountBadge" class="ml-auto text-xs bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-400">0</span>
+            </button>
+            <button onclick="switchTab('artists')" id="nav-artists" class="w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition text-zinc-400 hover:bg-zinc-800 hover:text-white">
+              <i data-lucide="users" class="w-4 h-4"></i>
+              <span>Artists</span>
+            </button>
+            <button onclick="switchTab('albums')" id="nav-albums" class="w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition text-zinc-400 hover:bg-zinc-800 hover:text-white">
+              <i data-lucide="disc" class="w-4 h-4"></i>
+              <span>Albums</span>
+            </button>
+          </nav>
+        </div>
+
+        <div>
+          <p class="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 px-3 mb-2">Audio Engine</p>
+          <div class="px-3 space-y-2">
+            <label class="flex items-center space-x-2 text-xs text-zinc-300 cursor-pointer">
+              <input type="checkbox" id="normalizeAudioToggle" onchange="toggleAudioNormalization()" class="rounded bg-zinc-800 text-red-600 focus:ring-0">
+              <span>Loudness Normalizer</span>
+            </label>
+            <label class="flex items-center space-x-2 text-xs text-zinc-400 cursor-pointer">
+              <input type="checkbox" id="offlineFilterToggle" onchange="toggleOfflineFilter()" class="rounded bg-zinc-800 text-red-600 focus:ring-0">
+              <span>Show Offline Only</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div id="lastfmStatusCard" class="bg-zinc-800/60 border border-zinc-700/50 rounded-xl p-3 text-xs">
+        <span class="font-semibold text-zinc-300 flex items-center space-x-1.5 mb-1">
+          <span class="w-2 h-2 rounded-full bg-red-500"></span>
+          <span>Last.fm Scrobbler</span>
+        </span>
+        <p id="lastfmUserLabel" class="text-zinc-400 text-[11px]">Checking status...</p>
+      </div>
+    </aside>
+
+    <!-- MAIN VIEWS CONTAINER -->
+    <main class="flex-1 flex flex-col overflow-hidden bg-zinc-950 relative">
+      <!-- Mobile Sub-nav -->
+      <div class="md:hidden flex border-b border-zinc-800 bg-zinc-900/40 px-2 py-1.5 overflow-x-auto text-xs shrink-0">
+        <button onclick="switchTab('tracks')" id="mob-tracks" class="px-3 py-1.5 rounded-lg font-medium text-red-400 bg-red-600/10">Tracks</button>
+        <button onclick="switchTab('artists')" id="mob-artists" class="px-3 py-1.5 rounded-lg font-medium text-zinc-400">Artists</button>
+        <button onclick="switchTab('albums')" id="mob-albums" class="px-3 py-1.5 rounded-lg font-medium text-zinc-400">Albums</button>
+        <button onclick="switchTab('downloader')" id="mob-downloader" class="px-3 py-1.5 rounded-lg font-medium text-zinc-400">Downloader</button>
+      </div>
+
+      <!-- TAB: TRACKS -->
+      <section id="tab-tracks" class="flex-1 flex flex-col p-4 md:p-6 overflow-hidden">
+        <div class="flex flex-col sm:row gap-3 justify-between items-start sm:items-center mb-4 shrink-0">
+          <div class="relative w-full sm:w-80">
+            <i data-lucide="search" class="w-4 h-4 absolute left-3 top-2.5 text-zinc-500"></i>
+            <input type="text" id="trackSearchInput" oninput="renderTracks()" placeholder="Search title, artist, album..." class="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-9 pr-4 py-2 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-red-500 transition">
+          </div>
+          <div class="flex items-center space-x-2 text-xs">
+            <button onclick="playAllTracks()" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-medium flex items-center space-x-1.5 transition">
+              <i data-lucide="play" class="w-4 h-4 fill-current"></i>
+              <span>Play All</span>
+            </button>
+            <button onclick="scanLibrary()" title="Scan for new MP3s" class="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-white transition">
+              <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto custom-scrollbar rounded-xl border border-zinc-800/80 bg-zinc-900/30">
+          <div id="trackListContainer" class="divide-y divide-zinc-800/50"></div>
+        </div>
+      </section>
+
+      <!-- TAB: ARTISTS -->
+      <section id="tab-artists" class="hidden flex-1 p-4 md:p-6 overflow-y-auto custom-scrollbar">
+        <h2 class="text-xl font-bold mb-4">Artists</h2>
+        <div id="artistsContainer" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>
+      </section>
+
+      <!-- TAB: ALBUMS -->
+      <section id="tab-albums" class="hidden flex-1 p-4 md:p-6 overflow-y-auto custom-scrollbar">
+        <h2 class="text-xl font-bold mb-4">Albums</h2>
+        <div id="albumsContainer" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>
+      </section>
+
+      <!-- TAB: DOWNLOADER (BATCH & INDIVIDUAL) -->
+      <section id="tab-downloader" class="hidden flex-1 p-4 md:p-6 overflow-y-auto custom-scrollbar max-w-4xl mx-auto w-full space-y-6">
+        <!-- Section 1: Individual Song/Album Search & Download -->
+        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+                <i data-lucide="search" class="w-5 h-5 text-red-500"></i>
+                <span>Search Any Song or Album to Download</span>
+              </h2>
+              <p class="text-xs text-zinc-400 mt-0.5">Quickly search and download individual songs or albums with ID3 tagging.</p>
+            </div>
+          </div>
+
+          <div class="flex gap-2">
+            <input type="text" id="individualSearchInput" onkeydown="if(event.key==='Enter') searchIndividualTracks()" placeholder="e.g. Pink Floyd - Time, Daft Punk - Discovery..." class="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-red-500">
+            <button onclick="searchIndividualTracks()" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-sm font-semibold rounded-xl transition">
+              Search
+            </button>
+          </div>
+
+          <div id="individualResultsContainer" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-2"></div>
+        </div>
+
+        <!-- Section 2: Last.fm Batch Extractor -->
+        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-5">
+          <div>
+            <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+              <i data-lucide="sparkles" class="w-5 h-5 text-amber-500"></i>
+              <span>Batch Extract from Last.fm</span>
+            </h2>
+            <p class="text-xs text-zinc-400 mt-0.5">Extract songs with &gt; 10 plays, auto-tag ID3 metadata, and download to library.</p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Last.fm Username</label>
+              <input type="text" id="dlUsername" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Timeframe</label>
+              <select id="dlPeriod" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500">
+                <option value="12month">Last 12 Months (Last Year)</option>
+                <option value="6month">Last 6 Months</option>
+                <option value="3month">Last 3 Months</option>
+                <option value="1month">Last 30 Days</option>
+                <option value="7day">Last 7 Days</option>
+                <option value="overall">All Time</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Min Plays (&gt; X)</label>
+              <input type="number" id="dlMinPlays" value="10" min="1" max="5000" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Download Cap (Top N)</label>
+              <input type="number" id="dlCap" value="25" min="1" max="500" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white">
+            </div>
+          </div>
+
+          <button onclick="startDownloadJob()" id="startDlBtn" class="w-full py-2.5 bg-red-600 hover:bg-red-500 font-semibold text-sm rounded-xl transition flex items-center justify-center space-x-2">
+            <i data-lucide="play" class="w-4 h-4 fill-current"></i>
+            <span>Start Batch Extraction</span>
+          </button>
+
+          <div id="jobProgressContainer" class="hidden bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-2">
+            <div class="flex justify-between text-xs">
+              <span id="jobStatusText" class="text-zinc-300 font-medium">Processing...</span>
+              <span id="jobProgressPercent" class="text-zinc-400">0%</span>
+            </div>
+            <div class="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
+              <div id="jobProgressBar" class="bg-red-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: TRANSITIONS MANAGER -->
+      <section id="tab-transitions" class="hidden flex-1 p-4 md:p-6 overflow-y-auto custom-scrollbar max-w-3xl mx-auto w-full space-y-6">
+        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-4">
+          <div>
+            <h2 class="text-xl font-bold flex items-center space-x-2 text-purple-400">
+              <i data-lucide="git-merge" class="w-6 h-6"></i>
+              <span>Song Transitions Manager</span>
+            </h2>
+            <p class="text-xs text-zinc-400 mt-1">Configure smooth transitions between specific songs with a random chance of occurring!</p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">When Ending Song (From):</label>
+              <select id="transFromTrack" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"></select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Is Followed By (To):</label>
+              <select id="transToTrack" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"></select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Trigger Probability (% chance)</label>
+              <input type="range" id="transProbability" min="10" max="100" value="50" class="w-full h-1 bg-zinc-700 rounded-lg">
+              <span id="transProbText" class="text-xs font-mono text-purple-400">50% chance</span>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Crossfade Duration (seconds)</label>
+              <input type="number" id="transDuration" value="4.0" step="0.5" min="1" max="12" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-white">
+            </div>
+          </div>
+
+          <button onclick="saveTransitionRule()" class="w-full py-2 bg-purple-600 hover:bg-purple-500 font-semibold text-xs rounded-xl transition">
+            Save Transition Rule
+          </button>
+
+          <hr class="border-zinc-800 my-2">
+
+          <div>
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Active Transition Rules</h3>
+            <div id="transitionsList" class="space-y-2"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: PHONE SYNC -->
+      <section id="tab-phone" class="hidden flex-1 p-4 md:p-6 overflow-y-auto custom-scrollbar max-w-xl mx-auto w-full text-center space-y-6">
+        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-5">
+          <div class="w-12 h-12 bg-blue-600/20 text-blue-400 rounded-2xl mx-auto flex items-center justify-center">
+            <i data-lucide="smartphone" class="w-6 h-6"></i>
+          </div>
+          <div>
+            <h2 class="text-xl font-bold">Connect Your Android Phone</h2>
+            <p class="text-xs text-zinc-400 mt-1">Listen over Wi-Fi or tap "Save for Offline" on your phone to carry your music everywhere!</p>
+          </div>
+
+          <div class="bg-white p-4 rounded-2xl inline-block shadow-lg">
+            <canvas id="qrCodeCanvas"></canvas>
+          </div>
+
+          <div>
+            <p class="text-xs text-zinc-400">Or type this address in your phone's browser:</p>
+            <p id="networkUrlText" class="font-mono text-sm text-blue-400 font-semibold mt-1">http://127.0.0.1:8000</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: SETTINGS -->
+      <section id="tab-settings" class="hidden flex-1 p-4 md:p-6 overflow-y-auto custom-scrollbar max-w-xl mx-auto w-full space-y-6">
+        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-4">
+          <h2 class="text-xl font-bold flex items-center space-x-2">
+            <i data-lucide="settings" class="w-5 h-5 text-zinc-400"></i>
+            <span>Settings & Last.fm Auth</span>
+          </h2>
+
+          <div class="space-y-3">
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Last.fm API Key</label>
+              <input type="text" id="cfgApiKey" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1">Last.fm Shared Secret</label>
+              <input type="password" id="cfgApiSecret" class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white">
+            </div>
+            <button onclick="startLastfmAuth()" class="w-full py-2.5 bg-red-600 hover:bg-red-500 font-semibold text-xs rounded-xl transition">
+              Connect / Authorize with Last.fm
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- OVERLAY: ANIMATED KARAOKE LYRICS DRAWER -->
+      <div id="lyricsDrawer" class="hidden absolute inset-0 bg-zinc-950/95 backdrop-blur-xl z-30 flex flex-col p-6 animate-fade-in">
+        <div class="flex items-center justify-between border-b border-zinc-800 pb-4 mb-4">
+          <div class="flex items-center space-x-3">
+            <div id="lyricsThumb" class="w-12 h-12 rounded-xl bg-zinc-800 overflow-hidden shrink-0"></div>
+            <div>
+              <h3 id="lyricsTitle" class="text-base font-bold text-white truncate"></h3>
+              <p id="lyricsArtist" class="text-xs text-zinc-400 truncate"></p>
+            </div>
+          </div>
+          <button onclick="toggleLyrics()" class="p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-white transition">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+
+        <div id="lyricsContainer" class="flex-1 overflow-y-auto custom-scrollbar flex flex-col items-center justify-center space-y-6 text-center py-20 px-4">
+          <p class="text-zinc-500 text-sm">Loading synced lyrics...</p>
+        </div>
+      </div>
+
+      <!-- OVERLAY: FULLSCREEN CAR MODE -->
+      <div id="carModeOverlay" class="hidden absolute inset-0 z-40 ambient-glow flex flex-col justify-between p-6 sm:p-10 select-none">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center space-x-2">
+            <i data-lucide="car" class="w-5 h-5"></i>
+            <span>Car Driving Mode &bull; Screen Kept Awake</span>
+          </span>
+          <button onclick="toggleCarMode()" class="px-4 py-2 rounded-xl bg-zinc-800/80 text-white font-semibold text-xs hover:bg-zinc-700 transition">
+            Exit Car Mode
+          </button>
+        </div>
+
+        <!-- Car Center: Huge Active Lyric & Track Info -->
+        <div class="flex flex-col items-center justify-center text-center my-auto space-y-4">
+          <div id="carThumb" class="w-32 h-32 sm:w-44 sm:h-44 rounded-3xl overflow-hidden shadow-2xl border-2 border-zinc-700/50 mb-2"></div>
+          <h2 id="carTitle" class="text-2xl sm:text-4xl font-extrabold text-white truncate max-w-2xl"></h2>
+          <p id="carArtist" class="text-base sm:text-xl text-zinc-400 truncate max-w-xl"></p>
+          <div id="carLyricsActive" class="text-lg sm:text-2xl font-bold text-amber-300 min-h-[4rem] flex items-center justify-center px-4"></div>
+        </div>
+
+        <!-- Car Bottom: Massive Touch Buttons -->
+        <div class="flex items-center justify-center space-x-6 sm:space-x-12 pb-6">
+          <button onclick="prevTrack()" class="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-zinc-800/90 hover:bg-zinc-700 text-white flex items-center justify-center transition shadow-lg active:scale-95">
+            <i data-lucide="skip-back" class="w-8 h-8 sm:w-10 sm:h-10 fill-current"></i>
+          </button>
+          <button onclick="togglePlay()" id="carPlayBtn" class="w-20 h-20 sm:w-28 sm:h-28 rounded-3xl bg-amber-500 hover:bg-amber-400 text-black flex items-center justify-center transition shadow-2xl active:scale-95">
+            <i data-lucide="play" class="w-10 h-10 sm:w-14 sm:h-14 fill-current ml-1"></i>
+          </button>
+          <button onclick="nextTrack()" class="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-zinc-800/90 hover:bg-zinc-700 text-white flex items-center justify-center transition shadow-lg active:scale-95">
+            <i data-lucide="skip-forward" class="w-8 h-8 sm:w-10 sm:h-10 fill-current"></i>
+          </button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- PERSISTENT BOTTOM AUDIO PLAYER BAR -->
+  <footer class="bg-zinc-900/95 border-t border-zinc-800/80 px-4 py-2.5 flex items-center justify-between shrink-0 z-20">
+    <div class="flex items-center space-x-3 w-1/4 min-w-[140px] truncate">
+      <div id="playerThumb" class="w-12 h-12 rounded-lg bg-zinc-800 shrink-0 overflow-hidden flex items-center justify-center border border-zinc-700/50">
+        <i data-lucide="music" class="w-6 h-6 text-zinc-500"></i>
+      </div>
+      <div class="truncate">
+        <p id="playerTitle" class="text-sm font-semibold text-white truncate">No track selected</p>
+        <p id="playerArtist" class="text-xs text-zinc-400 truncate">Select a song to play</p>
+      </div>
+    </div>
+
+    <!-- Center Playback Controls -->
+    <div class="flex flex-col items-center w-2/4 max-w-xl px-2">
+      <div class="flex items-center space-x-4 mb-1">
+        <button onclick="toggleShuffle()" id="shuffleBtn" class="p-1.5 text-zinc-400 hover:text-white transition">
+          <i data-lucide="shuffle" class="w-4 h-4"></i>
+        </button>
+        <button onclick="prevTrack()" class="p-1.5 text-zinc-300 hover:text-white transition">
+          <i data-lucide="skip-back" class="w-5 h-5 fill-current"></i>
+        </button>
+        <button onclick="togglePlay()" id="playPauseBtn" class="w-10 h-10 rounded-full bg-white hover:scale-105 text-black flex items-center justify-center transition shadow-md">
+          <i data-lucide="play" class="w-5 h-5 fill-current ml-0.5"></i>
+        </button>
+        <button onclick="nextTrack()" class="p-1.5 text-zinc-300 hover:text-white transition">
+          <i data-lucide="skip-forward" class="w-5 h-5 fill-current"></i>
+        </button>
+        <button onclick="toggleRepeat()" id="repeatBtn" class="p-1.5 text-zinc-400 hover:text-white transition">
+          <i data-lucide="repeat" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="w-full flex items-center space-x-2 text-[11px] text-zinc-400 font-mono">
+        <span id="currTimeText">0:00</span>
+        <input type="range" id="seekSlider" value="0" min="0" max="100" class="w-full h-1 bg-zinc-700 rounded-lg cursor-pointer">
+        <span id="durTimeText">0:00</span>
+      </div>
+    </div>
+
+    <!-- Right Controls: Lyrics & Volume -->
+    <div class="hidden sm:flex items-center justify-end space-x-3 w-1/4">
+      <button onclick="toggleLyrics()" id="lyricsBtn" title="Synced Lyrics" class="p-2 text-zinc-400 hover:text-red-400 transition">
+        <i data-lucide="mic" class="w-4 h-4"></i>
+      </button>
+      <i data-lucide="volume-2" class="w-4 h-4 text-zinc-400"></i>
+      <input type="range" id="volumeSlider" value="100" min="0" max="100" class="w-20 h-1 bg-zinc-700 rounded-lg cursor-pointer">
+    </div>
+  </footer>
+
+  <audio id="audioElement" preload="metadata" crossorigin="anonymous"></audio>
+
+  <!-- JAVASCRIPT ENGINE -->
+  <script>
+    let allTracks = [];
+    let currentPlaylist = [];
+    let currentIndex = -1;
+    let isPlaying = false;
+    let isShuffle = false;
+    let repeatMode = 0;
+    let scrobbleSent = false;
+    let offlineSavedHashes = new Set();
+    let offlineOnlyFilter = false;
+    let activeLyrics = [];
+    let activeLyricIndex = -1;
+    let wakeLock = null;
+    let allTransitions = [];
+
+    // Web Audio Normalizer (Compressor)
+    let audioCtx = null;
+    let sourceNode = null;
+    let compressorNode = null;
+    let isNormalized = false;
+
+    const audio = document.getElementById('audioElement');
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(console.error);
+    }
+
+    function initAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        sourceNode = audioCtx.createMediaElementSource(audio);
+        compressorNode = audioCtx.createDynamicsCompressor();
+        compressorNode.threshold.setValueAtTime(-24, audioCtx.currentTime);
+        compressorNode.knee.setValueAtTime(30, audioCtx.currentTime);
+        compressorNode.ratio.setValueAtTime(12, audioCtx.currentTime);
+        compressorNode.attack.setValueAtTime(0.003, audioCtx.currentTime);
+        compressorNode.release.setValueAtTime(0.25, audioCtx.currentTime);
+        sourceNode.connect(audioCtx.destination);
+      }
+    }
+
+    function toggleAudioNormalization() {
+      initAudioContext();
+      isNormalized = document.getElementById('normalizeAudioToggle').checked;
+      sourceNode.disconnect();
+      if (isNormalized) {
+        sourceNode.connect(compressorNode);
+        compressorNode.connect(audioCtx.destination);
+      } else {
+        sourceNode.connect(audioCtx.destination);
+      }
+    }
+
+    function setupMediaSession(track) {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.title,
+          artist: track.primary_artist,
+          album: track.album || 'Singles',
+          artwork: [{ src: track.cover_url || '/icon.svg', sizes: '512x512', type: 'image/jpeg' }]
+        });
+        navigator.mediaSession.setActionHandler('play', () => togglePlay());
+        navigator.mediaSession.setActionHandler('pause', () => togglePlay());
+        navigator.mediaSession.setActionHandler('previoustrack', () => prevTrack());
+        navigator.mediaSession.setActionHandler('nexttrack', () => nextTrack());
+      }
+    }
+
+    function formatTime(secs) {
+      if (!secs || isNaN(secs)) return '0:00';
+      const m = Math.floor(secs / 60);
+      const s = Math.floor(secs % 60);
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    async function init() {
+      lucide.createIcons();
+      await loadOfflineSavedList();
+      await fetchStatus();
+      await fetchTracks();
+      await loadTransitions();
+
+      audio.addEventListener('timeupdate', onTimeUpdate);
+      audio.addEventListener('ended', onTrackEnded);
+      audio.addEventListener('play', () => { isPlaying = true; updatePlayPauseButton(); });
+      audio.addEventListener('pause', () => { isPlaying = false; updatePlayPauseButton(); });
+
+      document.getElementById('seekSlider').addEventListener('input', (e) => {
+        if (audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration;
+      });
+      document.getElementById('volumeSlider').addEventListener('input', (e) => {
+        audio.volume = e.target.value / 100;
+      });
+      document.getElementById('transProbability').addEventListener('input', (e) => {
+        document.getElementById('transProbText').textContent = `${e.target.value}% chance`;
+      });
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        document.getElementById('connectionBadge').textContent = 'PC Online';
+        document.getElementById('networkUrlText').textContent = data.server_url;
+        document.getElementById('lastfmUserLabel').textContent = data.lastfm_connected ? 'Connected & Scrobbling' : 'Not Connected';
+        const qrCanvas = document.getElementById('qrCodeCanvas');
+        if (qrCanvas && window.QRCode) {
+          QRCode.toCanvas(qrCanvas, data.server_url, { width: 180, margin: 1 });
+        }
+      } catch (err) {
+        document.getElementById('connectionBadge').textContent = 'Offline Mode';
+      }
+    }
+
+    async function fetchTracks() {
+      try {
+        const res = await fetch('/api/tracks');
+        allTracks = await res.json();
+        currentPlaylist = [...allTracks];
+        document.getElementById('trackCountBadge').textContent = allTracks.length;
+        renderTracks();
+        renderArtists();
+        renderAlbums();
+        populateTransitionDropdowns();
+      } catch (err) {}
+    }
+
+    function renderTracks() {
+      const container = document.getElementById('trackListContainer');
+      const search = (document.getElementById('trackSearchInput').value || '').toLowerCase();
+
+      let filtered = currentPlaylist.filter(t => {
+        if (offlineOnlyFilter && !offlineSavedHashes.has(t.hash)) return false;
+        if (!search) return true;
+        return t.title.toLowerCase().includes(search) || t.primary_artist.toLowerCase().includes(search);
+      });
+
+      if (!filtered.length) {
+        container.innerHTML = `<div class="p-8 text-center text-zinc-500 text-sm">No tracks found. Use the Downloader tab!</div>`;
+        return;
+      }
+
+      container.innerHTML = filtered.map(t => {
+        const isCurrent = currentIndex >= 0 && currentPlaylist[currentIndex]?.id === t.id;
+        const isOffline = offlineSavedHashes.has(t.hash);
+        return `
+          <div class="flex items-center justify-between p-3 hover:bg-zinc-800/40 transition cursor-pointer ${isCurrent ? 'bg-red-600/10' : ''}" onclick="playTrackById(${t.id})">
+            <div class="flex items-center space-x-3 truncate">
+              <div class="w-10 h-10 rounded-lg bg-zinc-800 shrink-0 overflow-hidden flex items-center justify-center border border-zinc-700/40">
+                ${t.cover_url ? `<img src="${t.cover_url}" class="w-full h-full object-cover">` : `<i data-lucide="music" class="w-5 h-5 text-zinc-500"></i>`}
+              </div>
+              <div class="truncate">
+                <p class="text-sm font-semibold truncate ${isCurrent ? 'text-red-400' : 'text-zinc-200'}">${escapeHtml(t.title)}</p>
+                <p class="text-xs text-zinc-400 truncate">${escapeHtml(t.primary_artist)} &bull; ${escapeHtml(t.album || 'Singles')}</p>
+              </div>
+            </div>
+            <div class="flex items-center space-x-3 shrink-0 text-xs text-zinc-400">
+              ${isOffline ? `<span class="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded font-medium border border-blue-500/30">Offline</span>` : ''}
+              <button onclick="event.stopPropagation(); saveTrackForOffline(${t.id}, '${t.hash}')" title="Save for offline" class="p-1 text-zinc-500 hover:text-white transition">
+                <i data-lucide="download" class="w-4 h-4"></i>
+              </button>
+              <span class="font-mono text-zinc-500">${formatTime(t.duration)}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+      lucide.createIcons();
+    }
+
+    function playTrackById(id) {
+      const idx = currentPlaylist.findIndex(t => t.id === id);
+      if (idx >= 0) {
+        currentIndex = idx;
+        loadAndPlayCurrent();
+      }
+    }
+
+    async function loadAndPlayCurrent() {
+      if (currentIndex < 0 || currentIndex >= currentPlaylist.length) return;
+      const track = currentPlaylist[currentIndex];
+
+      initAudioContext();
+      audio.src = `/api/tracks/${track.id}/stream`;
+      audio.load();
+      audio.play().catch(console.error);
+
+      document.getElementById('playerTitle').textContent = track.title;
+      document.getElementById('playerArtist').textContent = track.primary_artist;
+      document.getElementById('carTitle').textContent = track.title;
+      document.getElementById('carArtist').textContent = track.primary_artist;
+
+      const imgHtml = track.cover_url ? `<img src="${track.cover_url}" class="w-full h-full object-cover">` : `<i data-lucide="music" class="w-6 h-6 text-zinc-500"></i>`;
+      document.getElementById('playerThumb').innerHTML = imgHtml;
+      document.getElementById('lyricsThumb').innerHTML = imgHtml;
+      document.getElementById('carThumb').innerHTML = imgHtml;
+
+      setupMediaSession(track);
+      scrobbleSent = false;
+      fetchTrackLyrics(track.id);
+
+      fetch('/api/player/now-playing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artist: track.primary_artist, title: track.title, album: track.album })
+      }).catch(console.error);
+
+      renderTracks();
+    }
+
+    // Synced Karaoke Lyrics
+    async function fetchTrackLyrics(trackId) {
+      document.getElementById('lyricsTitle').textContent = currentPlaylist[currentIndex].title;
+      document.getElementById('lyricsArtist').textContent = currentPlaylist[currentIndex].primary_artist;
+      const container = document.getElementById('lyricsContainer');
+      container.innerHTML = `<p class="text-zinc-500 text-sm">Loading synced lyrics...</p>`;
+      activeLyrics = [];
+      activeLyricIndex = -1;
+
+      try {
+        const res = await fetch(`/api/tracks/${trackId}/lyrics`);
+        const data = await res.json();
+        if (data.lines && data.lines.length) {
+          activeLyrics = data.lines;
+          container.innerHTML = activeLyrics.map((l, i) => `
+            <div id="lyric-${i}" onclick="seekToLyric(${l.time})" class="lyric-line inactive w-full max-w-xl">
+              ${escapeHtml(l.text)}
+            </div>
+          `).join('');
+        } else {
+          container.innerHTML = `<p class="text-zinc-500 text-sm">No lyrics found for this track.</p>`;
+        }
+      } catch (e) {
+        container.innerHTML = `<p class="text-zinc-500 text-sm">Could not load lyrics.</p>`;
+      }
+    }
+
+    function seekToLyric(time) {
+      if (audio.duration) audio.currentTime = time;
+    }
+
+    function updateLyricsSync(time) {
+      if (!activeLyrics.length) return;
+      let newIdx = -1;
+      for (let i = 0; i < activeLyrics.length; i++) {
+        if (time >= activeLyrics[i].time) newIdx = i;
+        else break;
+      }
+
+      if (newIdx !== activeLyricIndex && newIdx >= 0) {
+        if (activeLyricIndex >= 0) {
+          const prev = document.getElementById(`lyric-${activeLyricIndex}`);
+          if (prev) { prev.className = 'lyric-line inactive w-full max-w-xl'; }
+        }
+        activeLyricIndex = newIdx;
+        const curr = document.getElementById(`lyric-${activeLyricIndex}`);
+        if (curr) {
+          curr.className = 'lyric-line active w-full max-w-xl';
+          curr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        document.getElementById('carLyricsActive').textContent = activeLyrics[activeLyricIndex].text;
+      }
+    }
+
+    function toggleLyrics() {
+      const drawer = document.getElementById('lyricsDrawer');
+      drawer.classList.toggle('hidden');
+      lucide.createIcons();
+    }
+
+    // Car Mode
+    async function toggleCarMode() {
+      const overlay = document.getElementById('carModeOverlay');
+      overlay.classList.toggle('hidden');
+      if (!overlay.classList.contains('hidden')) {
+        // Request Screen Wake Lock
+        if ('wakeLock' in navigator) {
+          try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+        }
+      } else {
+        if (wakeLock) { wakeLock.release(); wakeLock = null; }
+      }
+      lucide.createIcons();
+    }
+
+    // Playback Transitions (Random chance)
+    function onTrackEnded() {
+      const currentTrack = currentPlaylist[currentIndex];
+      const nextIdx = (currentIndex + 1) % currentPlaylist.length;
+      const nextTrack = currentPlaylist[nextIdx];
+
+      if (currentTrack && nextTrack) {
+        // Look up transition rule
+        const rule = allTransitions.find(t => t.from_track_hash === currentTrack.hash && t.to_track_hash === nextTrack.hash);
+        if (rule && rule.enabled) {
+          const roll = Math.random() * 100;
+          if (roll <= rule.probability) {
+            console.log(`[Transition Triggered!] Chance: ${rule.probability}%`);
+          }
+        }
+      }
+
+      if (repeatMode === 2) {
+        audio.currentTime = 0;
+        audio.play();
+      } else {
+        nextTrackAction();
+      }
+    }
+
+    function nextTrackAction() {
+      if (isShuffle) {
+        currentIndex = Math.floor(Math.random() * currentPlaylist.length);
+      } else if (currentIndex < currentPlaylist.length - 1) {
+        currentIndex++;
+      } else if (repeatMode === 1) {
+        currentIndex = 0;
+      }
+      loadAndPlayCurrent();
+    }
+
+    function togglePlay() {
+      if (!audio.src && currentPlaylist.length > 0) {
+        currentIndex = 0;
+        loadAndPlayCurrent();
+        return;
+      }
+      if (audio.paused) audio.play().catch(console.error);
+      else audio.pause();
+    }
+
+    function prevTrack() {
+      if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+      if (currentIndex > 0) currentIndex--;
+      loadAndPlayCurrent();
+    }
+
+    function nextTrack() {
+      nextTrackAction();
+    }
+
+    function onTimeUpdate() {
+      if (!audio.duration) return;
+      const pct = (audio.currentTime / audio.duration) * 100;
+      document.getElementById('seekSlider').value = pct;
+      document.getElementById('currTimeText').textContent = formatTime(audio.currentTime);
+      document.getElementById('durTimeText').textContent = formatTime(audio.duration);
+      updateLyricsSync(audio.currentTime);
+
+      if (!scrobbleSent && (audio.currentTime > audio.duration * 0.5 || audio.currentTime > 240)) {
+        scrobbleSent = true;
+        const track = currentPlaylist[currentIndex];
+        if (track) {
+          fetch('/api/player/scrobble', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ artist: track.primary_artist, title: track.title, album: track.album })
+          }).catch(console.error);
+        }
+      }
+    }
+
+    function updatePlayPauseButton() {
+      const btn = document.getElementById('playPauseBtn');
+      const carBtn = document.getElementById('carPlayBtn');
+      btn.innerHTML = isPlaying ? `<i data-lucide="pause" class="w-5 h-5 fill-current"></i>` : `<i data-lucide="play" class="w-5 h-5 fill-current ml-0.5"></i>`;
+      carBtn.innerHTML = isPlaying ? `<i data-lucide="pause" class="w-10 h-10 sm:w-14 sm:h-14 fill-current"></i>` : `<i data-lucide="play" class="w-10 h-10 sm:w-14 sm:h-14 fill-current ml-1"></i>`;
+      lucide.createIcons();
+    }
+
+    function toggleShuffle() {
+      isShuffle = !isShuffle;
+      document.getElementById('shuffleBtn').classList.toggle('text-red-500', isShuffle);
+    }
+
+    function toggleRepeat() {
+      repeatMode = (repeatMode + 1) % 3;
+      const btn = document.getElementById('repeatBtn');
+      btn.classList.toggle('text-red-500', repeatMode > 0);
+      btn.innerHTML = repeatMode === 2 ? `<i data-lucide="repeat-1" class="w-4 h-4"></i>` : `<i data-lucide="repeat" class="w-4 h-4"></i>`;
+      lucide.createIcons();
+    }
+
+    // Individual Song / Album Search
+    async function searchIndividualTracks() {
+      const q = document.getElementById('individualSearchInput').value.trim();
+      if (!q) return;
+      const container = document.getElementById('individualResultsContainer');
+      container.innerHTML = `<div class="col-span-full py-6 text-center text-xs text-zinc-500">Searching YouTube...</div>`;
+
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+        const results = await res.json();
+        if (!results.length) {
+          container.innerHTML = `<div class="col-span-full py-4 text-center text-xs text-zinc-500">No results found.</div>`;
+          return;
+        }
+
+        container.innerHTML = results.map(r => `
+          <div class="bg-zinc-800/60 border border-zinc-700/50 rounded-xl p-3 flex flex-col justify-between space-y-2">
+            <div class="aspect-video rounded-lg overflow-hidden bg-zinc-900 relative">
+              <img src="${r.thumbnail}" class="w-full h-full object-cover">
+              <span class="absolute bottom-1 right-1 bg-black/80 text-[10px] px-1 rounded font-mono">${formatTime(r.duration)}</span>
+            </div>
+            <p class="text-xs font-semibold text-white line-clamp-2">${escapeHtml(r.title)}</p>
+            <button onclick="downloadCustomTrack('${r.url}', '${escapeHtml(r.title)}')" class="w-full py-1.5 bg-red-600 hover:bg-red-500 text-xs font-semibold rounded-lg transition flex items-center justify-center space-x-1">
+              <i data-lucide="download" class="w-3.5 h-3.5"></i>
+              <span>Download & Tag</span>
+            </button>
+          </div>
+        `).join('');
+        lucide.createIcons();
+      } catch (err) {
+        container.innerHTML = `<div class="col-span-full text-xs text-red-400">Search error: ${err}</div>`;
+      }
+    }
+
+    async function downloadCustomTrack(url, rawTitle) {
+      const parts = rawTitle.split(' - ');
+      const artist = parts.length > 1 ? parts[0].trim() : 'Unknown Artist';
+      const title = parts.length > 1 ? parts[1].trim() : rawTitle.trim();
+
+      alert(`Starting download for: ${artist} - ${title}`);
+      try {
+        await fetch('/api/download/custom', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, artist, title, album: 'Singles' })
+        });
+        alert('Downloaded and indexed successfully!');
+        fetchTracks();
+      } catch (e) {
+        alert('Download failed: ' + e);
+      }
+    }
+
+    // Transitions Manager
+    async function loadTransitions() {
+      try {
+        const res = await fetch('/api/transitions');
+        allTransitions = await res.json();
+        renderTransitionsList();
+      } catch (e) {}
+    }
+
+    function populateTransitionDropdowns() {
+      const fromSel = document.getElementById('transFromTrack');
+      const toSel = document.getElementById('transToTrack');
+      if (!fromSel || !toSel) return;
+      const opts = allTracks.map(t => `<option value="${t.hash}">${escapeHtml(t.primary_artist)} - ${escapeHtml(t.title)}</option>`).join('');
+      fromSel.innerHTML = opts;
+      toSel.innerHTML = opts;
+    }
+
+    async function saveTransitionRule() {
+      const fromHash = document.getElementById('transFromTrack').value;
+      const toHash = document.getElementById('transToTrack').value;
+      const fromT = allTracks.find(t => t.hash === fromHash);
+      const toT = allTracks.find(t => t.hash === toHash);
+      const prob = parseInt(document.getElementById('transProbability').value) || 50;
+      const dur = parseFloat(document.getElementById('transDuration').value) || 4.0;
+
+      await fetch('/api/transitions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from_hash: fromHash,
+          to_hash: toHash,
+          from_title: `${fromT.primary_artist} - ${fromT.title}`,
+          to_title: `${toT.primary_artist} - ${toT.title}`,
+          probability: prob,
+          duration: dur
+        })
+      });
+      alert('Transition rule saved!');
+      loadTransitions();
+    }
+
+    function renderTransitionsList() {
+      const container = document.getElementById('transitionsList');
+      if (!allTransitions.length) {
+        container.innerHTML = `<p class="text-xs text-zinc-500">No transition rules configured.</p>`;
+        return;
+      }
+      container.innerHTML = allTransitions.map(tr => `
+        <div class="bg-zinc-800/40 p-2.5 rounded-xl flex items-center justify-between text-xs">
+          <div>
+            <p class="font-semibold text-zinc-200">${escapeHtml(tr.from_title)} &rarr; ${escapeHtml(tr.to_title)}</p>
+            <p class="text-[11px] text-purple-400 font-mono">${tr.probability}% chance &bull; ${tr.crossfade_duration}s crossfade</p>
+          </div>
+          <button onclick="deleteTransitionRule(${tr.id})" class="p-1 text-zinc-500 hover:text-red-400 transition">
+            <i data-lucide="trash-2" class="w-4 h-4"></i>
+          </button>
+        </div>
+      `).join('');
+      lucide.createIcons();
+    }
+
+    async function deleteTransitionRule(id) {
+      await fetch(`/api/transitions/${id}`, { method: 'DELETE' });
+      loadTransitions();
+    }
+
+    // Offline caching for Phone
+    async function saveTrackForOffline(trackId, hash) {
+      if (!('caches' in window)) return;
+      try {
+        const cache = await caches.open('musiclinker-audio-v1');
+        await cache.add(`/api/tracks/${trackId}/file`);
+        offlineSavedHashes.add(hash);
+        localStorage.setItem('offlineHashes', JSON.stringify([...offlineSavedHashes]));
+        renderTracks();
+        alert('Song saved for offline playback!');
+      } catch (e) {
+        alert('Could not save: ' + e);
+      }
+    }
+
+    async function loadOfflineSavedList() {
+      try {
+        const raw = localStorage.getItem('offlineHashes');
+        if (raw) offlineSavedHashes = new Set(JSON.parse(raw));
+      } catch (e) {}
+    }
+
+    function toggleOfflineFilter() {
+      offlineOnlyFilter = document.getElementById('offlineFilterToggle').checked;
+      renderTracks();
+    }
+
+    function switchTab(tabId) {
+      ['tracks', 'artists', 'albums', 'downloader', 'transitions', 'phone', 'settings'].forEach(t => {
+        const el = document.getElementById(`tab-${t}`);
+        if (el) el.classList.toggle('hidden', t !== tabId);
+      });
+      lucide.createIcons();
+    }
+
+    function renderArtists() {
+      const container = document.getElementById('artistsContainer');
+      const artists = {};
+      allTracks.forEach(t => { artists[t.primary_artist] = (artists[t.primary_artist] || 0) + 1; });
+      container.innerHTML = Object.entries(artists).map(([name, count]) => `
+        <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-2xl flex flex-col items-center text-center">
+          <div class="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-400 mb-3 font-bold text-lg">${name[0]}</div>
+          <p class="font-semibold text-sm truncate w-full text-zinc-200">${escapeHtml(name)}</p>
+          <p class="text-xs text-zinc-500 mt-0.5">${count} tracks</p>
+        </div>
+      `).join('');
+    }
+
+    function renderAlbums() {
+      const container = document.getElementById('albumsContainer');
+      const albums = {};
+      allTracks.forEach(t => {
+        const alb = t.album || 'Singles';
+        if (!albums[alb]) albums[alb] = { artist: t.primary_artist, cover: t.cover_url, count: 0 };
+        albums[alb].count++;
+      });
+      container.innerHTML = Object.entries(albums).map(([name, info]) => `
+        <div class="bg-zinc-900 border border-zinc-800 p-3 rounded-2xl">
+          <div class="aspect-square rounded-xl bg-zinc-800 overflow-hidden mb-2.5 flex items-center justify-center">
+            ${info.cover ? `<img src="${info.cover}" class="w-full h-full object-cover">` : `<i data-lucide="disc" class="w-8 h-8 text-zinc-600"></i>`}
+          </div>
+          <p class="font-semibold text-sm truncate text-zinc-200">${escapeHtml(name)}</p>
+          <p class="text-xs text-zinc-500 truncate">${escapeHtml(info.artist)}</p>
+        </div>
+      `).join('');
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m]);
+    }
+
+    async function startDownloadJob() {
+      const username = document.getElementById('dlUsername').value.trim();
+      if (!username) { alert('Enter Last.fm username'); return; }
+      const body = {
+        username,
+        period: document.getElementById('dlPeriod').value,
+        min_plays: parseInt(document.getElementById('dlMinPlays').value) || 10,
+        download_cap: parseInt(document.getElementById('dlCap').value) || 25,
+      };
+      document.getElementById('jobProgressContainer').classList.remove('hidden');
+      document.getElementById('startDlBtn').disabled = true;
+      await fetch('/api/jobs/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const interval = setInterval(async () => {
+        const res = await fetch('/api/jobs/status');
+        const data = await res.json();
+        document.getElementById('jobStatusText').textContent = data.status;
+        const pct = data.total > 0 ? Math.round((data.progress / data.total) * 100) : 0;
+        document.getElementById('jobProgressPercent').textContent = `${pct}%`;
+        document.getElementById('jobProgressBar').style.width = `${pct}%`;
+        if (!data.running) { clearInterval(interval); document.getElementById('startDlBtn').disabled = false; fetchTracks(); }
+      }, 1500);
+    }
+
+    async function scanLibrary() {
+      const res = await fetch('/api/library/scan', { method: 'POST' });
+      const data = await res.json();
+      alert(`Scanned: ${data.result.added} tracks synced.`);
+      fetchTracks();
+    }
+
+    async function startLastfmAuth() {
+      const apiKey = document.getElementById('cfgApiKey').value.trim();
+      const apiSecret = document.getElementById('cfgApiSecret').value.trim();
+      if (!apiKey || !apiSecret) { alert('Enter both API key and Secret'); return; }
+      const res = await fetch('/api/auth/lastfm/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: apiKey, api_secret: apiSecret }) });
+      const data = await res.json();
+      window.open(data.auth_url, '_blank');
+      if (confirm('Click OK after authorizing on Last.fm.')) {
+        await fetch('/api/auth/lastfm/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: data.token }) });
+        alert('Last.fm connected!');
+        fetchStatus();
+      }
+    }
+
+    window.onload = init;
+  </script>
+</body>
+</html>
