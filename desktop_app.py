@@ -11,33 +11,72 @@ from server import app as fastapi_app, get_local_ip
 from config import load_config
 from library import scan_library
 
-# Global state
-server_started = threading.Event()
+# Ensure safe console streams
+if sys.stdout is not None:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr is not None:
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+# Global references
 window_ref = None
 tray_icon_ref = None
-is_quitting = False
+server_thread = None
+
+def get_base_dir() -> str:
+    """Get root directory whether running as script or PyInstaller bundle."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 def run_server(port: int):
-    config = uvicorn.Config(
-        fastapi_app,
-        host="0.0.0.0",
-        port=port,
-        log_level="warning",
-        access_log=False
-    )
-    server = uvicorn.Server(config)
-    server_started.set()
-    server.run()
+    """Run FastAPI audio & sync server."""
+    try:
+        config = uvicorn.Config(
+            fastapi_app,
+            host="0.0.0.0",
+            port=port,
+            log_level="warning",
+            access_log=False
+        )
+        server = uvicorn.Server(config)
+        server.run()
+    except Exception as e:
+        print(f"[Server Warning] {e}")
 
 def get_tray_icon_image():
-    base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    """Load or generate the 64x64 RGBA system tray icon."""
+    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     icon_path = os.path.join(base_dir, "icon.png")
     if os.path.exists(icon_path):
-        return Image.open(icon_path)
-    # Fallback blank image
-    return Image.new("RGBA", (64, 64), color=(229, 9, 20, 255))
+        try:
+            return Image.open(icon_path)
+        except Exception:
+            pass
 
-def setup_tray():
+    # Fallback clean red/dark music note icon
+    img = Image.new("RGBA", (64, 64), color=(0, 0, 0, 0))
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([(4, 4), (60, 60)], radius=14, fill=(24, 24, 27, 255))
+    draw.ellipse([(14, 14), (50, 50)], fill=(229, 9, 20, 60))
+    draw.rectangle([(38, 16), (42, 38)], fill=(229, 9, 20, 255))
+    draw.rectangle([(22, 22), (26, 44)], fill=(229, 9, 20, 255))
+    draw.polygon([(22, 22), (42, 16), (42, 22), (22, 28)], fill=(229, 9, 20, 255))
+    draw.ellipse([(16, 40), (28, 50)], fill=(229, 9, 20, 255))
+    draw.ellipse([(32, 34), (44, 44)], fill=(229, 9, 20, 255))
+    return img
+
+def setup_tray_supplement():
+    """
+    Launch the system tray icon as a supplement to the main desktop window.
+    Provides quick playback shortcuts, show/hide, and exit.
+    """
     global tray_icon_ref, window_ref
 
     image = get_tray_icon_image()
@@ -63,7 +102,7 @@ def setup_tray():
             except Exception:
                 pass
 
-    def action_toggle_show(icon, item):
+    def action_show_window(icon, item):
         if window_ref:
             try:
                 window_ref.show()
@@ -71,7 +110,7 @@ def setup_tray():
             except Exception:
                 pass
 
-    def action_hide(icon, item):
+    def action_minimize_to_tray(icon, item):
         if window_ref:
             try:
                 window_ref.hide()
@@ -79,8 +118,6 @@ def setup_tray():
                 pass
 
     def action_exit(icon, item):
-        global is_quitting
-        is_quitting = True
         try:
             if tray_icon_ref:
                 tray_icon_ref.stop()
@@ -98,81 +135,77 @@ def setup_tray():
         pystray.MenuItem("Next Track", action_next),
         pystray.MenuItem("Previous Track", action_prev),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Show Window", action_toggle_show, default=True),
-        pystray.MenuItem("Minimize to Tray", action_hide),
+        pystray.MenuItem("Open MusicLinker", action_show_window, default=True),
+        pystray.MenuItem("Minimize to Tray", action_minimize_to_tray),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Exit", action_exit)
     )
 
     tray_icon_ref = pystray.Icon("musiclinker", image, "MusicLinker Player", menu)
-    tray_icon_ref.run()
-
-def on_closing():
-    """When user clicks [X] on window, minimize to tray instead of quitting."""
-    global is_quitting, window_ref
-    if is_quitting:
-        return True
-    if window_ref:
-        window_ref.hide()
-    # Return False to cancel the window destruction and keep it running in tray
-    return False
+    # run_detached runs in a clean background thread without interfering with main window
+    tray_icon_ref.run_detached()
 
 def main():
-    global window_ref
-    if sys.stdout is not None:
-        try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-    if sys.stderr is not None:
-        try:
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+    global window_ref, server_thread
 
     cfg = load_config()
     port = cfg.get("server_port", 8000)
     local_ip = get_local_ip()
 
     print("=" * 65)
-    print("   [MusicLinker] Native Desktop App with System Tray")
+    print("   [MusicLinker] Native Desktop App with Tray Controls")
     print("=" * 65)
-    print(f"  * Local PC URL      : http://localhost:{port}")
-    print(f"  * Mobile Wi-Fi URL  : http://{local_ip}:{port}")
+    print(f"  * Local PC URL     : http://localhost:{port}")
+    print(f"  * Mobile Wi-Fi URL : http://{local_ip}:{port}")
     print("  * Scanning downloads library...")
     scan_res = scan_library("downloads")
     print(f"  * Synced {scan_res['scanned']} audio files.")
-    print("  * Launching Desktop App & System Tray Icon...")
+    print("  * Starting background server and desktop window...")
     print("=" * 65)
 
-    # 1. Start Personal Server in background thread
+    # 1. Start Server in background daemon thread
     server_thread = threading.Thread(target=run_server, args=(port,), daemon=True)
     server_thread.start()
 
-    # 2. Start System Tray Icon in background thread
-    tray_thread = threading.Thread(target=setup_tray, daemon=True)
-    tray_thread.start()
+    # 2. Start System Tray Icon as a background supplement
+    setup_tray_supplement()
 
-    # Wait for server to initialize
-    time.sleep(1.0)
+    # Brief pause to ensure local server accepts connections
+    time.sleep(0.8)
 
-    # 3. Create Native Desktop Window
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+    # 3. Create Standalone Desktop App Window
+    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    icon_path = os.path.join(base_dir, "icon.png")
+    app_data_dir = os.path.join(get_base_dir(), ".app_data")
+    os.makedirs(app_data_dir, exist_ok=True)
+
     window_ref = webview.create_window(
         title="MusicLinker Player",
         url=f"http://localhost:{port}",
-        width=1150,
-        height=740,
-        min_size=(800, 520),
+        width=1180,
+        height=750,
+        min_size=(820, 520),
         background_color="#0c0c0e",
         text_select=False
     )
 
-    # Intercept window close to minimize to tray
-    window_ref.events.closing += on_closing
+    def on_window_closed():
+        # When user closes window, stop tray and exit
+        try:
+            if tray_icon_ref:
+                tray_icon_ref.stop()
+        except Exception:
+            pass
+        os._exit(0)
 
-    # Start pywebview main GUI loop
-    webview.start(icon=icon_path if os.path.exists(icon_path) else None)
+    window_ref.events.closed += on_window_closed
+
+    # Start pywebview main GUI loop with persistent storage path (prevents WebView2 E_ABORT)
+    webview.start(
+        private_mode=False,
+        storage_path=app_data_dir,
+        icon=icon_path if os.path.exists(icon_path) else None
+    )
 
 if __name__ == "__main__":
     main()
