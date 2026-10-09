@@ -94,14 +94,14 @@ def setup_tray():
         os._exit(0)
 
     menu = pystray.Menu(
-        pystray.MenuItem("▶ / ⏸  Play / Pause", action_play_pause),
-        pystray.MenuItem("⏭  Next Track", action_next),
-        pystray.MenuItem("⏮  Previous Track", action_prev),
+        pystray.MenuItem("Play / Pause", action_play_pause),
+        pystray.MenuItem("Next Track", action_next),
+        pystray.MenuItem("Previous Track", action_prev),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("🗔  Show Window", action_toggle_show, default=True),
-        pystray.MenuItem("🔽  Minimize to Tray", action_hide),
+        pystray.MenuItem("Show Window", action_toggle_show, default=True),
+        pystray.MenuItem("Minimize to Tray", action_hide),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("❌  Exit", action_exit)
+        pystray.MenuItem("Exit", action_exit)
     )
 
     tray_icon_ref = pystray.Icon("musiclinker", image, "MusicLinker Player", menu)
@@ -119,12 +119,23 @@ def on_closing():
 
 def main():
     global window_ref
+    if sys.stdout is not None:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if sys.stderr is not None:
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     cfg = load_config()
     port = cfg.get("server_port", 8000)
     local_ip = get_local_ip()
 
     print("=" * 65)
-    print("   🎵 MusicLinker: Native Desktop App with System Tray")
+    print("   [MusicLinker] Native Desktop App with System Tray")
     print("=" * 65)
     print(f"  * Local PC URL      : http://localhost:{port}")
     print(f"  * Mobile Wi-Fi URL  : http://{local_ip}:{port}")
