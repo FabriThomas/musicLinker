@@ -30,7 +30,8 @@ def run_server(port: int):
     server.run()
 
 def get_tray_icon_image():
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+    base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    icon_path = os.path.join(base_dir, "icon.png")
     if os.path.exists(icon_path):
         return Image.open(icon_path)
     # Fallback blank image

@@ -392,6 +392,8 @@ def start_extract_job(req: ExtractJobRequest, background_tasks: BackgroundTasks)
 def get_job_status():
     return job_state
 
-static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+# Serve Web/PWA UI static assets
+base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+static_dir = os.path.join(base_dir, "web")
 if os.path.exists(static_dir):
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="web")
