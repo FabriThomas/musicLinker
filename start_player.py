@@ -20,7 +20,6 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = _NullStream()
 
-# Ensure src/ is on sys.path even if package was not pip-installed yet
 SRC_DIR = Path(__file__).resolve().parent / "src"
 if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))

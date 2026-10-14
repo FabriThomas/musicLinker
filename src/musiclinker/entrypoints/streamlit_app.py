@@ -17,8 +17,8 @@ def render_dashboard() -> None:
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Indexed Library Tracks", len(tracks))
-    col2.metric("Pending Offline Scrobbles", len(db_repo.get_pending_scrobbles(limit=500)))
-    col3.metric("Default Bitrate", f"{cfg.get('default_bitrate_kbps', 320)} kbps")
+    col2.metric("Distinct Albums", len(db_repo.list_albums_summary()))
+    col3.metric("Pending Offline Scrobbles", len(db_repo.get_pending_scrobbles(limit=500)))
 
     st.subheader("Indexed Local Library")
     if tracks:
@@ -29,6 +29,7 @@ def render_dashboard() -> None:
                 "artist_display",
                 "title",
                 "album",
+                "lyric_sync_mode",
                 "original_year",
                 "release_year",
                 "lastfm_playcount",

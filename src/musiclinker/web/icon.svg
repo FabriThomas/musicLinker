@@ -1,6 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="mlGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
   <rect width="256" height="256" rx="56" fill="#09090b"/>
-  <circle cx="128" cy="128" r="92" fill="none" stroke="#10b981" stroke-width="14"/>
-  <circle cx="128" cy="128" r="28" fill="#10b981"/>
-  <path d="M108 92 L168 128 L108 164 Z" fill="#09090b"/>
+  <circle cx="128" cy="128" r="92" fill="none" stroke="url(#mlGrad)" stroke-width="14"/>
+  <circle cx="128" cy="128" r="30" fill="url(#mlGrad)"/>
+  <path d="M110 94 L166 128 L110 162 Z" fill="#09090b"/>
 </svg>

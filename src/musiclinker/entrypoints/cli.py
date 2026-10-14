@@ -1,4 +1,4 @@
-"""Interactive CLI Wizard and scriptable headless runner for Last.fm extraction and downloading."""
+"""Interactive CLI Wizard and scriptable headless runner for Last.fm extraction and LLM curation."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from musiclinker.services.job_service import job_service
 
 def run_interactive_wizard() -> ExtractionJobRequest:
     cfg = db_repo.get_settings()
-    print("=== MusicLinker v2.0 Interactive CLI Wizard ===")
+    print("=== MusicLinker v2.1 Interactive CLI Wizard ===")
     default_user = cfg.get("lastfm_username") or ""
     username = input(f"Last.fm Username [{default_user}]: ").strip() or default_user
     if not username:
@@ -36,6 +36,9 @@ def run_interactive_wizard() -> ExtractionJobRequest:
     bitrate_str = input(f"MP3 Bitrate (192 or 320) [{cfg.get('default_bitrate_kbps', 320)}]: ").strip()
     bitrate = int(bitrate_str) if bitrate_str in ("192", "320") else 320
 
+    llm_choice = input("Use LLM Smart Filter to deduplicate & fix albums before download? (Y/n): ").strip().lower()
+    use_llm = llm_choice not in ("n", "no")
+
     dl_choice = input("Download MP3s now? (Y/n): ").strip().lower()
     download_enabled = dl_choice not in ("n", "no")
 
@@ -47,6 +50,7 @@ def run_interactive_wizard() -> ExtractionJobRequest:
         download_cap=download_cap,
         bitrate_kbps=bitrate,
         download_enabled=download_enabled,
+        use_llm_filter=use_llm,
     )
 
 
@@ -58,6 +62,7 @@ def main() -> None:
     parser.add_argument("--min-plays", type=int, default=10, help="Minimum play count filter (default: 10)")
     parser.add_argument("--cap", type=int, default=25, help="Maximum tracks to download (default: 25)")
     parser.add_argument("--bitrate", type=int, default=320, choices=[192, 320], help="Target MP3 bitrate")
+    parser.add_argument("--llm-filter", action="store_true", help="Enable LLM deduplication & album fixing before download")
     parser.add_argument("--download", action="store_true", help="Enable MP3 downloading in non-interactive mode")
     args = parser.parse_args()
 
@@ -72,6 +77,7 @@ def main() -> None:
             download_cap=args.cap,
             bitrate_kbps=args.bitrate,
             download_enabled=args.download,
+            use_llm_filter=args.llm_filter,
         )
 
     job = job_service.start_lastfm_extraction_job(req)

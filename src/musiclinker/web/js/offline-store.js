@@ -3,7 +3,7 @@
  */
 const DB_NAME = "musiclinker_pwa_db";
 const DB_VERSION = 1;
-const AUDIO_CACHE_NAME = "musiclinker-audio-v2";
+const AUDIO_CACHE_NAME = "musiclinker-audio-v2.1";
 
 class OfflineStore {
   constructor() {
@@ -37,7 +37,6 @@ class OfflineStore {
     const cache = await caches.open(AUDIO_CACHE_NAME);
     await cache.put(fileUrl, response.clone());
 
-    // Pre-cache lyrics and cover art as well
     if (track.cover_url) {
       fetch(track.cover_url).catch(() => {});
     }

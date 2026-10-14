@@ -19,7 +19,7 @@ from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
 
 
-def _Wait_for_server(host: str, port: int, timeout: float = 10.0) -> bool:
+def _wait_for_server(host: str, port: int, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -36,10 +36,9 @@ def _load_or_generate_tray_image() -> Image.Image:
             return Image.open(PATHS.icon_png_path).convert("RGBA")
         except Exception:
             pass
-    # Fallback programmatic 64x64 RGBA icon
     img = Image.new("RGBA", (64, 64), (18, 18, 24, 255))
     draw = ImageDraw.Draw(img)
-    draw.ellipse((6, 6, 58, 58), fill=(29, 185, 84, 255))
+    draw.ellipse((6, 6, 58, 58), fill=(16, 185, 129, 255))
     draw.polygon([(26, 20), (26, 44), (46, 32)], fill=(18, 18, 24, 255))
     return img
 
@@ -49,7 +48,6 @@ def load_server_host_config() -> tuple[str, int]:
     host = "0.0.0.0"
     port = 8101
 
-    # 1. Check host_config.json
     config_file = getattr(PATHS, "host_config_path", PATHS.root_dir / "host_config.json")
     if config_file.exists():
         try:
@@ -62,7 +60,6 @@ def load_server_host_config() -> tuple[str, int]:
         except Exception as exc:
             logger.warning("Could not read host_config.json: %s", exc)
 
-    # 2. Check .env if available
     env_file = getattr(PATHS, "env_path", PATHS.root_dir / ".env")
     if env_file.exists():
         try:
@@ -71,7 +68,6 @@ def load_server_host_config() -> tuple[str, int]:
         except Exception:
             pass
 
-    # 3. Environment variable override
     env_host = os.environ.get("MUSICLINKER_HOST") or os.environ.get("HOST")
     if env_host and env_host.strip():
         host = env_host.strip()
@@ -110,7 +106,7 @@ class DesktopAppController:
         thread = threading.Thread(target=server.run, name="ml_uvicorn", daemon=True)
         thread.start()
         wait_host = "127.0.0.1" if self.host in ("0.0.0.0", "") else self.host
-        _Wait_for_server(wait_host, self.port)
+        _wait_for_server(wait_host, self.port)
         logger.info("MusicLinker FastAPI server listening on %s:%d", self.host, self.port)
 
     def _eval_js(self, script: str) -> None:
@@ -172,11 +168,11 @@ class DesktopAppController:
             import webview
 
             self.window = webview.create_window(
-                title="MusicLinker",
+                title="MusicLinker Studio v2.1",
                 url=self.local_url,
-                width=1280,
-                height=840,
-                min_size=(940, 620),
+                width=1340,
+                height=860,
+                min_size=(960, 640),
                 background_color="#09090b",
                 text_select=False,
             )

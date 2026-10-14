@@ -1,4 +1,4 @@
-"""Deterministic SHA-256 track normalizer and deduplication hash engine."""
+"""Deterministic SHA-256 track normalizer, multi-artist splitter, and automatic album cleaner."""
 
 from __future__ import annotations
 
@@ -10,8 +10,18 @@ import unicodedata
 _BRACKET_NOISE_RE = re.compile(
     r"[\(\[\{][^\)\]\}]*?\b("
     r"remaster(?:ed)?|deluxe|anniversary|expanded|edition|version|edit|"
-    r"feat\.?|ft\.?|featuring|with|prod\.?|official\s+video|official\s+audio|lyrics?"
+    r"feat\.?|ft\.?|featuring|with|prod\.?|official\s+video|official\s+audio|lyrics?|"
+    r"bonus\s+track|explicit|clean|single|ep"
     r")\b[^\)\]\}]*?[\)\]\}]",
+    re.IGNORECASE,
+)
+_ALBUM_EDITION_NOISE_RE = re.compile(
+    r"(?:\s*[\(\[\{][^\)\]\}]*?\b(?:"
+    r"deluxe|remaster(?:ed)?|expanded|anniversary|special\s+edition|collector'?s\s+edition|"
+    r"bonus\s+track\s+version|explicit\s+version|international\s+version|super\s+deluxe|"
+    r"\d{4}\s+remaster|original\s+motion\s+picture\s+soundtrack"
+    r")\b[^\)\]\}]*?[\)\]\}])|"
+    r"(?:\s+-\s+(?:single|ep|deluxe\s+edition|remastered(?:\s+\d{4})?)$)",
     re.IGNORECASE,
 )
 _FEAT_NOISE_RE = re.compile(
@@ -19,7 +29,7 @@ _FEAT_NOISE_RE = re.compile(
     re.IGNORECASE,
 )
 _DASH_SUFFIX_RE = re.compile(
-    r"\s+-\s+.*?\b(?:remaster(?:ed)?|live|mono|stereo|single\s+version|radio\s+edit|\d{4})\b.*$",
+    r"\s+-\s+.*?\b(?:remaster(?:ed)?|live|mono|stereo|single\s+version|radio\s+edit|acoustic|\d{4})\b.*$",
     re.IGNORECASE,
 )
 _MULTI_ARTIST_SPLIT_RE = re.compile(
@@ -43,21 +53,51 @@ def normalize_text(value: str) -> str:
     return " ".join(text.split())
 
 
-def split_artists(artist_raw: str, title_raw: str = "") -> tuple[str, list[str], str]:
+def clean_album_name(raw_album: str, track_title: str = "") -> str:
     """
-    Extract primary album artist, full list of individual artists, and cleaned song title.
+    Auto-filter and clean messy album titles returned by Last.fm, YouTube, or MusicBrainz.
 
-    Example:
-        artist_raw="Daft Punk feat. Pharrell Williams & Nile Rodgers"
-        -> album_artist="Daft Punk"
-        -> artists=["Daft Punk", "Pharrell Williams", "Nile Rodgers"]
+    - Strips '(Deluxe Edition)', '[Remastered 2021]', '- Single', '- EP', etc.
+    - Replaces YouTube auto-generated 'Provided to YouTube' or empty names with 'Singles'.
     """
-    clean_title = title_raw.strip()
+    if not raw_album:
+        return "Singles"
+    cleaned = raw_album.strip()
+    if cleaned.lower() in ("unknown", "unknown album", "none", "n/a", "youtube"):
+        return "Singles"
+
+    cleaned = _ALBUM_EDITION_NOISE_RE.sub("", cleaned).strip()
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -–—")
+
+    # If the album was literally "<Track Title> - Single", classify cleanly or keep base title
+    if not cleaned:
+        return track_title.strip() or "Singles"
+    return cleaned
+
+
+def clean_track_title(raw_title: str) -> str:
+    """Strip '(Official Video)', '[Lyrics]', '- 2011 Remaster', etc. for clean display & tagging."""
+    if not raw_title:
+        return "Unknown Title"
+    text = raw_title.strip()
+    text = re.sub(
+        r"[\(\[\{]\s*(?:official\s+(?:music\s+)?video|official\s+audio|lyric\s+video|lyrics?|hd|hq|4k|visualizer)\s*[\)\]\}]",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = _DASH_SUFFIX_RE.sub("", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text or raw_title.strip()
+
+
+def split_artists(artist_raw: str, title_raw: str = "") -> tuple[str, list[str], str]:
+    """Extract primary album artist, full list of individual artists, and cleaned song title."""
+    clean_title = clean_track_title(title_raw)
     extracted_from_title: list[str] = []
 
-    # Check if featuring artists are embedded in the title: "Get Lucky (feat. Pharrell Williams)"
     title_feat_match = re.search(
-        r"[\(\[\{]\s*(?:feat\.?|ft\.?|featuring|with)\s+([^\)\]\}] specifically|[^\)\]\}]+)[\)\]\}]",
+        r"[\(\[\{]\s*(?:feat\.?|ft\.?|featuring|with)\s+([^\)\]\}]+)[\)\]\}]",
         clean_title,
         re.IGNORECASE,
     )

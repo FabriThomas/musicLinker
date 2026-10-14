@@ -1,4 +1,4 @@
-"""MusicBrainz & Cover Art Archive client resolving original release years (TDOR) and front cover art."""
+"""MusicBrainz & Cover Art Archive client resolving original release years (TDOR), cleaned albums, and cover art."""
 
 from __future__ import annotations
 
@@ -10,14 +10,15 @@ import requests
 
 from musiclinker.core.logging_config import logger
 from musiclinker.domain.models import ReleaseMetadata
+from musiclinker.infrastructure.hasher import clean_album_name
 
 MB_BASE_URL = "https://musicbrainz.org/ws/2"
 CAA_BASE_URL = "https://coverartarchive.org"
-MB_USER_AGENT = "MusicLinker/2.0 ( https://github.com/FabriThomas/musicLink )"
+MB_USER_AGENT = "MusicLinker/2.1 ( https://github.com/FabriThomas/musicLink )"
 
 
 class MusicBrainzClient:
-    """Rate-limited (1 req/sec) MusicBrainz metadata resolver with in-memory caching."""
+    """Rate-limited (1 req/sec) MusicBrainz metadata resolver with automatic album cleaning."""
 
     def __init__(self) -> None:
         self.session = requests.Session()
@@ -40,12 +41,14 @@ class MusicBrainzClient:
         fallback_album: str = "",
         fallback_thumb_url: str = "",
     ) -> ReleaseMetadata:
-        """Look up recording on MusicBrainz to determine Original Release Year (TDOR), Release Year (TDRC), Album, and Cover Art."""
         cache_key = f"{artist.lower().strip()}::{title.lower().strip()}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        meta = ReleaseMetadata(album=fallback_album or "Singles", album_artist=artist)
+        meta = ReleaseMetadata(
+            album=clean_album_name(fallback_album, title),
+            album_artist=artist,
+        )
         try:
             self._throttle()
             query = f'artist:"{artist}" AND recording:"{title}"'
@@ -66,7 +69,8 @@ class MusicBrainzClient:
                     releases = best.get("releases", [])
                     if releases:
                         chosen = self._pick_canonical_release(releases)
-                        meta.album = str(chosen.get("title") or meta.album)
+                        raw_mb_album = str(chosen.get("title") or meta.album)
+                        meta.album = clean_album_name(raw_mb_album, title)
                         meta.release_mbid = str(chosen.get("id") or "")
                         rel_date = str(chosen.get("date") or "")
                         if len(rel_date) >= 4:
@@ -76,7 +80,6 @@ class MusicBrainzClient:
         except Exception as exc:
             logger.debug("MusicBrainz lookup skipped for %s - %s: %s", artist, title, exc)
 
-        # Fetch Cover Art from Cover Art Archive first, fallback to YouTube thumbnail
         if meta.release_mbid:
             cover_bytes, mime = self._download_cover_art(f"{CAA_BASE_URL}/release/{meta.release_mbid}/front-500")
             if cover_bytes:
@@ -98,7 +101,13 @@ class MusicBrainzClient:
             status = str(rel.get("status", "")).lower()
             rg = rel.get("release-group", {})
             primary_type = str(rg.get("primary-type", "")).lower()
-            if status == "official" and primary_type == "album":
+            secondary = rg.get("secondary-types") or []
+            if status == "official" and primary_type == "album" and not secondary:
+                return rel
+        for rel in releases:
+            status = str(rel.get("status", "")).lower()
+            rg = rel.get("release-group", {})
+            if status == "official" and str(rg.get("primary-type", "")).lower() == "album":
                 return rel
         return releases[0]
 

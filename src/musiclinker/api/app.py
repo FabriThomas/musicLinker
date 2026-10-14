@@ -1,4 +1,4 @@
-"""FastAPI server delivering HTTP 206 Partial Content audio streaming, SSE job events, LAN pairing, and PWA hosting."""
+"""FastAPI server delivering HTTP 206 streaming, SSE job events, Album Auto-Filter/Rename, and LLM Curation."""
 
 from __future__ import annotations
 
@@ -10,25 +10,29 @@ from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
 from musiclinker.core.security import build_pairing_url, detect_lan_ip, verify_request_access
 from musiclinker.domain.models import (
+    AlbumBulkRenamePayload,
     BatchScrobblePayload,
     DirectDownloadRequest,
     ExtractionJobRequest,
     JobStatus,
+    LLMCurationApplyPayload,
     ScrobblePayload,
     SettingsUpdatePayload,
+    TrackMetadataUpdatePayload,
     TransitionRulePayload,
 )
 from musiclinker.infrastructure.db import db_repo
 from musiclinker.infrastructure.lastfm_client import LastFMClient
 from musiclinker.infrastructure.tagger import audio_tagger
 from musiclinker.infrastructure.youtube_client import youtube_client
+from musiclinker.services.curation_service import curation_service
 from musiclinker.services.job_service import job_service
 from musiclinker.services.library_service import library_service
 from musiclinker.services.scrobble_service import scrobble_service
@@ -36,7 +40,6 @@ from musiclinker.services.scrobble_service import scrobble_service
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Synchronize `downloads/` into `library.db` and flush pending offline scrobbles on server boot."""
     try:
         library_service.scan_and_sync_downloads()
         scrobble_service.flush_pending_queue()
@@ -46,7 +49,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 def require_paired_client(request: Request) -> None:
-    """Dependency verifying loopback origin or valid LAN pairing token."""
     cfg = db_repo.get_settings()
     verify_request_access(
         request=request,
@@ -58,7 +60,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="2.0.0",
+        version="2.1.0",
         lifespan=lifespan,
     )
 
@@ -70,20 +72,50 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ---- Library & HTTP 206 Audio Streaming Endpoints ----
+    # ---- Library, Album Filtering & Internal Renaming Endpoints ----
 
     @app.get("/api/tracks", dependencies=[Depends(require_paired_client)])
-    async def list_tracks(search: str = "", artist: str = "") -> dict[str, Any]:
-        tracks = db_repo.list_tracks(search=search, artist=artist)
+    async def list_tracks(search: str = "", artist: str = "", album: str = "") -> dict[str, Any]:
+        tracks = db_repo.list_tracks(search=search, artist=artist, album=album)
         return {"tracks": [t.to_dict() for t in tracks], "total": len(tracks)}
+
+    @app.get("/api/albums", dependencies=[Depends(require_paired_client)])
+    async def list_albums() -> dict[str, Any]:
+        return {
+            "albums": db_repo.list_albums_summary(),
+            "aliases": db_repo.list_album_aliases(),
+        }
+
+    @app.post("/api/albums/rename", dependencies=[Depends(require_paired_client)])
+    async def rename_album_endpoint(payload: AlbumBulkRenamePayload) -> dict[str, Any]:
+        return library_service.bulk_rename_album(payload)
+
+    @app.put("/api/tracks/{track_id}/metadata", dependencies=[Depends(require_paired_client)])
+    async def update_track_metadata_endpoint(track_id: int, payload: TrackMetadataUpdatePayload) -> dict[str, Any]:
+        try:
+            updated = library_service.update_track_metadata(track_id, payload)
+            return {"track": updated.to_dict()}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/library/rescan", dependencies=[Depends(require_paired_client)])
     async def rescan_library() -> dict[str, int]:
         return library_service.scan_and_sync_downloads()
 
+    # ---- LLM Smart Curator & Deduplication Endpoints ----
+
+    @app.post("/api/curation/analyze", dependencies=[Depends(require_paired_client)])
+    async def analyze_library_with_llm() -> dict[str, Any]:
+        return curation_service.analyze_library()
+
+    @app.post("/api/curation/apply", dependencies=[Depends(require_paired_client)])
+    async def apply_llm_curation(payload: LLMCurationApplyPayload) -> dict[str, int]:
+        return curation_service.apply_curation_actions(payload.actions)
+
+    # ---- HTTP 206 Audio Streaming, Cover Art & 3-Tier Lyrics ----
+
     @app.get("/api/tracks/{track_id}/stream", dependencies=[Depends(require_paired_client)])
     async def stream_track(track_id: int, request: Request) -> Response:
-        """Serve audio stream with full RFC 7233 HTTP 206 Partial Content byte-range support for instant scrubbing."""
         track = db_repo.get_track(track_id)
         if not track or not Path(track.file_path).exists():
             raise HTTPException(status_code=404, detail="Track audio file not found on disk.")
@@ -137,7 +169,6 @@ def create_app() -> FastAPI:
 
     @app.get("/api/tracks/{track_id}/file", dependencies=[Depends(require_paired_client)])
     async def download_track_file(track_id: int) -> FileResponse:
-        """Full MP3 blob endpoint used by the Android PWA Service Worker for 'Save for Offline' caching."""
         track = db_repo.get_track(track_id)
         if not track or not Path(track.file_path).exists():
             raise HTTPException(status_code=404, detail="Track file not found.")
@@ -237,7 +268,6 @@ def create_app() -> FastAPI:
 
     @app.get("/api/jobs/{job_id}/events", dependencies=[Depends(require_paired_client)])
     async def stream_job_events(job_id: str) -> StreamingResponse:
-        """Server-Sent Events (SSE) stream pushing real-time job progress to the UI."""
         job = job_service.get_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found.")
@@ -248,7 +278,7 @@ def create_app() -> FastAPI:
                 yield f"data: {payload}\n\n"
                 if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
                     break
-                await asyncio.sleep(0.6)
+                await asyncio.sleep(0.5)
 
         return StreamingResponse(_event_generator(), media_type="text/event-stream")
 
@@ -281,6 +311,10 @@ def create_app() -> FastAPI:
             "default_download_cap": cfg.get("default_download_cap", 25),
             "require_lan_token": cfg.get("require_lan_token", True),
             "normalize_audio": cfg.get("normalize_audio", True),
+            "auto_clean_albums": cfg.get("auto_clean_albums", True),
+            "llm_base_url": cfg.get("llm_base_url", "https://api.openai.com/v1"),
+            "llm_api_key_configured": bool(cfg.get("llm_api_key")),
+            "llm_model": cfg.get("llm_model", "gpt-4o-mini"),
         }
 
     @app.put("/api/settings", dependencies=[Depends(require_paired_client)])
@@ -318,6 +352,8 @@ def create_app() -> FastAPI:
 
     if (PATHS.web_dir / "js").exists():
         app.mount("/js", StaticFiles(directory=str(PATHS.web_dir / "js")), name="js")
+    if (PATHS.web_dir / "css").exists():
+        app.mount("/css", StaticFiles(directory=str(PATHS.web_dir / "css")), name="css")
 
     @app.get("/manifest.json")
     async def serve_manifest() -> FileResponse:

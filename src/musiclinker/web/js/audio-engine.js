@@ -15,7 +15,7 @@ export class AudioEngine {
 
     this.currentTrack = null;
     this.normalizeEnabled = true;
-    this.baseVolume = 0.9;
+    this.baseVolume = 0.85;
     this.scrobbledCurrentTrack = false;
     this.accumulatedPlaySeconds = 0;
     this.lastTickTimestamp = null;
@@ -43,7 +43,6 @@ export class AudioEngine {
       const dur = this.audio.duration || (this.currentTrack?.duration || 0);
       this.onTimeUpdate?.(cur, dur);
 
-      // Official Last.fm Scrobble Rule: track >= 30s AND played >= 50% OR >= 240s (4 minutes)
       if (this.currentTrack && !this.scrobbledCurrentTrack && dur >= 30) {
         const threshold = Math.min(240, dur * 0.5);
         if (this.accumulatedPlaySeconds >= threshold) {
@@ -69,6 +68,11 @@ export class AudioEngine {
     }
   }
 
+  setBaseVolume(fraction) {
+    this.baseVolume = Math.max(0, Math.min(1, fraction));
+    this.applyReplayGain(this.currentTrack);
+  }
+
   applyReplayGain(track) {
     if (!this.normalizeEnabled || !track) {
       this.audio.volume = this.baseVolume;
@@ -76,7 +80,7 @@ export class AudioEngine {
     }
     const db = Number(track.replaygain_db || 0);
     const linearFactor = Math.pow(10, db / 20);
-    const targetVolume = Math.max(0.15, Math.min(1.0, this.baseVolume * linearFactor));
+    const targetVolume = Math.max(0.05, Math.min(1.0, this.baseVolume * linearFactor));
     this.audio.volume = targetVolume;
   }
 
@@ -104,6 +108,13 @@ export class AudioEngine {
       this.audio.play();
     } else {
       this.audio.pause();
+    }
+  }
+
+  seekToSeconds(seconds) {
+    const dur = this.audio.duration || (this.currentTrack?.duration || 0);
+    if (dur > 0) {
+      this.audio.currentTime = Math.max(0, Math.min(dur, seconds));
     }
   }
 

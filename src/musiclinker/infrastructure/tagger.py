@@ -10,10 +10,10 @@ from mutagen.id3 import (
     COMM,
     ID3,
     ID3NoHeaderError,
+    TALB,
     TDRC,
     TDOR,
     TIT2,
-    TALB,
     TPE1,
     TPE2,
     TXXX,
@@ -22,7 +22,7 @@ from mutagen.id3 import (
 from mutagen.mp3 import MP3
 
 from musiclinker.core.exceptions import TaggingError
-from musiclinker.infrastructure.hasher import compute_track_hash, split_artists
+from musiclinker.infrastructure.hasher import clean_album_name, compute_track_hash, split_artists
 
 
 class AudioTagger:
@@ -44,22 +44,12 @@ class AudioTagger:
         cover_bytes: bytes | None = None,
         cover_mime: str = "image/jpeg",
     ) -> tuple[int, int]:
-        """
-        Write standard ID3v2.4 frames (`v2_version=4`).
-
-        - `TPE1` stores a list of artist strings (`mutagen` writes null-byte `\\x00` separators in ID3v2.4).
-        - `TPE2` stores the primary Album Artist.
-        - `TDRC` and `TDOR` store Release Year and Original Year.
-        - `TXXX:REPLAYGAIN_TRACK_GAIN` stores loudness normalization offset.
-        Returns `(duration_seconds, bitrate_kbps)`.
-        """
         try:
             try:
                 tags = ID3(str(mp3_path))
             except ID3NoHeaderError:
                 tags = ID3()
 
-            # encoding=3 specifies UTF-8, the standard for ID3v2.4 multi-value frames
             tags.delall("TIT2")
             tags.add(TIT2(encoding=3, text=[title]))
 
@@ -109,7 +99,7 @@ class AudioTagger:
                     APIC(
                         encoding=3,
                         mime=cover_mime or "image/jpeg",
-                        type=3,  # Front Cover
+                        type=3,
                         desc="Cover",
                         data=cover_bytes,
                     )
@@ -124,8 +114,49 @@ class AudioTagger:
         except Exception as exc:
             raise TaggingError(f"Failed to write ID3v2.4 tags to {mp3_path.name}: {exc}") from exc
 
+    def update_existing_mp3_tags(
+        self,
+        mp3_path: Path,
+        *,
+        title: str,
+        artists: list[str],
+        album_artist: str,
+        album: str,
+        release_year: str = "",
+        original_year: str = "",
+    ) -> None:
+        """Update core text frames (`TIT2`, `TPE1`, `TPE2`, `TALB`, `TDRC`, `TDOR`) while preserving cover art and audio."""
+        try:
+            try:
+                tags = ID3(str(mp3_path))
+            except ID3NoHeaderError:
+                tags = ID3()
+
+            tags.delall("TIT2")
+            tags.add(TIT2(encoding=3, text=[title]))
+
+            tags.delall("TPE1")
+            tags.add(TPE1(encoding=3, text=artists if artists else [album_artist]))
+
+            tags.delall("TPE2")
+            tags.add(TPE2(encoding=3, text=[album_artist]))
+
+            tags.delall("TALB")
+            tags.add(TALB(encoding=3, text=[album or "Singles"]))
+
+            if release_year:
+                tags.delall("TDRC")
+                tags.add(TDRC(encoding=3, text=[str(release_year)]))
+
+            if original_year:
+                tags.delall("TDOR")
+                tags.add(TDOR(encoding=3, text=[str(original_year)]))
+
+            tags.save(str(mp3_path), v2_version=4)
+        except Exception as exc:
+            raise TaggingError(f"Failed updating ID3 tags on {mp3_path.name}: {exc}") from exc
+
     def read_mp3_metadata(self, mp3_path: Path) -> dict[str, Any]:
-        """Inspect an existing MP3 file on disk for library synchronization."""
         audio = MP3(str(mp3_path))
         duration = int(round(audio.info.length)) if audio.info else 0
         bitrate = int(round((audio.info.bitrate or 320000) / 1000)) if audio.info else 320
@@ -139,13 +170,14 @@ class AudioTagger:
 
         if tags is None:
             album_artist, artists, clean_title = split_artists(fb_artist, fb_title)
+            raw_album = mp3_path.parent.name if mp3_path.parent.name != "downloads" else "Singles"
             return {
                 "track_hash": compute_track_hash(album_artist, clean_title),
                 "title": clean_title,
                 "artist_display": ", ".join(artists),
                 "artists": artists,
                 "album_artist": album_artist,
-                "album": mp3_path.parent.name if mp3_path.parent.name != "downloads" else "Singles",
+                "album": clean_album_name(raw_album, clean_title),
                 "release_year": "",
                 "original_year": "",
                 "duration": duration,
@@ -208,7 +240,6 @@ class AudioTagger:
 
     @staticmethod
     def extract_cover_bytes(mp3_path: Path) -> tuple[bytes | None, str]:
-        """Extract embedded APIC cover art bytes from an MP3 file on demand."""
         try:
             tags = ID3(str(mp3_path))
             apics = tags.getall("APIC")

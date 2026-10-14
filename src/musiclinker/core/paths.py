@@ -16,7 +16,6 @@ class AppPaths:
         elif getattr(sys, "frozen", False):
             self.root_dir = Path(sys.executable).resolve().parent
         else:
-            # src/musiclinker/core/paths.py -> repo root is 3 levels up
             self.root_dir = Path(__file__).resolve().parents[3]
 
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):

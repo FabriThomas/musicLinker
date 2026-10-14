@@ -104,3 +104,29 @@ def test_models():
     job_req = ExtractionJobRequest(username="testuser", min_plays=5, download_cap=10)
     assert job_req.username == "testuser"
     assert job_req.min_plays == 5
+
+
+def test_v21_cleaners_and_llm():
+    from musiclinker.infrastructure.hasher import clean_album_name, clean_track_title
+    from musiclinker.infrastructure.llm_client import LLMClient
+
+    # Test album cleaner
+    album1 = clean_album_name("Random Access Memories (10th Anniversary Edition)")
+    assert "Anniversary" not in album1
+    assert "Random Access Memories" in album1
+
+    album2 = clean_album_name("Song - Single", track_title="Song")
+    assert album2 == "Song"
+
+    # Test track cleaner
+    title1 = clean_track_title("Get Lucky (Official Audio)")
+    assert title1 == "Get Lucky"
+
+    # Test LLM client configuration
+    llm = LLMClient(base_url="https://api.openai.com/v1", api_key="")
+    assert llm.is_configured() is False
+    llm2 = LLMClient(base_url="https://api.openai.com/v1", api_key="sk-test")
+    assert llm2.is_configured() is True
+    llm_local = LLMClient(base_url="http://localhost:11434/v1")
+    assert llm_local.is_configured() is True
+

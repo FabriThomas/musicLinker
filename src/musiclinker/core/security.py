@@ -1,4 +1,4 @@
-"""LAN IP resolution, pairing token validation, and zero-dependency SVG QR generator."""
+"""LAN IP resolution, pairing token validation, and loopback verification."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ def detect_lan_ip() -> str:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(0.5)
-            # Connect to a non-routable multicast/public DNS address without sending packets
             sock.connect(("10.255.255.255", 1))
             ip_addr = sock.getsockname()[0]
             if ip_addr and not ip_addr.startswith("127."):
@@ -34,7 +33,7 @@ def detect_lan_ip() -> str:
 
 
 def generate_pair_token() -> str:
-    """Generate a cryptographically random 32-character URL-safe pairing token."""
+    """Generate a cryptographically random URL-safe pairing token."""
     return secrets.token_urlsafe(24)
 
 

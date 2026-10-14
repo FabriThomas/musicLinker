@@ -1,8 +1,9 @@
-"""Keyless yt-dlp search engine and FFmpeg audio stream downloader with atomic staging."""
+"""Keyless yt-dlp search engine, FFmpeg audio stream downloader, and YouTube subtitle/caption extractor."""
 
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import threading
 from typing import Any, Callable
 
@@ -12,9 +13,14 @@ import yt_dlp
 from musiclinker.core.exceptions import YouTubeResolutionError
 from musiclinker.core.logging_config import logger
 
+_VTT_TIMESTAMP_RE = re.compile(
+    r"(\d{1,2}:)?(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(?:\d{1,2}:)?\d{2}:\d{2}\.\d{3}"
+)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
 
 class YouTubeClient:
-    """Provides cached flat-search queries and high-bitrate MP3 extraction using bundled FFmpeg."""
+    """Provides cached flat-search queries, MP3 extraction, and VTT subtitle extraction for rough lyric sync."""
 
     def __init__(self) -> None:
         self._search_cache: dict[str, list[dict[str, Any]]] = {}
@@ -22,11 +28,10 @@ class YouTubeClient:
         try:
             self.ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         except Exception as exc:
-            logger.warning("imageio_ffmpeg binary lookup failed (%s); falling back to system ffmpeg", exc)
+            logger.warning("imageio_ffmpeg lookup failed (%s); falling back to system ffmpeg", exc)
             self.ffmpeg_exe = "ffmpeg"
 
     def search_videos(self, query: str, max_results: int = 5) -> list[dict[str, Any]]:
-        """Execute a fast keyless yt-dlp search and cache results in memory."""
         cache_key = f"{max_results}:{query.strip().lower()}"
         with self._cache_lock:
             if cache_key in self._search_cache:
@@ -74,12 +79,10 @@ class YouTubeClient:
         return results
 
     def resolve_best_audio_match(self, artist: str, title: str) -> dict[str, Any]:
-        """Find the cleanest official audio stream for an artist and track title."""
         query = f"{artist} - {title} official audio"
         matches = self.search_videos(query, max_results=3)
         if not matches:
             raise YouTubeResolutionError(f"No YouTube results found for '{artist} - {title}'")
-        # Prefer tracks between 45 seconds and 15 minutes to avoid 1-hour loops or shorts
         for candidate in matches:
             dur = candidate.get("duration", 0)
             if dur == 0 or (45 <= dur <= 900):
@@ -93,8 +96,13 @@ class YouTubeClient:
         stem_name: str,
         bitrate_kbps: int = 320,
         progress_cb: Callable[[float], None] | None = None,
-    ) -> tuple[Path, dict[str, Any]]:
-        """Download audio stream to staging directory and transcode to MP3 at 192k or 320k."""
+    ) -> tuple[Path, dict[str, Any], str]:
+        """
+        Download audio stream to staging directory, transcode to MP3, and extract YouTube subtitles/auto-captions
+        if available so tracks without LRCLIB entries still get rough synced lyrics from the download source.
+
+        Returns `(mp3_path, yt_info_dict, youtube_lrc_fallback)`.
+        """
         staging_dir.mkdir(parents=True, exist_ok=True)
         outtmpl = str(staging_dir / f"{stem_name}.%(ext)s")
         valid_bitrate = "320" if bitrate_kbps >= 256 else "192"
@@ -113,6 +121,10 @@ class YouTubeClient:
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": ["en.*", "pt.*", "es.*", "orig"],
+            "subtitlesformat": "vtt",
             "progress_hooks": [_hook],
             "postprocessors": [
                 {
@@ -135,13 +147,52 @@ class YouTubeClient:
 
         mp3_path = staging_dir / f"{stem_name}.mp3"
         if not mp3_path.exists():
-            # Fallback scan in staging_dir
             candidates = list(staging_dir.glob(f"{stem_name}*.mp3"))
             if not candidates:
                 raise YouTubeResolutionError("FFmpeg post-processing did not produce an MP3 file.")
             mp3_path = candidates[0]
 
-        return mp3_path, (info if isinstance(info, dict) else {})
+        # Check if yt-dlp wrote a .vtt subtitle file alongside the audio for rough lyric sync
+        yt_lrc_fallback = ""
+        vtt_files = list(staging_dir.glob(f"{stem_name}*.vtt"))
+        if vtt_files:
+            try:
+                raw_vtt = vtt_files[0].read_text(encoding="utf-8", errors="replace")
+                yt_lrc_fallback = self.convert_vtt_to_lrc(raw_vtt)
+            except Exception as exc:
+                logger.debug("VTT caption conversion skipped: %s", exc)
+
+        return mp3_path, (info if isinstance(info, dict) else {}), yt_lrc_fallback
+
+    @staticmethod
+    def convert_vtt_to_lrc(raw_vtt: str) -> str:
+        """Convert WebVTT subtitle cues from YouTube into standard `[mm:ss.xx]` LRC lines."""
+        lrc_lines: list[str] = []
+        last_text = ""
+        lines = raw_vtt.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            match = _VTT_TIMESTAMP_RE.search(line)
+            if match:
+                hours = int(match.group(1).rstrip(":")) if match.group(1) else 0
+                minutes = int(match.group(2)) + hours * 60
+                seconds = int(match.group(3))
+                millis = int(match.group(4))
+                hundredths = millis // 10
+                i += 1
+                cue_parts: list[str] = []
+                while i < len(lines) and lines[i].strip():
+                    cleaned = _HTML_TAG_RE.sub("", lines[i]).strip()
+                    if cleaned and not cleaned.startswith("WEBVTT"):
+                        cue_parts.append(cleaned)
+                    i += 1
+                text = " ".join(cue_parts).strip()
+                if text and text.lower() != last_text.lower():
+                    lrc_lines.append(f"[{minutes:02d}:{seconds:02d}.{hundredths:02d}] {text}")
+                    last_text = text
+            i += 1
+        return "\n".join(lrc_lines)
 
 
 youtube_client = YouTubeClient()

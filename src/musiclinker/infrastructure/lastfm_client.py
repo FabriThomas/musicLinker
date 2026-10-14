@@ -16,7 +16,7 @@ from musiclinker.domain.models import CandidateTrack
 from musiclinker.infrastructure.hasher import compute_track_hash
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
-USER_AGENT = "MusicLinker/2.0 (+https://github.com/FabriThomas/musicLink)"
+USER_AGENT = "MusicLinker/2.1 (+https://github.com/FabriThomas/musicLink)"
 
 
 class LastFMClient:
@@ -36,10 +36,7 @@ class LastFMClient:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT})
 
-    # ---- Signature & Request Helpers ----
-
     def _sign_params(self, params: dict[str, Any]) -> str:
-        """Compute official Last.fm MD5 api_sig: sort keys alphabetically, concatenate <k><v>, append secret."""
         if not self.api_secret:
             raise LastFMAuthError("Last.fm API Secret is required to sign authentication and scrobble calls.")
         excluded = {"format", "callback"}
@@ -77,10 +74,7 @@ class LastFMClient:
             raise LastFMError(f"Last.fm API error ({err_code}): {err_msg}")
         return data
 
-    # ---- Web Authentication Flow ----
-
     def get_auth_token(self) -> dict[str, str]:
-        """Request an unauthorized token and return the browser authorization URL."""
         data = self._call("auth.getToken", {}, signed=True, http_post=False)
         token = str(data.get("token", ""))
         if not token:
@@ -89,7 +83,6 @@ class LastFMClient:
         return {"token": token, "auth_url": auth_url}
 
     def exchange_token_for_session(self, token: str) -> dict[str, str]:
-        """Exchange an authorized user token for a permanent Last.fm session key."""
         data = self._call("auth.getSession", {"token": token.strip()}, signed=True, http_post=False)
         session_obj = data.get("session", {})
         key = str(session_obj.get("key", ""))
@@ -99,8 +92,6 @@ class LastFMClient:
         self.session_key = key
         return {"session_key": key, "username": name}
 
-    # ---- Extraction Operations ----
-
     def fetch_top_tracks_by_period(
         self,
         username: str,
@@ -108,7 +99,6 @@ class LastFMClient:
         min_plays: int = 10,
         progress_cb: Callable[[str], None] | None = None,
     ) -> list[CandidateTrack]:
-        """Fetch all user top tracks for a preset period (`7day`, `1month`, `3month`, `6month`, `12month`, `overall`) with playcount >= min_plays."""
         candidates: list[CandidateTrack] = []
         page = 1
         total_pages = 1
@@ -162,12 +152,11 @@ class LastFMClient:
         min_plays: int = 10,
         progress_cb: Callable[[str], None] | None = None,
     ) -> list[CandidateTrack]:
-        """Aggregate raw scrobbles across an entire calendar year and return tracks with >= min_plays."""
         start_ts = int(datetime(year, 1, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())
         end_ts = int(datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp())
 
         counts: Counter[str] = Counter()
-        exemplars: dict[str, tuple[str, str, str]] = {}  # hash -> (artist, title, album)
+        exemplars: dict[str, tuple[str, str, str]] = {}
         page = 1
         total_pages = 1
 
@@ -227,8 +216,6 @@ class LastFMClient:
             )
         return results
 
-    # ---- Bi-Directional Scrobbling Operations ----
-
     def update_now_playing(self, artist: str, title: str, album: str = "", duration: int = 0) -> None:
         if not self.session_key:
             return
@@ -244,7 +231,6 @@ class LastFMClient:
         self._call("track.updateNowPlaying", params, signed=True, http_post=True)
 
     def submit_scrobbles(self, scrobbles: list[dict[str, Any]]) -> bool:
-        """Submit up to 50 scrobbles in a single batch call per official Last.fm API spec."""
         if not scrobbles:
             return True
         if not self.session_key:

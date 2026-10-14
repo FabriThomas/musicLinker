@@ -1,10 +1,11 @@
-const STATIC_CACHE = "musiclinker-static-v2";
-const AUDIO_CACHE = "musiclinker-audio-v2";
+const STATIC_CACHE = "musiclinker-static-v2.1";
+const AUDIO_CACHE = "musiclinker-audio-v2.1";
 
 const APP_SHELL = [
   "/",
   "/manifest.json",
   "/icon.svg",
+  "/css/styles.css",
   "/js/api.js",
   "/js/offline-store.js",
   "/js/audio-engine.js",
@@ -34,7 +35,6 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Offline-cached full audio files (/api/tracks/{id}/file) or streams when offline
   if (url.pathname.endsWith("/file") || url.pathname.endsWith("/stream")) {
     const normalizedFilePath = url.pathname.replace(/\/stream$/, "/file");
     event.respondWith(
@@ -49,7 +49,6 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Cache-first for cover art and lyrics once fetched
   if (url.pathname.endsWith("/cover") || url.pathname.endsWith("/lyrics")) {
     event.respondWith(
       caches.open(STATIC_CACHE).then(async (cache) => {
@@ -68,7 +67,6 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Network-first with cache fallback for app shell
   if (event.request.method === "GET" && !url.pathname.startsWith("/api/")) {
     event.respondWith(
       fetch(event.request)

@@ -37,11 +37,10 @@ class ScrobbleService:
             )
             return {"status": "ok"}
         except Exception as exc:
-            logger.debug("Now Playing update skipped (offline or unauthenticated): %s", exc)
+            logger.debug("Now Playing update skipped: %s", exc)
             return {"status": "offline", "detail": str(exc)}
 
     def record_scrobble(self, payload: ScrobblePayload) -> dict[str, Any]:
-        """Record local play count, attempt immediate Last.fm scrobble, or queue to SQLite if offline."""
         if payload.track_id is not None:
             self.repo.increment_local_playcount(payload.track_id)
 
@@ -67,7 +66,6 @@ class ScrobbleService:
 
         try:
             client.submit_scrobbles([item])
-            # Piggyback flush of any previously queued offline scrobbles
             self.flush_pending_queue()
             return {"status": "scrobbled", "pending_count": len(self.repo.get_pending_scrobbles(limit=500))}
         except Exception as exc:
@@ -83,7 +81,6 @@ class ScrobbleService:
             return {"status": "queued", "pending_count": len(self.repo.get_pending_scrobbles(limit=500))}
 
     def record_batch_scrobbles(self, items: list[ScrobblePayload]) -> dict[str, Any]:
-        """Ingest a batch of offline scrobbles from an Android PWA client and flush to Last.fm."""
         for payload in items:
             if payload.track_id is not None:
                 self.repo.increment_local_playcount(payload.track_id)
@@ -102,7 +99,6 @@ class ScrobbleService:
         }
 
     def flush_pending_queue(self) -> int:
-        """Flush pending SQLite `scrobble_queue` items to Last.fm in batches of 50."""
         pending = self.repo.get_pending_scrobbles(limit=50)
         if not pending:
             return 0

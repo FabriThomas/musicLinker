@@ -1,4 +1,4 @@
-"""Thread-safe SQLite WAL repository with automated schema migrations and legacy file import."""
+"""Thread-safe SQLite WAL repository with album alias mapping, metadata editing, and LLM proxy settings."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
 from musiclinker.core.security import generate_pair_token
 from musiclinker.domain.models import TrackEntity
-from musiclinker.infrastructure.hasher import compute_track_hash
+from musiclinker.infrastructure.hasher import clean_album_name, compute_track_hash, normalize_text
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "lastfm_api_key": os.environ.get("LASTFM_API_KEY", ""),
@@ -27,12 +27,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "default_download_cap": 25,
     "require_lan_token": True,
     "normalize_audio": True,
+    "auto_clean_albums": True,
+    "llm_base_url": os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1"),
+    "llm_api_key": os.environ.get("LLM_API_KEY", ""),
+    "llm_model": os.environ.get("LLM_MODEL", "gpt-4o-mini"),
     "lan_pair_token": generate_pair_token(),
 }
 
 
 class DatabaseRepository:
-    """Thread-local SQLite WAL repository managing tracks, seen hashes, scrobbles, transitions, and settings."""
+    """Thread-local SQLite WAL repository managing tracks, album aliases, seen hashes, scrobbles, transitions, and settings."""
 
     def __init__(self, db_path: Path = PATHS.db_path) -> None:
         self.db_path = db_path
@@ -71,6 +75,7 @@ class DatabaseRepository:
                     duration INTEGER NOT NULL DEFAULT 0,
                     file_path TEXT NOT NULL UNIQUE,
                     lrc_path TEXT NOT NULL DEFAULT '',
+                    lyric_sync_mode TEXT NOT NULL DEFAULT 'none',
                     cover_mime TEXT NOT NULL DEFAULT '',
                     has_cover INTEGER NOT NULL DEFAULT 0,
                     lastfm_playcount INTEGER NOT NULL DEFAULT 0,
@@ -81,7 +86,18 @@ class DatabaseRepository:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
+                CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
                 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
+
+                CREATE TABLE IF NOT EXISTS album_aliases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    artist_norm TEXT NOT NULL DEFAULT '',
+                    raw_album_norm TEXT NOT NULL,
+                    raw_album_display TEXT NOT NULL,
+                    canonical_album TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(artist_norm, raw_album_norm)
+                );
 
                 CREATE TABLE IF NOT EXISTS seen_hashes (
                     track_hash TEXT PRIMARY KEY,
@@ -121,7 +137,11 @@ class DatabaseRepository:
                 );
                 """
             )
-            # Seed default settings without overwriting existing keys
+            # Ensure lyric_sync_mode column exists on older v2.0 databases
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracks)").fetchall()}
+            if "lyric_sync_mode" not in cols:
+                conn.execute("ALTER TABLE tracks ADD COLUMN lyric_sync_mode TEXT NOT NULL DEFAULT 'none'")
+
             for key, default_val in DEFAULT_SETTINGS.items():
                 conn.execute(
                     "INSERT OR IGNORE INTO settings (key, value_json) VALUES (?, ?)",
@@ -130,7 +150,6 @@ class DatabaseRepository:
             conn.commit()
 
     def _migrate_legacy_files(self) -> None:
-        """One-time migration from v1.0 config.json and seen_hashes.json into SQLite."""
         with self._write_lock:
             conn = self._get_conn()
             if PATHS.legacy_config_path.exists():
@@ -146,7 +165,6 @@ class DatabaseRepository:
                         conn.commit()
                     backup = PATHS.legacy_config_path.with_suffix(".json.bak")
                     shutil.move(str(PATHS.legacy_config_path), str(backup))
-                    logger.info("Migrated legacy config.json into SQLite settings (backed up to %s)", backup.name)
                 except Exception as exc:
                     logger.warning("Failed to migrate legacy config.json: %s", exc)
 
@@ -171,7 +189,6 @@ class DatabaseRepository:
                     conn.commit()
                     backup = PATHS.legacy_hashes_path.with_suffix(".json.bak")
                     shutil.move(str(PATHS.legacy_hashes_path), str(backup))
-                    logger.info("Migrated legacy seen_hashes.json into SQLite (backed up to %s)", backup.name)
                 except Exception as exc:
                     logger.warning("Failed to migrate legacy seen_hashes.json: %s", exc)
 
@@ -188,16 +205,6 @@ class DatabaseRepository:
                 result[row["key"]] = row["value_json"]
         return result
 
-    def get_setting(self, key: str, default: Any = None) -> Any:
-        conn = self._get_conn()
-        row = conn.execute("SELECT value_json FROM settings WHERE key = ?", (key,)).fetchone()
-        if row is None:
-            return DEFAULT_SETTINGS.get(key, default)
-        try:
-            return json.loads(row["value_json"])
-        except Exception:
-            return row["value_json"]
-
     def update_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
         with self._write_lock:
             conn = self._get_conn()
@@ -209,6 +216,70 @@ class DatabaseRepository:
                     )
             conn.commit()
         return self.get_settings()
+
+    # ---- Album Alias & Auto-Filter Operations ----
+
+    def resolve_album_alias(self, artist: str, raw_album: str, track_title: str = "") -> str:
+        """Apply auto-cleaning regex and check `album_aliases` for user/LLM-defined canonical album overrides."""
+        auto_clean = bool(self.get_settings().get("auto_clean_albums", True))
+        candidate = clean_album_name(raw_album, track_title) if auto_clean else (raw_album.strip() or "Singles")
+
+        artist_norm = normalize_text(artist)
+        raw_norm = normalize_text(raw_album)
+        cand_norm = normalize_text(candidate)
+
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT canonical_album FROM album_aliases
+            WHERE (artist_norm = ? OR artist_norm = '')
+              AND (raw_album_norm = ? OR raw_album_norm = ?)
+            ORDER BY CASE WHEN artist_norm != '' THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (artist_norm, raw_norm, cand_norm),
+        ).fetchone()
+        return str(row["canonical_album"]) if row else candidate
+
+    def save_album_alias(self, artist: str, raw_album: str, canonical_album: str) -> None:
+        artist_norm = normalize_text(artist)
+        raw_norm = normalize_text(raw_album)
+        if not raw_norm or not canonical_album.strip():
+            return
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                """
+                INSERT INTO album_aliases (artist_norm, raw_album_norm, raw_album_display, canonical_album, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(artist_norm, raw_album_norm) DO UPDATE SET
+                    canonical_album = excluded.canonical_album,
+                    updated_at = excluded.updated_at
+                """,
+                (artist_norm, raw_norm, raw_album.strip(), canonical_album.strip(), int(time.time())),
+            )
+            conn.commit()
+
+    def list_albums_summary(self) -> list[dict[str, Any]]:
+        """Return distinct albums in the library with track counts and primary artist for the UI Album Filter bar."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT album, album_artist, COUNT(*) AS track_count,
+                   MAX(release_year) AS release_year,
+                   MIN(id) AS sample_track_id,
+                   MAX(has_cover) AS has_cover
+            FROM tracks
+            GROUP BY album, album_artist
+            ORDER BY track_count DESC, album ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_album_aliases(self) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute("SELECT * FROM album_aliases ORDER BY updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
 
     # ---- Deduplication Hash Operations ----
 
@@ -229,26 +300,6 @@ class DatabaseRepository:
             )
             conn.commit()
 
-    def import_playlist_lines(self, lines: list[str]) -> int:
-        """Import 'Artist - Title' text lines into seen_hashes so past playlists are not re-downloaded."""
-        imported = 0
-        now_ts = int(time.time())
-        with self._write_lock:
-            conn = self._get_conn()
-            for raw_line in lines:
-                line = raw_line.strip()
-                if not line or line.startswith("#") or " - " not in line:
-                    continue
-                artist, title = line.split(" - ", 1)
-                thash = compute_track_hash(artist, title)
-                conn.execute(
-                    "INSERT OR IGNORE INTO seen_hashes (track_hash, artist, title, source, created_at) VALUES (?, ?, ?, 'imported_list', ?)",
-                    (thash, artist.strip(), title.strip(), now_ts),
-                )
-                imported += 1
-            conn.commit()
-        return imported
-
     # ---- Track Library Operations ----
 
     def upsert_track(
@@ -265,6 +316,7 @@ class DatabaseRepository:
         duration: int,
         file_path: str,
         lrc_path: str = "",
+        lyric_sync_mode: str = "none",
         cover_mime: str = "",
         has_cover: bool = False,
         lastfm_playcount: int = 0,
@@ -272,6 +324,7 @@ class DatabaseRepository:
         bitrate_kbps: int = 320,
     ) -> TrackEntity:
         now_ts = int(time.time())
+        canonical_album = self.resolve_album_alias(album_artist, album, title)
         with self._write_lock:
             conn = self._get_conn()
             conn.execute(
@@ -279,9 +332,9 @@ class DatabaseRepository:
                 INSERT INTO tracks (
                     track_hash, title, artist_display, artists_json, album_artist,
                     album, release_year, original_year, duration, file_path,
-                    lrc_path, cover_mime, has_cover, lastfm_playcount,
+                    lrc_path, lyric_sync_mode, cover_mime, has_cover, lastfm_playcount,
                     replaygain_db, bitrate_kbps, added_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(track_hash) DO UPDATE SET
                     title = excluded.title,
                     artist_display = excluded.artist_display,
@@ -293,6 +346,7 @@ class DatabaseRepository:
                     duration = CASE WHEN excluded.duration > 0 THEN excluded.duration ELSE tracks.duration END,
                     file_path = excluded.file_path,
                     lrc_path = CASE WHEN excluded.lrc_path != '' THEN excluded.lrc_path ELSE tracks.lrc_path END,
+                    lyric_sync_mode = CASE WHEN excluded.lyric_sync_mode != 'none' THEN excluded.lyric_sync_mode ELSE tracks.lyric_sync_mode END,
                     cover_mime = CASE WHEN excluded.cover_mime != '' THEN excluded.cover_mime ELSE tracks.cover_mime END,
                     has_cover = CASE WHEN excluded.has_cover = 1 THEN 1 ELSE tracks.has_cover END,
                     lastfm_playcount = MAX(tracks.lastfm_playcount, excluded.lastfm_playcount),
@@ -305,12 +359,13 @@ class DatabaseRepository:
                     artist_display,
                     json.dumps(artists, ensure_ascii=False),
                     album_artist,
-                    album,
+                    canonical_album,
                     release_year,
                     original_year,
                     duration,
                     file_path,
                     lrc_path,
+                    lyric_sync_mode,
                     cover_mime,
                     1 if has_cover else 0,
                     lastfm_playcount,
@@ -327,7 +382,55 @@ class DatabaseRepository:
             row = conn.execute("SELECT * FROM tracks WHERE track_hash = ?", (track_hash,)).fetchone()
             return self._row_to_track(row)
 
-    def list_tracks(self, search: str = "", artist: str = "") -> list[TrackEntity]:
+    def update_track_row(
+        self,
+        track_id: int,
+        *,
+        track_hash: str,
+        title: str,
+        artist_display: str,
+        artists: list[str],
+        album_artist: str,
+        album: str,
+        release_year: str,
+        original_year: str,
+        file_path: str,
+        lrc_path: str,
+    ) -> TrackEntity | None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                """
+                UPDATE tracks
+                SET track_hash = ?, title = ?, artist_display = ?, artists_json = ?,
+                    album_artist = ?, album = ?, release_year = ?, original_year = ?,
+                    file_path = ?, lrc_path = ?
+                WHERE id = ?
+                """,
+                (
+                    track_hash,
+                    title,
+                    artist_display,
+                    json.dumps(artists, ensure_ascii=False),
+                    album_artist,
+                    album,
+                    release_year,
+                    original_year,
+                    file_path,
+                    lrc_path,
+                    track_id,
+                ),
+            )
+            conn.commit()
+            return self.get_track(track_id)
+
+    def delete_track(self, track_id: int) -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+            conn.commit()
+
+    def list_tracks(self, search: str = "", artist: str = "", album: str = "") -> list[TrackEntity]:
         conn = self._get_conn()
         clauses: list[str] = []
         params: list[Any] = []
@@ -339,6 +442,9 @@ class DatabaseRepository:
             a = f"%{artist.strip().lower()}%"
             clauses.append("(LOWER(artist_display) LIKE ? OR LOWER(album_artist) LIKE ?)")
             params.extend([a, a])
+        if album.strip():
+            clauses.append("LOWER(album) = ?")
+            params.append(album.strip().lower())
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = conn.execute(
             f"SELECT * FROM tracks {where_sql} ORDER BY added_at DESC, title ASC",
@@ -358,7 +464,6 @@ class DatabaseRepository:
             conn.commit()
 
     def remove_missing_files(self) -> int:
-        """Prune database rows whose underlying MP3 files were deleted from disk."""
         removed = 0
         with self._write_lock:
             conn = self._get_conn()
@@ -466,12 +571,13 @@ class DatabaseRepository:
             artists = json.loads(row["artists_json"])
         except Exception:
             artists = [row["artist_display"]]
+        keys = row.keys()
         return TrackEntity(
             id=int(row["id"]),
             track_hash=str(row["track_hash"]),
             title=str(row["title"]),
             artist_display=str(row["artist_display"]),
-            artists=artists if isinstance(artists, list) else [ str(row["artist_display"]) ],
+            artists=artists if isinstance(artists, list) else [str(row["artist_display"])],
             album_artist=str(row["album_artist"]),
             album=str(row["album"]),
             release_year=str(row["release_year"]),
@@ -479,6 +585,7 @@ class DatabaseRepository:
             duration=int(row["duration"]),
             file_path=str(row["file_path"]),
             lrc_path=str(row["lrc_path"]),
+            lyric_sync_mode=str(row["lyric_sync_mode"]) if "lyric_sync_mode" in keys else "none",
             cover_mime=str(row["cover_mime"]),
             has_cover=bool(row["has_cover"]),
             lastfm_playcount=int(row["lastfm_playcount"]),

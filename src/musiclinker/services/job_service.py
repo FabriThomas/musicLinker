@@ -1,4 +1,4 @@
-"""Background extraction & audio acquisition pipeline with SSE event streaming and atomic file staging."""
+"""Background extraction & audio acquisition pipeline with SSE event streaming, LLM pre-filtering, and lyric sync telemetry."""
 
 from __future__ import annotations
 
@@ -30,18 +30,21 @@ from musiclinker.infrastructure.lyrics_client import lyrics_client
 from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
 from musiclinker.infrastructure.tagger import audio_tagger
 from musiclinker.infrastructure.youtube_client import youtube_client
+from musiclinker.services.curation_service import curation_service
 from musiclinker.services.library_service import sanitize_filename
 
 
 @dataclass
 class JobRecord:
-    """In-memory state of an active or historical extraction/download job."""
+    """In-memory state of an active or historical extraction/download job including lyric sync telemetry."""
 
     job_id: str
     job_type: str
     status: JobStatus = JobStatus.QUEUED
     progress_pct: float = 0.0
     current_step: str = "Queued..."
+    current_stage: str = "idle"
+    lyric_sync_status: str = "Waiting..."
     total_candidates: int = 0
     downloaded_count: int = 0
     skipped_seen_count: int = 0
@@ -65,6 +68,8 @@ class JobRecord:
             "status": self.status.value,
             "progress_pct": round(self.progress_pct, 1),
             "current_step": self.current_step,
+            "current_stage": self.current_stage,
+            "lyric_sync_status": self.lyric_sync_status,
             "total_candidates": self.total_candidates,
             "downloaded_count": self.downloaded_count,
             "skipped_seen_count": self.skipped_seen_count,
@@ -114,10 +119,9 @@ class JobService:
         self._executor.submit(self._run_direct_download, record, req)
         return record
 
-    # ---- Pipeline Implementations ----
-
     def _run_extraction_pipeline(self, job: JobRecord, req: ExtractionJobRequest) -> None:
         job.status = JobStatus.RUNNING
+        job.current_stage = "extracting_lastfm"
         job_staging = PATHS.staging_dir / job.job_id
         try:
             cfg = self.repo.get_settings()
@@ -142,8 +146,14 @@ class JobService:
                     progress_cb=job.append_log,
                 )
 
+            if req.use_llm_filter and raw_candidates:
+                job.current_stage = "llm_curation"
+                raw_candidates = curation_service.filter_candidates_before_download(
+                    raw_candidates, log_cb=job.append_log
+                )
+
             job.total_candidates = len(raw_candidates)
-            job.append_log(f"Found {len(raw_candidates)} track(s) with >= {req.min_plays} plays.")
+            job.append_log(f"Found {len(raw_candidates)} qualifying track(s).")
 
             unseen: list[CandidateTrack] = []
             for cand in raw_candidates:
@@ -153,10 +163,9 @@ class JobService:
                     unseen.append(cand)
 
             job.append_log(
-                f"After SHA-256 deduplication: {len(unseen)} new track(s), {job.skipped_seen_count} previously seen."
+                f"Deduplication check: {len(unseen)} new track(s), {job.skipped_seen_count} already in library/seen."
             )
 
-            # Enforce download cap and save excess tracks to text file
             selected = unseen[: req.download_cap]
             excess = unseen[req.download_cap :]
             if excess or not req.download_enabled:
@@ -168,10 +177,11 @@ class JobService:
                     lines = [f"{c.artist} - {c.title} ({c.playcount} plays)" for c in export_list]
                     list_path.write_text("\n".join(lines), encoding="utf-8")
                     job.excess_saved_path = str(list_path)
-                    job.append_log(f"Saved {len(export_list)} track(s) to {list_path.name}")
+                    job.append_log(f"Saved {len(export_list)} excess track(s) to {list_path.name}")
 
             if not req.download_enabled or not selected:
                 job.progress_pct = 100.0
+                job.current_stage = "completed"
                 job.status = JobStatus.COMPLETED
                 job.append_log("Extraction finished.")
                 return
@@ -182,9 +192,10 @@ class JobService:
                     raise JobCancelledError("Job cancelled by user.")
                 base_pct = ((idx - 1) / total_to_dl) * 100.0
                 job.progress_pct = base_pct
-                job.append_log(f"[{idx}/{total_to_dl}] Processing: {cand.artist} - {cand.title} ({cand.playcount} plays)")
+                job.append_log(f"[{idx}/{total_to_dl}] Downloading: {cand.artist} - {cand.title} ({cand.playcount} plays)")
                 try:
                     entity = self._acquire_and_tag_single_track(
+                        job=job,
                         artist_raw=cand.artist,
                         title_raw=cand.title,
                         album_hint=cand.album,
@@ -198,20 +209,25 @@ class JobService:
                     )
                     job.downloaded_count += 1
                     job.tracks_added.append(entity.to_dict())
-                    job.append_log(f"Completed: {entity.artist_display} - {entity.title} [{entity.album}]")
+                    job.append_log(
+                        f"Indexed: {entity.artist_display} - {entity.title} [Album: {entity.album} | Lyrics: {entity.lyric_sync_mode}]"
+                    )
                 except Exception as track_exc:
                     logger.warning("Failed processing track %s - %s: %s", cand.artist, cand.title, track_exc)
                     job.append_log(f"Skipped '{cand.artist} - {cand.title}': {track_exc}")
 
             job.progress_pct = 100.0
+            job.current_stage = "completed"
             job.status = JobStatus.COMPLETED
-            job.append_log(f"Job complete: {job.downloaded_count}/{total_to_dl} track(s) downloaded and indexed.")
+            job.append_log(f"Complete: {job.downloaded_count}/{total_to_dl} track(s) downloaded and tagged.")
         except JobCancelledError as exc:
             job.status = JobStatus.CANCELLED
+            job.current_stage = "cancelled"
             job.append_log(str(exc))
         except Exception as exc:
             logger.exception("Extraction job %s failed", job.job_id)
             job.status = JobStatus.FAILED
+            job.current_stage = "failed"
             job.append_log(f"Error: {exc}")
         finally:
             shutil.rmtree(job_staging, ignore_errors=True)
@@ -223,6 +239,7 @@ class JobService:
             job.total_candidates = 1
             job.append_log(f"Resolving stream for: {req.query_or_url}")
             entity = self._acquire_and_tag_single_track(
+                job=job,
                 artist_raw=req.artist_override,
                 title_raw=req.title_override,
                 album_hint=req.album_override,
@@ -235,11 +252,13 @@ class JobService:
             job.downloaded_count = 1
             job.tracks_added.append(entity.to_dict())
             job.progress_pct = 100.0
+            job.current_stage = "completed"
             job.status = JobStatus.COMPLETED
-            job.append_log(f"Downloaded & tagged: {entity.artist_display} - {entity.title}")
+            job.append_log(f"Downloaded & tagged: {entity.artist_display} - {entity.title} [{entity.album}]")
         except Exception as exc:
             logger.exception("Direct download job %s failed", job.job_id)
             job.status = JobStatus.FAILED
+            job.current_stage = "failed"
             job.append_log(f"Error: {exc}")
         finally:
             shutil.rmtree(job_staging, ignore_errors=True)
@@ -247,6 +266,7 @@ class JobService:
     def _acquire_and_tag_single_track(
         self,
         *,
+        job: JobRecord,
         artist_raw: str,
         title_raw: str,
         album_hint: str,
@@ -256,7 +276,8 @@ class JobService:
         staging_dir: Path,
         progress_cb: Any = None,
     ) -> TrackEntity:
-        """Full atomic pipeline: YouTube resolve -> FFmpeg MP3 stage -> MusicBrainz -> LRCLIB -> ID3v2.4 -> Atomic move -> SQLite."""
+        job.current_stage = "youtube_audio_and_captions"
+        job.lyric_sync_status = "Checking YouTube stream & subtitle cues..."
         if not query_or_url:
             yt_match = youtube_client.resolve_best_audio_match(artist_raw, title_raw)
             target_url = yt_match["url"]
@@ -266,7 +287,7 @@ class JobService:
             thumb_url = ""
 
         stem = uuid.uuid4().hex[:8]
-        staged_mp3, yt_info = youtube_client.download_mp3_to_staging(
+        staged_mp3, yt_info, yt_lrc_fallback = youtube_client.download_mp3_to_staging(
             url_or_query=target_url,
             staging_dir=staging_dir,
             stem_name=stem,
@@ -277,7 +298,6 @@ class JobService:
         if not thumb_url and isinstance(yt_info, dict):
             thumb_url = str(yt_info.get("thumbnail") or "")
 
-        # Determine artist & title if downloaded from raw YouTube query without overrides
         if not artist_raw or not title_raw:
             yt_title = str(yt_info.get("title") or "Unknown Track")
             if " - " in yt_title:
@@ -292,16 +312,16 @@ class JobService:
         artist_display = ", ".join(artists_list)
         track_hash = compute_track_hash(album_artist, clean_title)
 
-        # Query MusicBrainz for Original Year (TDOR), Release Year (TDRC), Album, and Front Cover
+        job.current_stage = "musicbrainz_metadata"
         mb_meta = musicbrainz_client.resolve_release_metadata(
             artist=album_artist,
             title=clean_title,
             fallback_album=album_hint or "Singles",
             fallback_thumb_url=thumb_url,
         )
-        final_album = album_hint or mb_meta.album or "Singles"
+        raw_album = album_hint or mb_meta.album or "Singles"
+        final_album = self.repo.resolve_album_alias(album_artist, raw_album, clean_title)
 
-        # Destination folder: downloads/<AlbumArtist>/<Album>/<Artist> - <Title>.mp3
         dest_dir = (
             PATHS.downloads_dir
             / sanitize_filename(album_artist, "Unknown Artist")
@@ -312,17 +332,20 @@ class JobService:
         final_mp3_path = dest_dir / f"{base_filename}.mp3"
         final_lrc_path = dest_dir / f"{base_filename}.lrc"
 
-        # Fetch synced lyrics via LRCLIB
+        job.current_stage = "lyrics_sync"
         approx_duration = int(yt_info.get("duration") or 0)
-        lyrics_text = lyrics_client.fetch_and_save_lrc(
+        lyrics_text, sync_mode, sync_summary = lyrics_client.fetch_and_save_lrc(
             artist=album_artist,
             title=clean_title,
             album=final_album,
             duration=approx_duration,
             target_lrc_path=final_lrc_path,
+            youtube_lrc_fallback=yt_lrc_fallback,
         )
+        job.lyric_sync_status = sync_summary
+        job.append_log(f"Lyric Sync: {sync_summary}")
 
-        # Embed ID3v2.4 multi-artist tags, release years, ReplayGain, and front cover art
+        job.current_stage = "id3_tagging"
         duration, actual_bitrate = audio_tagger.write_id3v24_tags(
             staged_mp3,
             title=clean_title,
@@ -338,7 +361,6 @@ class JobService:
             cover_mime=mb_meta.cover_mime,
         )
 
-        # Atomic move from staging to final library location
         os.replace(str(staged_mp3), str(final_mp3_path))
 
         entity = self.repo.upsert_track(
@@ -353,6 +375,7 @@ class JobService:
             duration=duration or approx_duration,
             file_path=str(final_mp3_path.resolve()),
             lrc_path=str(final_lrc_path.resolve()) if final_lrc_path.exists() else "",
+            lyric_sync_mode=sync_mode,
             cover_mime=mb_meta.cover_mime if mb_meta.cover_bytes else "",
             has_cover=bool(mb_meta.cover_bytes),
             lastfm_playcount=playcount,

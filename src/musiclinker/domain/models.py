@@ -59,6 +59,7 @@ class TrackEntity:
     duration: int
     file_path: str
     lrc_path: str
+    lyric_sync_mode: str
     cover_mime: str
     has_cover: bool
     lastfm_playcount: int
@@ -80,6 +81,7 @@ class TrackEntity:
             "original_year": self.original_year,
             "duration": self.duration,
             "has_lrc": bool(self.lrc_path),
+            "lyric_sync_mode": self.lyric_sync_mode or ("exact_lrc" if self.lrc_path else "none"),
             "has_cover": self.has_cover,
             "lastfm_playcount": self.lastfm_playcount,
             "local_playcount": self.local_playcount,
@@ -117,6 +119,10 @@ class ExtractionJobRequest(BaseModel):
     bitrate_kbps: int = Field(default=320, description="Target MP3 bitrate (192 or 320)")
     download_enabled: bool = Field(default=True, description="Whether to download or only export list")
     skip_seen_hashes: bool = Field(default=True, description="Skip tracks already in seen_hashes")
+    use_llm_filter: bool = Field(
+        default=False,
+        description="Run LLM/heuristic deduplication and album/track canonicalization before downloading",
+    )
 
 
 class DirectDownloadRequest(BaseModel):
@@ -127,6 +133,47 @@ class DirectDownloadRequest(BaseModel):
     title_override: str = Field(default="")
     album_override: str = Field(default="")
     bitrate_kbps: int = Field(default=320)
+
+
+class TrackMetadataUpdatePayload(BaseModel):
+    """Payload to rename/edit a track's title, artist, album, and release year internally & on MP3 tags."""
+
+    title: str = Field(..., min_length=1)
+    artist_display: str = Field(..., min_length=1)
+    album: str = Field(..., min_length=1)
+    release_year: str = Field(default="")
+    original_year: str = Field(default="")
+    remember_album_alias: bool = Field(default=True)
+
+
+class AlbumBulkRenamePayload(BaseModel):
+    """Payload to bulk-rename an album across all matching tracks, update ID3 tags, and save an alias rule."""
+
+    old_album: str = Field(..., min_length=1)
+    new_album: str = Field(..., min_length=1)
+    album_artist: str = Field(default="")
+    remember_alias: bool = Field(default=True)
+
+
+class LLMCurationAction(BaseModel):
+    """A single proposed track rename, album fix, or duplicate merge action produced by the AI Curator."""
+
+    track_id: int
+    action_type: str = Field(description="'rename' or 'duplicate_remove'")
+    current_title: str
+    proposed_title: str
+    current_artist: str
+    proposed_artist: str
+    current_album: str
+    proposed_album: str
+    duplicate_of_track_id: int | None = None
+    reason: str = ""
+
+
+class LLMCurationApplyPayload(BaseModel):
+    """List of approved LLM curation actions to apply to SQLite and MP3 files."""
+
+    actions: list[LLMCurationAction]
 
 
 class ScrobblePayload(BaseModel):
@@ -156,7 +203,7 @@ class TransitionRulePayload(BaseModel):
 
 
 class SettingsUpdatePayload(BaseModel):
-    """User configuration update payload."""
+    """User configuration update payload including LLM API link / reverse proxy settings."""
 
     lastfm_api_key: str | None = None
     lastfm_api_secret: str | None = None
@@ -167,3 +214,7 @@ class SettingsUpdatePayload(BaseModel):
     default_download_cap: int | None = None
     require_lan_token: bool | None = None
     normalize_audio: bool | None = None
+    auto_clean_albums: bool | None = None
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str | None = None

@@ -25,13 +25,11 @@ class NullStream(io.TextIOBase):
 
 def configure_logging(level: int = logging.INFO) -> logging.Logger:
     """Configure root and application loggers with UTF-8 encoding and file rotation."""
-    # Ensure stdout and stderr are never None in GUI / windowed mode
     if sys.stdout is None:
         sys.stdout = NullStream()
     if sys.stderr is None:
         sys.stderr = NullStream()
 
-    # Reconfigure standard streams on Windows to prevent CP1252 UnicodeEncodeError
     for stream_name in ("stdout", "stderr"):
         stream = getattr(sys, stream_name, None)
         if stream is not None and hasattr(stream, "reconfigure"):
