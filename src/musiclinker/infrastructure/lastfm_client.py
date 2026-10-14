@@ -1,4 +1,4 @@
-"""Bi-directional Last.fm API client supporting chart extraction, date-range aggregation, and signed scrobbling."""
+"""Bi-directional Last.fm API client supporting chart extraction, album tracklist lookup, and signed scrobbling."""
 
 from __future__ import annotations
 
@@ -16,11 +16,11 @@ from musiclinker.domain.models import CandidateTrack
 from musiclinker.infrastructure.hasher import compute_track_hash
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
-USER_AGENT = "MusicLinker/2.1 (+https://github.com/FabriThomas/musicLink)"
+USER_AGENT = "MusicLinker/3.0 (+https://github.com/FabriThomas/musicLink)"
 
 
 class LastFMClient:
-    """Handles Last.fm read queries (Top Tracks, Calendar Year Scrobbles) and write calls (Now Playing, Scrobble)."""
+    """Handles Last.fm read queries (Top Tracks, Calendar Year Scrobbles, Album Tracklists) and write calls (Now Playing, Scrobble)."""
 
     def __init__(
         self,
@@ -91,6 +91,38 @@ class LastFMClient:
             raise LastFMAuthError("User has not authorized the token in the browser yet.")
         self.session_key = key
         return {"session_key": key, "username": name}
+
+    def fetch_album_tracklist(self, artist: str, album: str) -> list[dict[str, Any]]:
+        """Query `album.getInfo` on Last.fm as a fallback tracklist source when downloading full albums."""
+        if not self.api_key:
+            return []
+        try:
+            data = self._call("album.getInfo", {"artist": artist.strip(), "album": album.strip()})
+            album_obj = data.get("album", {})
+            tracks_container = album_obj.get("tracks", {})
+            raw_tracks = tracks_container.get("track", [])
+            if isinstance(raw_tracks, dict):
+                raw_tracks = [raw_tracks]
+            results: list[dict[str, Any]] = []
+            for idx, item in enumerate(raw_tracks, start=1):
+                attr = item.get("@attr") or {}
+                rank = int(attr.get("rank") or idx)
+                title = str(item.get("name") or "").strip()
+                if not title:
+                    continue
+                dur = int(item.get("duration") or 0)
+                results.append(
+                    {
+                        "track_number": rank,
+                        "title": title,
+                        "artist": artist.strip(),
+                        "duration": dur,
+                    }
+                )
+            return results
+        except Exception as exc:
+            logger.debug("Last.fm album.getInfo lookup skipped: %s", exc)
+            return []
 
     def fetch_top_tracks_by_period(
         self,

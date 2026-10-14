@@ -1,114 +1,126 @@
-# MusicLinker v2.1 — Architectural Refactoring, ADRs & Complete Implementation Blueprint
+# MusicLinker v3.0 — Architectural Refactoring, ADRs, Native Android APK & Complete Codebase Blueprint
 
-> **Agent Implementation Directive**: This document contains the complete architectural review, Architecture Decision Records (ADRs), target directory structure, migration steps, and full production-ready source code for **MusicLinker v2.1**. An autonomous coding agent can parse each `### File: <relative_path>` section below and write the contents directly to disk to construct the refactored application.
+> **Agent Implementation Directive**: This document contains the complete architectural review, Architecture Decision Records (ADRs), target directory structure, migration steps, and full production-ready source code for **MusicLinker v3.0** (Windows Desktop + FastAPI Server + Native Android `.apk` via Capacitor). An autonomous coding agent can parse each `### File: <relative_path>` section below and write the contents directly to disk to construct the entire ecosystem.
 
 ## 1. Architectural Critique & High-Impact Improvements Establish a Production-Grade Ecosystem
 
-Reviewing `PROJECT_OVERVIEW.md` and user feedback from v2.0 identified eight key architectural and UX improvements engineered into v2.1:
-
-| Subsystem | Bottleneck / Bug Identified | v2.1 Architectural & UI Upgrade | Impact |
+| Subsystem | Bottleneck / Requirement Identified | v3.0 Architectural & UI Upgrade | Impact |
 | :--- | :--- | :--- | :--- |
-| **Package & Module Topology** | 18+ files sat in a flat root directory, duplicating business logic across FastAPI, CLI, and Streamlit. | **Layered `src/musiclinker/` Layout**: Clean separation into `core/`, `domain/`, `infrastructure/`, `services/`, `api/`, `entrypoints/`, and `web/`. | Eliminates circular imports and centralizes business logic. |
-| **State & Persistence** | Settings split between `config.json` and SQLite; hashes in `seen_hashes.json`. Concurrent access risks `database is locked`. | **Unified SQLite WAL Database**: Single source of truth in `library.db` (`PRAGMA journal_mode=WAL`) with `tracks`, `seen_hashes`, `album_aliases`, `scrobble_queue`, `transitions`, and `settings`. | Zero state drift and lock-free concurrent reads during active downloads. |
-| **Synced Lyrics Scroll Hijacking** | Calling `el.scrollIntoView()` on every `timeupdate` tick (4x/sec) scrolled parent containers and the main window, preventing users from inspecting active downloads while a song played. | **Isolated Container Scroll Math + User Scroll Lock**: Uses `box.scrollTo({ top })` strictly on `#lyrics-container` only when the active line index changes, and pauses auto-scroll for 4 seconds whenever the user manually scrolls or hovers the lyrics box. | Zero page/panel jumping; users can freely scroll downloads, settings, or library while lyrics auto-scroll in their own viewport. |
-| **Rough Lyric Sync & Download Source Captions** | Tracks without exact LRCLIB `.lrc` timestamps showed static text with no position indicator, and download jobs didn't report lyric sync granularity. | **3-Tier Lyric Sync (`exact_lrc` -> `youtube_captions` -> `rough_interpolated`)**: `yt-dlp` extracts YouTube auto-captions/subtitles (`.vtt`) during download as a timestamped fallback; plain lyrics automatically interpolate rough line progression (`≈ Rough Sync`) based on song progress, with a live progress bar and `±0.5s` offset controls. | Every song shows where lyrics are at (exact or rough), and the download log reports the exact lyric sync tier acquired. |
-| **Internal Album Auto-Filtering & Renaming** | Downloaded tracks often receive messy album names (`Song - Single`, `Album (Deluxe Remastered 2021)`, or wrong compilations) with no way to filter or fix them internally. | **Auto-Regex Album Cleaner + Persistent `album_aliases` + Bulk/Inline Rename**: Automatically strips noisy edition/single suffixes on ingest, lets users filter the library by album pills, and renames albums/tracks across both SQLite and underlying MP3 ID3v2.4 tags (`TALB`, `TIT2`, `TPE1`) + disk folders. | Wrong album names are fixed once and remembered permanently for all future downloads. |
-| **LLM Smart Curator & Deduplicator (API / Proxy)** | Duplicate versions of tracks (e.g. `Remastered`, `Radio Edit`, `Live`, `feat.` variants) and misnamed albums slip through simple string hashing. | **OpenAI-Compatible LLM Proxy Engine (`llm_client.py` + `curation_service.py`)**: Connects to any custom API link or reverse proxy (`https://.../v1/chat/completions`) to (1) pre-filter & deduplicate Last.fm extraction lists before downloading, and (2) audit the existing library to merge duplicate track versions, auto-rename messy titles, and canonicalize albums. | Eliminates duplicate track versions and standardizes studio album names automatically via any LLM API or local/remote proxy. |
-| **UI Layout & Custom Sliders** | Standard browser `<input type="range">` sliders looked unpolished, and stacked right-hand cards felt cramped. | **Glassmorphic Studio UI + Custom CSS Range Sliders (`styles.css`)**: Styled seek, volume, and crossfade sliders with dynamic `--progress` gradient fills, glowing emerald thumbs, a dedicated Album Filter bar, inline Track/Album Editor modal, and tabbed right-hand Studio panels (`Lyrics`, `Extractor & Downloads`, `AI Curator`, `Settings`) with a pinned live job status bar. | Sleek desktop/mobile aesthetic where downloads and lyrics never compete for scroll space. |
-| **LAN Security & Offline Scrobble Outbox** | Open `0.0.0.0:8000` port lacked auth; Android offline playback lost scrobbles. | **Loopback Auto-Trust + QR Token Pairing + IndexedDB Scrobble Outbox**: Auto-trusts local desktop WebView2 and authenticates phones via QR token; queues offline mobile scrobbles in IndexedDB for batch flushing. | Secure LAN streaming and 100% scrobble retention offline. |
+| **Native Android APK Packaging** | Browser-only PWA installation requires Chrome menus and lacks native APK distribution or configurable remote server origin when bundled locally inside an APK. | **Capacitor Native Android APK (`android/`, `capacitor.config.json`, `build_apk.bat`)**: Packages `src/musiclinker/web` into an installable `MusicLinker.apk` with cleartext LAN streaming (`usesCleartextTraffic="true"`), wake-lock & foreground media playback permissions, dynamic PC Server Origin pairing (`localStorage.ml_server_origin`), and 100% offline playback from local IndexedDB/Cache storage. | Installable `.apk` on any Android phone that pairs with your PC over Wi-Fi and plays cached albums/tracks 100% offline anywhere. |
+| **3-Layer Hierarchical Selection Mode** | Users need a structured way to build custom playback queues or offline batches across large libraries without manually unchecking hundreds of artists/albums. | **3-Layer Selection Studio (`Artists -> Albums -> Tracks`)**: **Layer 1 (Artists)** starts 100% *unselected*; **Layer 2 (Albums, optional filter)** starts 100% *unselected* (if left untouched, all albums by the chosen artists pass through; if specific albums are ticked, filters to those albums); **Layer 3 (Tracks)** starts **100% *selected*** for all matching songs so you can immediately play, shuffle, or cache them offline. | Effortless multi-artist/multi-album queue building with exact default selection semantics. |
+| **Play by Album, Randomizer & Track # / Alphabetical Ordering** | Tracks lacked `track_number` (`TRCK`) indexing in SQLite, preventing true album-order playback (`1..N`). | **Track # (`TRCK`) Indexing + Queue Order Modes + Fisher-Yates Randomizer**: Stores `track_number` in SQLite and MP3 ID3v2.4 `TRCK` frames. Adds **Play by Album**, **Sort by Track # (`1..N`)**, **Sort Alphabetically (`A–Z` / `Z–A`)**, **Sort by Plays**, and a **Randomizer (`🔀 Shuffle`)** mode. | Authentic gapless-style album listening in studio tracklist order or instant randomized shuffle. |
+| **Full Album Downloader (Server + Android Offline)** |Previously only extracted top Last.fm tracks or single YouTube queries; could not download a complete studio album by name. | **MusicBrainz / YouTube Album Tracklist Resolver + Batch Album Downloader**: `POST /api/albums/lookup` resolves the official tracklist (`1..N`) for any `Artist + Album`; `POST /api/jobs/download-album` downloads every track, embeds `TRCK`, `TALB`, `TPE1`, `TPE2`, `TDOR`, `APIC`, and 3-tier `.lrc` lyrics. Also adds 1-tap **"↓ Cache Full Album Offline"** on Android APK. | Download complete studio albums on PC or cache entire albums onto your Android phone in one click. |
+| **Synced Lyrics Scroll Hijacking & Rough Sync** | `scrollIntoView()` hijacked parent scrollbars; tracks without LRCLIB entries had no sync indicator. | **Isolated `#lyrics-container` Scroll Math + 3-Tier Sync (`exact_lrc`, `youtube_captions`, `rough_interpolated`)**: Never scrolls parent containers; pauses on manual scroll; shows live vocal progress `%` and `±0.5s` offset controls. | Zero scroll glitches while checking active downloads, plus rough sync position for every track. |
+| **Internal Album Auto-Filter & LLM Smart Curator** | Wrong/noisy album names (`- Single`, `(Deluxe)`) and duplicate track versions (`Remaster` vs `Edit`) cluttered the library. | **Auto-Regex Cleaner + `album_aliases` + OpenAI-Compatible LLM Proxy Curator**: Strips edition noise automatically, renames albums/tracks across SQLite + MP3 ID3 tags, and connects to any LLM API link/proxy to deduplicate tracks and canonicalize albums. | Self-healing discography metadata. |
 
 ## 2. Architecture Decision Records (ADRs) Formalize Core Engineering Choices
 
 ### ADR-001: Adoption of Clean / Layered Package Architecture (`src/musiclinker`)
 * **Status**: Accepted
-* **Context**: In v1.0, all modules resided in the repository root, coupling UI entrypoints directly to low-level `yt-dlp`, `mutagen`, and SQLite calls.
-* **Decision**: Organize all code under `src/musiclinker/` across `core/`, `domain/`, `infrastructure/`, `services/`, `api/`, `entrypoints/`, and `web/`.
-* **Consequences**: Strict inward dependency direction; all UIs share the exact same service layer.
+* **Context**: Flat root scripts caused circular dependencies and duplicated logic across Desktop, Web, CLI, and Streamlit.
+* **Decision**: Organize backend and shared web code under `src/musiclinker/{core,domain,infrastructure,services,api,entrypoints,web}` and native mobile packaging under `android/`.
+* **Consequences**: Strict inward dependency flow and single source of truth.
 
-### ADR-002: Unified SQLite WAL Persistence & Persistent Album Alias Mapping
+### ADR-002: Unified SQLite WAL Persistence, `track_number` Indexing & `album_aliases`
 * **Status**: Accepted
-* **Context**: Split-brain state across `config.json`, `seen_hashes.json`, and `library.db` caused drift, and users needed a way to permanently fix wrong album names returned by YouTube or MusicBrainz.
-* **Decision**: Store all state in `library.db` using `WAL` mode (`PRAGMA journal_mode=WAL`) and add an `album_aliases` table (`artist_norm`, `raw_album_norm` -> `canonical_album`). Whenever a user or the LLM Curator renames an album, the alias is persisted so future downloads automatically map to the canonical album name.
-* **Consequences**: Zero lock contention and self-healing album metadata across runs.
+* **Context**: Supporting Play by Album in true tracklist order (`1..N`) and persistent album renaming requires first-class schema support.
+* **Decision**: Run `library.db` in `WAL` mode (`PRAGMA journal_mode=WAL`) with `track_number INTEGER NOT NULL DEFAULT 0` on `tracks` (auto-migrated via `ALTER TABLE` for existing databases) and `album_aliases` for permanent album name overrides.
+* **Consequences**: Zero lock contention and accurate `1..N` track ordering inside albums.
 
 ### ADR-003: Isolated Container Scroll Math & 3-Tier Synced/Rough Lyrics Engine
 * **Status**: Accepted
-* **Context**: Calling `Element.scrollIntoView()` inside the `timeupdate` listener hijacked ancestor scroll containers, preventing users from scrolling the download studio while music played. Furthermore, tracks lacking exact LRCLIB timestamps had no visual sync indicator.
-* **Decision**:
-  1. Replace `scrollIntoView()` with isolated `container.scrollTo({ top: lineOffsetTop - containerHalfHeight, behavior: "smooth" })` triggered only on active line transitions, with a 4-second pause lock when manual wheel/touch scrolling is detected on `#lyrics-container`.
-  2. Implement a 3-tier lyric acquisition and sync model:
-     - **Tier 1 (`exact_lrc`)**: Timestamped `[mm:ss.xx]` lines from LRCLIB.
-     - **Tier 2 (`youtube_captions`)**: Timestamped subtitle cues extracted from YouTube auto-captions/subtitles via `yt-dlp` during audio download if LRCLIB has no synced match.
-     - **Tier 3 (`rough_interpolated`)**: When only plain lyrics exist, assign synthetic timestamps distributed proportionally across the active vocal window (`8%` to `92%` of track duration) so the UI highlights the rough position (`≈ Rough Sync`) and shows a live lyric progress percentage.
-* **Consequences**: Smooth, non-intrusive lyric scrolling and universal position tracking for every song.
+* **Context**: `Element.scrollIntoView()` scrolled ancestor containers and the main page on every `timeupdate` tick.
+* **Decision**: Use isolated `box.scrollTo({ top })` math only when `activeIdx` changes, lock auto-scroll for 4.5s on user wheel/touch interaction, and resolve lyrics across 3 tiers (`exact_lrc` from LRCLIB -> `youtube_captions` `.vtt` from `yt-dlp` -> `rough_interpolated` proportional line timing).
+* **Consequences**: Users can browse downloads, albums, or the 3-layer selector while lyrics scroll smoothly in their own pane.
 
 ### ADR-004: Pluggable LLM Smart Curator via Custom API Link or Reverse Proxy
 * **Status**: Accepted
-* **Context**: Simple string normalization cannot always tell that `"Song (2011 Remaster)"` and `"Song - Radio Edit"` are duplicates, or that a track tagged with `"Song (Single)"` actually belongs to the studio album `"Random Access Memories"`.
-* **Decision**: Create `LLMClient` (`src/musiclinker/infrastructure/llm_client.py`) supporting any OpenAI-compatible `/v1/chat/completions` endpoint URL (`llm_base_url`), API key (`llm_api_key`), and model (`llm_model`), plus a deterministic fuzzy-similarity fallback when no LLM proxy is configured. Expose `CurationService` (`src/musiclinker/services/curation_service.py`) for both pre-download candidate deduplication/cleaning and post-download library auditing (`POST /api/curation/analyze` and `POST /api/curation/apply`).
-* **Consequences**: Works with OpenAI, OpenRouter, Gemini OpenAI-compat, Groq, local Ollama/LM Studio, or custom self-hosted proxies to deduplicate tracks and rename tracks/albums into their canonical forms.
+* **Context**: Duplicate versions of tracks and non-canonical album titles require semantic disambiguation.
+* **Decision**: Provide `LLMClient` + `CurationService` compatible with any `/v1/chat/completions` endpoint or proxy URL, backed by a deterministic local fuzzy matcher (`SequenceMatcher`) when offline.
+* **Consequences**: Automated deduplication and album canonicalization before or after downloading.
 
-### ADR-005: Atomic Staging, Multi-Artist ID3v2.4 (`\x00`), and Synchronized Disk/Tag Renaming
+### ADR-005: Native Android APK Architecture via Capacitor & Remote Server Origin Bridge
 * **Status**: Accepted
-* **Context**: Renaming a track or album in the UI must not leave the MP3's internal ID3v2.4 frames (`TIT2`, `TPE1`, `TPE2`, `TALB`) out of sync with SQLite.
-* **Decision**: Centralize all metadata edits in `LibraryService.update_track_metadata()` and `LibraryService.rename_album()`, which rewrite the ID3v2.4 tags on the `.mp3` file via `mutagen`, relocate the `.mp3` and `.lrc` files into the updated `downloads/<AlbumArtist>/<Album>/` directory, and update SQLite atomically.
-* **Consequences**: External players and mobile offline downloads always receive the updated ID3 tags.
+* **Context**: When running as a native Android `.apk`, the UI assets are served locally inside the Capacitor WebView (`https://localhost` or `capacitor://localhost`), rather than being loaded from the PC's HTTP origin (`http://192.168.x.x:8000`). Furthermore, Android 9+ blocks HTTP LAN traffic by default unless explicitly permitted.
+* **Decision**:
+  1. Package `src/musiclinker/web` using Capacitor (`capacitor.config.json`, `android/app/src/main/AndroidManifest.xml` with `android:usesCleartextTraffic="true"` and foreground media permissions).
+  2. Upgrade `MusicLinkerAPI` (`web/js/api.js`), `OfflineStore` (`web/js/offline-store.js`), and `AudioEngine` (`web/js/audio-engine.js`) to resolve a dynamic `serverOrigin` (`localStorage.getItem("ml_server_origin")`). When running on the PC or LAN browser, `serverOrigin` defaults to `window.location.origin`; inside the Android APK, the user enters or scans the PC's LAN URL (`http://192.168.1.50:8000?pair_token=...`) once, which stores both `ml_server_origin` and `ml_pair_token`.
+  3. Store offline-cached MP3 blobs in the APK's persistent `CacheStorage` keyed by canonical path (`/api/tracks/{id}/file`) and intercept playback in `AudioEngine` via `caches.match()` -> `URL.createObjectURL(blob)` so cached songs and albums play 100% offline inside the native APK even when the Service Worker is bypassed or the PC is turned off.
+* **Consequences**: The exact same codebase runs as a Windows `.exe`, a mobile PWA, and a standalone native Android `.apk` with bulletproof offline playback.
+
+### ADR-006: 3-Layer Hierarchical Selection State Machine (`Artists -> Albums -> Tracks`)
+* **Status**: Accepted
+* **Context**: The user requested a layered selection mode where you select by layers: first which artists, then optionally which albums, then which tracks—with artists and albums starting *fully unselected* and the resulting tracks starting *fully selected*.
+* **Decision**: Implement a dedicated **Layered Selector Mode** in `app.js`:
+  - **Layer 1 (Artists)**: `layerSelectedArtists = new Set()` (starts empty / unselected). Toggling an artist adds/removes it from the active filter and recomputes Layer 2 & Layer 3.
+  - **Layer 2 (Albums — Optional)**: `layerSelectedAlbums = new Set()` (starts empty / unselected). Displays all albums belonging to the artists selected in Layer 1. If **0 albums** are selected in Layer 2, all albums from the selected artists pass through to Layer 3; if **1 or more albums** are selected in Layer 2, only tracks from those specific albums pass through to Layer 3.
+  - **Layer 3 (Tracks)**: Whenever the candidate track pool from Layer 1 + Layer 2 changes, all tracks entering that pool default to **SELECTED** (`layerExcludedTrackIds` tracks only what the user explicitly unchecks, so new matching tracks are 100% checked by default).
+* **Consequences**: Matches the exact user mental model—pick artists (and optionally narrow by albums) from a clean unselected state, and immediately get a fully-selected track list ready to play, randomize, or save offline.
 
 ## 3. Target Folder Structure & File Manifest Map Every Component
 
 | File Path | Architectural Layer | Responsibility |
 | :--- | :--- | :--- |
-| `pyproject.toml` | Packaging & Build | PEP 621 project metadata, dependencies, and script entrypoints. |
+| `pyproject.toml` | Python Packaging | PEP 621 project metadata, dependencies, and script entrypoints. |
+| `package.json` | APK / Capacitor Build | Node/Capacitor dependencies and scripts (`npm run apk:sync`, `npm run apk:build`) for building the Android `.apk`. |
+| `capacitor.config.json` | APK / Capacitor Config | Configures Capacitor app ID (`com.fabrithomas.musiclinker`), webDir (`src/musiclinker/web`), and cleartext HTTP LAN allowances. |
+| `android/build.gradle` | Android APK Root Gradle | Top-level Android Gradle configuration. |
+| `android/settings.gradle` | Android APK Settings | Includes `:app` and Capacitor Android bridge module. |
+| `android/app/build.gradle` | Android APK App Module | Configures Android SDK 34, versionCode, minSdk 26, and APK build types. |
+| `android/app/src/main/AndroidManifest.xml` | Android APK Manifest | Declares `INTERNET`, `WAKE_LOCK`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, and `usesCleartextTraffic="true"` for LAN Wi-Fi streaming. |
+| `android/app/src/main/java/com/fabrithomas/musiclinker/MainActivity.java` | Android Native Activity | Capacitor `BridgeActivity` configuring WebView media playback without user gesture restrictions for seamless track transitions. |
+| `build_apk.bat` | Windows APK Builder | 1-click Windows script that syncs web assets into `android/` and runs `gradlew assembleDebug` to output `MusicLinker-debug.apk`. |
 | `.gitignore` | Configuration | Excludes `.venv/`, `build/`, `dist/`, `.app_data/`, `downloads/`, `library.db*`, and secrets. |
-| `src/musiclinker/__init__.py` | Package Root | Exposes package version (`2.1.0`). |
+| `src/musiclinker/__init__.py` | Package Root | Exposes package version (`3.0.0`). |
 | `src/musiclinker/core/__init__.py` | Core Layer | Package marker. |
 | `src/musiclinker/core/paths.py` | Core Layer | Frozen-aware (`sys._MEIPASS`) path resolver. |
 | `src/musiclinker/core/logging_config.py` | Core Layer | UTF-8 safe structured logging configuration. |
 | `src/musiclinker/core/exceptions.py` | Core Layer | Custom exception hierarchy. |
 | `src/musiclinker/core/security.py` | Core Layer | LAN IP discovery, pairing URL builder, and loopback/token verifier. |
 | `src/musiclinker/domain/__init__.py` | Domain Layer | Package marker. |
-| `src/musiclinker/domain/models.py` | Domain Layer | Dataclasses & Pydantic schemas including album rename, track edit, and LLM curation models. |
+| `src/musiclinker/domain/models.py` | Domain Layer | Dataclasses & Pydantic schemas including `track_number`, `AlbumDownloadRequest`, `AlbumTrackItem`, and LLM curation models. |
 | `src/musiclinker/infrastructure/__init__.py` | Infrastructure Layer | Package marker. |
 | `src/musiclinker/infrastructure/hasher.py` | Infrastructure Layer | Track normalizer, multi-artist splitter, automatic album name cleaner, and SHA-256 hasher. |
-| `src/musiclinker/infrastructure/db.py` | Infrastructure Layer | Thread-safe SQLite WAL repository with `tracks`, `album_aliases`, `seen_hashes`, `scrobble_queue`, `transitions`, and `settings`. |
-| `src/musiclinker/infrastructure/lastfm_client.py` | Infrastructure Layer | Bi-directional Last.fm client (Top Tracks, Calendar Year Scrobbles, Now Playing, Batch Scrobble). |
-| `src/musiclinker/infrastructure/youtube_client.py` | Infrastructure Layer | Keyless `yt-dlp` searcher, MP3 staging downloader, and YouTube subtitle/caption (`.vtt`) extractor for rough lyric sync. |
-| `src/musiclinker/infrastructure/musicbrainz_client.py` | Infrastructure Layer | Rate-limited MusicBrainz & Cover Art Archive metadata resolver. |
-| `src/musiclinker/infrastructure/lyrics_client.py` | Infrastructure Layer | 3-tier lyric resolver (`exact_lrc`, `youtube_captions`, `rough_interpolated`) with sync coverage telemetry. |
-| `src/musiclinker/infrastructure/tagger.py` | Infrastructure Layer | ID3v2.4 multi-artist (`\x00` `TPE1`), `TPE2`, `TDOR`, `TDRC`, ReplayGain (`TXXX`), `USLT`, and `APIC` tagger. |
-| `src/musiclinker/infrastructure/llm_client.py` | Infrastructure Layer | OpenAI-compatible API / Proxy LLM client (plus local fuzzy heuristic fallback) for track deduplication and album canonicalization. |
+| `src/musiclinker/infrastructure/db.py` | Infrastructure Layer | Thread-safe SQLite WAL repository with `track_number`, sort modes (`track_num`, `alpha_asc`, `alpha_desc`, `plays_desc`, `recent`), and `album_aliases`. |
+| `src/musiclinker/infrastructure/lastfm_client.py` | Infrastructure Layer | Bi-directional Last.fm client (Top Tracks, Calendar Year Scrobbles, Album Info tracklist lookup, Now Playing, Batch Scrobble). |
+| `src/musiclinker/infrastructure/youtube_client.py` | Infrastructure Layer | Keyless `yt-dlp` searcher, playlist/album expander, MP3 staging downloader, and `.vtt` subtitle extractor. |
+| `src/musiclinker/infrastructure/musicbrainz_client.py` | Infrastructure Layer | MusicBrainz & Cover Art Archive resolver with `fetch_album_tracklist()` returning ordered `1..N` album tracks and `track_number`. |
+| `src/musiclinker/infrastructure/lyrics_client.py` | Infrastructure Layer | 3-tier lyric resolver (`exact_lrc`, `youtube_captions`, `rough_interpolated`). |
+| `src/musiclinker/infrastructure/tagger.py` | Infrastructure Layer | ID3v2.4 tagger writing `TRCK` (track number), multi-artist `\x00` `TPE1`, `TPE2`, `TDOR`, `TDRC`, `TXXX` ReplayGain, `USLT`, and `APIC`. |
+| `src/musiclinker/infrastructure/llm_client.py` | Infrastructure Layer | OpenAI-compatible API / Proxy LLM client. |
 | `src/musiclinker/services/__init__.py` | Service Layer | Package marker. |
-| `src/musiclinker/services/library_service.py` | Service Layer | Filesystem scanner, internal album auto-filter, bulk album renamer, track metadata editor, and transition resolver. |
-| `src/musiclinker/services/curation_service.py` | Service Layer | LLM + heuristic library auditor detecting duplicate track versions, cleaning titles, and renaming albums. |
-| `src/musiclinker/services/scrobble_service.py` | Service Layer | Real-time Now Playing and offline-resilient scrobble queue manager. |
-| `src/musiclinker/services/job_service.py` | Service Layer | Bounded worker pool with LLM pre-filtering, granular download/lyric stage telemetry, and SSE broadcasting. |
+| `src/musiclinker/services/library_service.py` | Service Layer | Filesystem scanner, internal album/track renamer, hierarchy summary builder, and transition resolver. |
+| `src/musiclinker/services/curation_service.py` | Service Layer | LLM + heuristic library auditor and deduplicator. |
+| `src/musiclinker/services/scrobble_service.py` | Service Layer | Real-time Now Playing and offline scrobble queue manager. |
+| `src/musiclinker/services/job_service.py` | Service Layer | Worker pool executing Last.fm extractions, direct downloads, and **Full Album Downloads** (`start_album_download_job`). |
 | `src/musiclinker/api/__init__.py` | API Layer | Package marker. |
-| `src/musiclinker/api/app.py` | API Layer | FastAPI server with HTTP 206 streaming, SSE jobs, album management, track editing, and LLM curation endpoints. |
+| `src/musiclinker/api/app.py` | API Layer | FastAPI server with HTTP 206 streaming, album tracklist lookup (`/api/albums/lookup`), full album download (`/api/jobs/download-album`), and sorting. |
 | `src/musiclinker/entrypoints/__init__.py` | Entrypoints Layer | Package marker. |
 | `src/musiclinker/entrypoints/desktop.py` | Entrypoints Layer | Native Windows application (`pywebview` WebView2 + `pystray` system tray). |
-| `src/musiclinker/entrypoints/cli.py` | Entrypoints Layer | Interactive CLI wizard and headless runner with `--llm-curate` flag. |
+| `src/musiclinker/entrypoints/cli.py` | Entrypoints Layer | Interactive CLI wizard and headless runner (supports `--album` download mode). |
 | `src/musiclinker/entrypoints/streamlit_app.py` | Entrypoints Layer | Streamlit analytics dashboard. |
-| `src/musiclinker/web/manifest.json` | Web / PWA Layer | Progressive Web App manifest. |
-| `src/musiclinker/web/icon.svg` | Web / PWA Layer | Vector branding icon. |
-| `src/musiclinker/web/sw.js` | Web / PWA Layer | Service Worker for offline shell and MP3 caching. |
-| `src/musiclinker/web/css/styles.css` | Web / PWA Layer | Custom range sliders (`--progress` gradient fill, glowing thumb), glassmorphic cards, and isolated scrollbars. |
-| `src/musiclinker/web/js/api.js` | Web / PWA Layer | Authenticated fetch wrapper and SSE subscriber. |
-| `src/musiclinker/web/js/offline-store.js` | Web / PWA Layer | IndexedDB manager for cached tracks and offline scrobble outbox. |
-| `src/musiclinker/web/js/audio-engine.js` | Web / PWA Layer | HTML5 Audio + ReplayGain + volume control + MediaSession bridge. |
-| `src/musiclinker/web/js/app.js` | Web / PWA Layer | Upgraded UI controller with non-hijacking lyric scroll, rough sync indicator, album filter bar, inline rename modal, and AI Curator studio. |
-| `src/musiclinker/web/index.html` | Web / PWA Layer | Upgraded responsive studio UI with pinned live download status bar, album filter chips, styled sliders, and AI Curator tab. |
+| `src/musiclinker/web/manifest.json` | Web / APK Layer | Progressive Web App manifest. |
+| `src/musiclinker/web/icon.svg` | Web / APK Layer | Vector branding icon. |
+| `src/musiclinker/web/css/styles.css` | Web / APK Layer | Custom range sliders (`--progress`), glassmorphic cards, and 3-layer selector styles. |
+| `src/musiclinker/web/sw.js` | Web / APK Layer | Service Worker for offline shell and MP3 caching. |
+| `src/musiclinker/web/js/api.js` | Web / APK Layer | APK-aware fetch wrapper supporting remote PC `serverOrigin` (`http://<LAN_IP>:8000`) and SSE job streams. |
+| `src/musiclinker/web/js/offline-store.js` | Web / APK Layer | IndexedDB + Cache API offline manager with direct Blob URL playback for offline APK mode and batch album offline caching. |
+| `src/musiclinker/web/js/audio-engine.js` | Web / APK Layer | HTML5 Audio + offline Blob fallback + ReplayGain + MediaSession bridge. |
+| `src/musiclinker/web/js/app.js` | Web / APK Layer | Full UI controller with **Play by Album**, **Randomizer (`🔀`)**, **Sort by Track # / Alphabet**, **3-Layer Selection Mode (`Artists -> Albums -> Tracks`)**, and **Full Album Downloader**. |
+| `src/musiclinker/web/index.html` | Web / APK Layer | Studio & Mobile APK interface with view switcher (`Standard Library` vs `3-Layer Selector`), Album Downloader studio, and APK Server Connection modal. |
 | `start_player.py` | Root Bootstrap | Root launcher invoking `musiclinker.entrypoints.desktop:main`. |
 | `MusicLinker.spec` | Packaging | PyInstaller v6.x spec file. |
 | `start_player.bat` | Windows Launcher | 1-click launcher for Desktop App. |
 | `run_cli.bat` | Windows Launcher | 1-click launcher for CLI Wizard. |
 | `run_web.bat` | Windows Launcher | 1-click launcher for Streamlit Dashboard. |
 
-## 4. Step-by-Step Agent Migration Instructions Ensure a Clean Transition
+## 4. Step-by-Step Agent Migration & APK Build Instructions
 
-1. **Create Directory Hierarchy**: Create `src/musiclinker/{core,domain,infrastructure,services,api,entrypoints,web/js,web/css}`.
-2. **Preserve Existing Data**: Keep `library.db`, `config.json`, `seen_hashes.json` (if present), `downloads/`, `icon.ico`, and `icon.png` in the repository root. `db.py` automatically migrates legacy settings and hashes on first launch.
+1. **Create Directory Hierarchy**: Create `src/musiclinker/{core,domain,infrastructure,services,api,entrypoints,web/js,web/css}` and `android/app/src/main/java/com/fabrithomas/musiclinker`.
+2. **Preserve Existing Data**: Keep `library.db`, `config.json`, `seen_hashes.json` (if present), `downloads/`, `icon.ico`, and `icon.png` in the repository root. `db.py` automatically migrates legacy files and adds `track_number` to existing `tracks` tables.
 3. **Write Source Files**: Create every file listed in Section 5 using its exact relative path.
-4. **Install / Run**: Run `py -m pip install -e .` or launch directly with `py start_player.py`.
+4. **Run Windows Desktop / Server**: Run `py start_player.py` (or `start_player.bat`).
+5. **Build the Android `.apk`**: Run `build_apk.bat` (or `npm install && npx cap sync android && cd android && gradlew assembleDebug`). Install `android/app/build/outputs/apk/debug/app-debug.apk` on your Android phone, tap **📱 Connect Server / Sync**, and scan or enter your PC's LAN URL!
 
 
 ## 5. Complete Refactored Codebase Provides Every Module in Full
@@ -121,8 +133,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "musiclinker"
-version = "2.1.0"
-description = "Offline-first Last.fm extractor, ID3v2.4 multi-artist tagger, LLM metadata curator, and Windows/Android personal music server"
+version = "3.0.0"
+description = "Offline-first Last.fm extractor, full album downloader, ID3v2.4 multi-artist tagger, LLM curator, and Windows/Android APK personal music ecosystem"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -155,6 +167,214 @@ where = ["src"]
 "musiclinker.web" = ["*.*", "js/*.*", "css/*.*"]
 ```
 
+### File: `package.json`
+```json
+{
+  "name": "musiclinker-android",
+  "version": "3.0.0",
+  "description": "Capacitor Native Android APK wrapper for MusicLinker Studio",
+  "private": true,
+  "scripts": {
+    "apk:init": "npx cap add android",
+    "apk:sync": "npx cap sync android",
+    "apk:open": "npx cap open android",
+    "apk:build": "npx cap sync android && cd android && gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}
+```
+
+### File: `capacitor.config.json`
+```json
+{
+  "appId": "com.fabrithomas.musiclinker",
+  "appName": "MusicLinker",
+  "webDir": "src/musiclinker/web",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#09090b"
+  }
+}
+```
+
+### File: `android/build.gradle`
+```groovy
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
+```
+
+### File: `android/settings.gradle`
+```groovy
+include ':app'
+include ':capacitor-cordova-android-plugins'
+project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
+apply from: 'capacitor.settings.gradle'
+```
+
+### File: `android/app/build.gradle`
+```groovy
+apply plugin: 'com.android.application'
+
+android {
+    namespace "com.fabrithomas.musiclinker"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.fabrithomas.musiclinker"
+        minSdk 26
+        targetSdk 34
+        versionCode 300
+        versionName "3.0.0"
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:1.2.0"
+    implementation "androidx.core:core-splashscreen:1.0.1"
+    implementation project(':capacitor-android')
+    implementation project(':capacitor-cordova-android-plugins')
+}
+```
+
+### File: `android/app/src/main/AndroidManifest.xml`
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Required for LAN Wi-Fi streaming, offline sync, lockscreen media, and Car Mode wake-lock -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="MusicLinker"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:hardwareAccelerated="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:name=".MainActivity"
+            android:label="MusicLinker"
+            android:launchMode="singleTask"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+```
+
+### File: `android/app/src/main/java/com/fabrithomas/musiclinker/MainActivity.java`
+```java
+package com.fabrithomas.musiclinker;
+
+import android.os.Bundle;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (this.bridge != null && this.bridge.getWebView() != null) {
+            WebView webView = this.bridge.getWebView();
+            WebSettings settings = webView.getSettings();
+            // Allow gapless track-to-track transitions and background audio without requiring a tap per track
+            settings.setMediaPlaybackRequiresUserGesture(false);
+            settings.setDomStorageEnabled(true);
+            settings.setDatabaseEnabled(true);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
+    }
+}
+```
+
+### File: `build_apk.bat`
+```bat
+@echo off
+title MusicLinker Android APK Builder
+echo ========================================================
+echo   MusicLinker v3.0 — Native Android APK Builder
+echo ========================================================
+if not exist node_modules (
+    echo [1/3] Installing Capacitor dependencies...
+    call npm install
+)
+if not exist android\capacitor-android (
+    echo [2/3] Syncing web assets into Android Capacitor project...
+    call npx cap sync android
+) else (
+    call npx cap copy android
+)
+echo [3/3] Building APK via Gradle...
+cd android
+call gradlew.bat assembleDebug
+cd ..
+echo.
+echo Done! APK generated at:
+echo   android\app\build\outputs\apk\debug\app-debug.apk
+pause
+```
+
 ### File: `.gitignore`
 ```gitignore
 # Byte-compiled / cache
@@ -163,15 +383,18 @@ __pycache__/
 *$py.class
 .pytest_cache/
 
-# Virtual environments
+# Virtual environments & Node
 .venv/
 venv/
 env/
+node_modules/
 
 # Build & distribution
 build/
 dist/
 *.egg-info/
+android/.gradle/
+android/app/build/
 
 # Runtime & user data (never commit secrets or media)
 config.json
@@ -189,9 +412,9 @@ logs/
 
 ### File: `src/musiclinker/__init__.py`
 ```python
-"""MusicLinker: Offline-first Last.fm extractor, LLM curator, and personal music streaming ecosystem."""
+"""MusicLinker: Offline-first Last.fm extractor, album downloader, LLM curator, and Windows/Android APK ecosystem."""
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"
 __all__ = ["__version__"]
 ```
 
@@ -249,7 +472,6 @@ class AppPaths:
         return self.bundle_dir / filename
 
     def ensure_directories(self) -> None:
-        """Create required runtime directories if they do not exist."""
         for directory in (
             self.app_data_dir,
             self.webview_cache_dir,
@@ -282,7 +504,6 @@ from musiclinker.core.paths import PATHS
 
 
 def configure_logging(level: int = logging.INFO) -> logging.Logger:
-    """Configure root and application loggers with UTF-8 encoding and file rotation."""
     for stream_name in ("stdout", "stderr"):
         stream = getattr(sys, stream_name, None)
         if stream is not None and hasattr(stream, "reconfigure"):
@@ -380,7 +601,6 @@ from fastapi import HTTPException, Request, status
 
 
 def detect_lan_ip() -> str:
-    """Detect the primary LAN IPv4 address of the host machine."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(0.5)
@@ -402,19 +622,16 @@ def detect_lan_ip() -> str:
 
 
 def generate_pair_token() -> str:
-    """Generate a cryptographically random URL-safe pairing token."""
     return secrets.token_urlsafe(24)
 
 
 def is_loopback_host(client_host: str | None) -> bool:
-    """Return True if the request originates from the local machine."""
     if not client_host:
         return False
     return client_host in ("127.0.0.1", "::1", "localhost") or client_host.startswith("127.")
 
 
 def verify_request_access(request: Request, expected_token: str, require_auth_on_lan: bool = True) -> None:
-    """Allow loopback traffic automatically; validate pairing token for LAN devices."""
     client_host = request.client.host if request.client else None
     if is_loopback_host(client_host) or not require_auth_on_lan:
         return
@@ -428,12 +645,11 @@ def verify_request_access(request: Request, expected_token: str, require_auth_on
     if not provided or not hmac.compare_digest(provided, expected_token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="LAN pairing token required. Scan the QR code inside the MusicLinker Desktop App.",
+            detail="LAN pairing token required. Scan or paste the pairing URL from the MusicLinker Desktop App.",
         )
 
 
 def build_pairing_url(port: int, pair_token: str) -> str:
-    """Construct the full LAN URL encoded inside the phone pairing QR code."""
     lan_ip = detect_lan_ip()
     return f"http://{lan_ip}:{port}/?pair_token={quote(pair_token)}"
 ```
@@ -477,12 +693,13 @@ class JobStatus(str, Enum):
 
 @dataclass(slots=True)
 class CandidateTrack:
-    """A track extracted from Last.fm or searched via YouTube prior to download."""
+    """A track extracted from Last.fm, MusicBrainz album lookup, or YouTube search prior to download."""
 
     artist: str
     title: str
     playcount: int = 0
     album: str = ""
+    track_number: int = 0
     track_hash: str = ""
     mbid: str = ""
     youtube_url: str = ""
@@ -501,6 +718,7 @@ class TrackEntity:
     artists: list[str]
     album_artist: str
     album: str
+    track_number: int
     release_year: str
     original_year: str
     duration: int
@@ -524,6 +742,7 @@ class TrackEntity:
             "artists": self.artists,
             "album_artist": self.album_artist,
             "album": self.album,
+            "track_number": self.track_number,
             "release_year": self.release_year,
             "original_year": self.original_year,
             "duration": self.duration,
@@ -548,6 +767,7 @@ class ReleaseMetadata:
 
     album: str = ""
     album_artist: str = ""
+    track_number: int = 0
     release_year: str = ""
     original_year: str = ""
     release_mbid: str = ""
@@ -579,15 +799,40 @@ class DirectDownloadRequest(BaseModel):
     artist_override: str = Field(default="")
     title_override: str = Field(default="")
     album_override: str = Field(default="")
+    track_number_override: int = Field(default=0)
     bitrate_kbps: int = Field(default=320)
 
 
+class AlbumTrackItem(BaseModel):
+    """Single track entry inside an Album Download request."""
+
+    track_number: int = Field(default=1, ge=1)
+    title: str = Field(..., min_length=1)
+    artist: str = Field(..., min_length=1)
+    duration: int = Field(default=0)
+    youtube_url: str = Field(default="")
+
+
+class AlbumDownloadRequest(BaseModel):
+    """Payload to download an entire album (either resolved via MusicBrainz/Last.fm/YouTube or custom tracklist)."""
+
+    artist: str = Field(..., min_length=1)
+    album: str = Field(..., min_length=1)
+    bitrate_kbps: int = Field(default=320)
+    tracks: list[AlbumTrackItem] = Field(
+        default_factory=list,
+        description="Optional explicit tracklist; if empty, server resolves the official tracklist automatically.",
+    )
+    skip_existing: bool = Field(default=True)
+
+
 class TrackMetadataUpdatePayload(BaseModel):
-    """Payload to rename/edit a track's title, artist, album, and release year internally & on MP3 tags."""
+    """Payload to rename/edit a track's title, artist, album, track_number, and release year internally & on MP3 tags."""
 
     title: str = Field(..., min_length=1)
     artist_display: str = Field(..., min_length=1)
     album: str = Field(..., min_length=1)
+    track_number: int = Field(default=0, ge=0)
     release_year: str = Field(default="")
     original_year: str = Field(default="")
     remember_album_alias: bool = Field(default=True)
@@ -635,7 +880,7 @@ class ScrobblePayload(BaseModel):
 
 
 class BatchScrobblePayload(BaseModel):
-    """Batch of offline scrobbles flushed from the Android PWA IndexedDB outbox."""
+    """Batch of offline scrobbles flushed from the Android APK/PWA IndexedDB outbox."""
 
     scrobbles: list[ScrobblePayload]
 
@@ -682,7 +927,6 @@ import hashlib
 import re
 import unicodedata
 
-# Matches parenthetical/bracketed remaster, live, version, or featuring noise
 _BRACKET_NOISE_RE = re.compile(
     r"[\(\[\{][^\)\]\}]*?\b("
     r"remaster(?:ed)?|deluxe|anniversary|expanded|edition|version|edit|"
@@ -716,7 +960,6 @@ _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def normalize_text(value: str) -> str:
-    """Normalize Unicode accents, strip remaster/featuring suffixes, and collapse to lowercase alphanumerics."""
     if not value:
         return ""
     text = unicodedata.normalize("NFKD", value)
@@ -730,12 +973,6 @@ def normalize_text(value: str) -> str:
 
 
 def clean_album_name(raw_album: str, track_title: str = "") -> str:
-    """
-    Auto-filter and clean messy album titles returned by Last.fm, YouTube, or MusicBrainz.
-
-    - Strips '(Deluxe Edition)', '[Remastered 2021]', '- Single', '- EP', etc.
-    - Replaces YouTube auto-generated 'Provided to YouTube' or empty names with 'Singles'.
-    """
     if not raw_album:
         return "Singles"
     cleaned = raw_album.strip()
@@ -744,15 +981,12 @@ def clean_album_name(raw_album: str, track_title: str = "") -> str:
 
     cleaned = _ALBUM_EDITION_NOISE_RE.sub("", cleaned).strip()
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -–—")
-
-    # If the album was literally "<Track Title> - Single", classify cleanly or keep base title
     if not cleaned:
         return track_title.strip() or "Singles"
     return cleaned
 
 
 def clean_track_title(raw_title: str) -> str:
-    """Strip '(Official Video)', '[Lyrics]', '- 2011 Remaster', etc. for clean display & tagging."""
     if not raw_title:
         return "Unknown Title"
     text = raw_title.strip()
@@ -768,7 +1002,6 @@ def clean_track_title(raw_title: str) -> str:
 
 
 def split_artists(artist_raw: str, title_raw: str = "") -> tuple[str, list[str], str]:
-    """Extract primary album artist, full list of individual artists, and cleaned song title."""
     clean_title = clean_track_title(title_raw)
     extracted_from_title: list[str] = []
 
@@ -799,7 +1032,6 @@ def split_artists(artist_raw: str, title_raw: str = "") -> tuple[str, list[str],
 
 
 def compute_track_hash(artist: str, title: str) -> str:
-    """Compute a deterministic 16-character SHA-256 hex digest from primary artist and normalized title."""
     primary_artist, _, cleaned_title = split_artists(artist, title)
     norm_artist = normalize_text(primary_artist)
     norm_title = normalize_text(cleaned_title)
@@ -809,7 +1041,7 @@ def compute_track_hash(artist: str, title: str) -> str:
 
 ### File: `src/musiclinker/infrastructure/db.py`
 ```python
-"""Thread-safe SQLite WAL repository with album alias mapping, metadata editing, and LLM proxy settings."""
+"""Thread-safe SQLite WAL repository with track_number indexing, multi-mode sorting, album aliases, and LLM settings."""
 
 from __future__ import annotations
 
@@ -826,7 +1058,7 @@ from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
 from musiclinker.core.security import generate_pair_token
 from musiclinker.domain.models import TrackEntity
-from musiclinker.infrastructure.hasher import clean_album_name, compute_track_hash, normalize_text
+from musiclinker.infrastructure.hasher import clean_album_name, normalize_text
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "lastfm_api_key": os.environ.get("LASTFM_API_KEY", ""),
@@ -881,6 +1113,7 @@ class DatabaseRepository:
                     artists_json TEXT NOT NULL DEFAULT '[]',
                     album_artist TEXT NOT NULL DEFAULT '',
                     album TEXT NOT NULL DEFAULT '',
+                    track_number INTEGER NOT NULL DEFAULT 0,
                     release_year TEXT NOT NULL DEFAULT '',
                     original_year TEXT NOT NULL DEFAULT '',
                     duration INTEGER NOT NULL DEFAULT 0,
@@ -948,10 +1181,11 @@ class DatabaseRepository:
                 );
                 """
             )
-            # Ensure lyric_sync_mode column exists on older v2.0 databases
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracks)").fetchall()}
             if "lyric_sync_mode" not in cols:
                 conn.execute("ALTER TABLE tracks ADD COLUMN lyric_sync_mode TEXT NOT NULL DEFAULT 'none'")
+            if "track_number" not in cols:
+                conn.execute("ALTER TABLE tracks ADD COLUMN track_number INTEGER NOT NULL DEFAULT 0")
 
             for key, default_val in DEFAULT_SETTINGS.items():
                 conn.execute(
@@ -1028,10 +1262,9 @@ class DatabaseRepository:
             conn.commit()
         return self.get_settings()
 
-    # ---- Album Alias & Auto-Filter Operations ----
+    # ---- Album Alias, Artist Summary & Hierarchy Operations ----
 
     def resolve_album_alias(self, artist: str, raw_album: str, track_title: str = "") -> str:
-        """Apply auto-cleaning regex and check `album_aliases` for user/LLM-defined canonical album overrides."""
         auto_clean = bool(self.get_settings().get("auto_clean_albums", True))
         candidate = clean_album_name(raw_album, track_title) if auto_clean else (raw_album.strip() or "Singles")
 
@@ -1071,8 +1304,23 @@ class DatabaseRepository:
             )
             conn.commit()
 
+    def list_artists_summary(self) -> list[dict[str, Any]]:
+        """Return distinct album artists with album and track counts for Layer 1 of the Layered Selector."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT album_artist AS artist,
+                   COUNT(DISTINCT album) AS album_count,
+                   COUNT(*) AS track_count
+            FROM tracks
+            GROUP BY album_artist
+            ORDER BY LOWER(album_artist) ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def list_albums_summary(self) -> list[dict[str, Any]]:
-        """Return distinct albums in the library with track counts and primary artist for the UI Album Filter bar."""
+        """Return distinct albums in the library with track counts and primary artist."""
         conn = self._get_conn()
         rows = conn.execute(
             """
@@ -1082,7 +1330,7 @@ class DatabaseRepository:
                    MAX(has_cover) AS has_cover
             FROM tracks
             GROUP BY album, album_artist
-            ORDER BY track_count DESC, album ASC
+            ORDER BY LOWER(album) ASC
             """
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1122,9 +1370,10 @@ class DatabaseRepository:
         artists: list[str],
         album_artist: str,
         album: str,
-        release_year: str,
-        original_year: str,
-        duration: int,
+        track_number: int = 0,
+        release_year: str = "",
+        original_year: str = "",
+        duration: int = 0,
         file_path: str,
         lrc_path: str = "",
         lyric_sync_mode: str = "none",
@@ -1142,16 +1391,17 @@ class DatabaseRepository:
                 """
                 INSERT INTO tracks (
                     track_hash, title, artist_display, artists_json, album_artist,
-                    album, release_year, original_year, duration, file_path,
+                    album, track_number, release_year, original_year, duration, file_path,
                     lrc_path, lyric_sync_mode, cover_mime, has_cover, lastfm_playcount,
                     replaygain_db, bitrate_kbps, added_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(track_hash) DO UPDATE SET
                     title = excluded.title,
                     artist_display = excluded.artist_display,
                     artists_json = excluded.artists_json,
                     album_artist = excluded.album_artist,
                     album = excluded.album,
+                    track_number = CASE WHEN excluded.track_number > 0 THEN excluded.track_number ELSE tracks.track_number END,
                     release_year = CASE WHEN excluded.release_year != '' THEN excluded.release_year ELSE tracks.release_year END,
                     original_year = CASE WHEN excluded.original_year != '' THEN excluded.original_year ELSE tracks.original_year END,
                     duration = CASE WHEN excluded.duration > 0 THEN excluded.duration ELSE tracks.duration END,
@@ -1171,6 +1421,7 @@ class DatabaseRepository:
                     json.dumps(artists, ensure_ascii=False),
                     album_artist,
                     canonical_album,
+                    int(track_number or 0),
                     release_year,
                     original_year,
                     duration,
@@ -1203,6 +1454,7 @@ class DatabaseRepository:
         artists: list[str],
         album_artist: str,
         album: str,
+        track_number: int,
         release_year: str,
         original_year: str,
         file_path: str,
@@ -1214,8 +1466,8 @@ class DatabaseRepository:
                 """
                 UPDATE tracks
                 SET track_hash = ?, title = ?, artist_display = ?, artists_json = ?,
-                    album_artist = ?, album = ?, release_year = ?, original_year = ?,
-                    file_path = ?, lrc_path = ?
+                    album_artist = ?, album = ?, track_number = ?, release_year = ?,
+                    original_year = ?, file_path = ?, lrc_path = ?
                 WHERE id = ?
                 """,
                 (
@@ -1225,6 +1477,7 @@ class DatabaseRepository:
                     json.dumps(artists, ensure_ascii=False),
                     album_artist,
                     album,
+                    int(track_number or 0),
                     release_year,
                     original_year,
                     file_path,
@@ -1241,7 +1494,21 @@ class DatabaseRepository:
             conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
             conn.commit()
 
-    def list_tracks(self, search: str = "", artist: str = "", album: str = "") -> list[TrackEntity]:
+    def list_tracks(
+        self,
+        search: str = "",
+        artist: str = "",
+        album: str = "",
+        sort_by: str = "track_num",
+    ) -> list[TrackEntity]:
+        """
+        List tracks with flexible ordering:
+          - `track_num`: Album + Track # (`1..N`) + Title (ideal for Play by Album)
+          - `alpha_asc`: Alphabetical by Title (`A -> Z`)
+          - `alpha_desc`: Alphabetical by Title (`Z -> A`)
+          - `plays_desc`: Most played (`lastfm_playcount + local_playcount DESC`)
+          - `recent`: Recently added (`added_at DESC`)
+        """
         conn = self._get_conn()
         clauses: list[str] = []
         params: list[Any] = []
@@ -1256,9 +1523,18 @@ class DatabaseRepository:
         if album.strip():
             clauses.append("LOWER(album) = ?")
             params.append(album.strip().lower())
+
+        order_map = {
+            "track_num": "LOWER(album) ASC, CASE WHEN track_number > 0 THEN track_number ELSE 9999 END ASC, LOWER(title) ASC",
+            "alpha_asc": "LOWER(title) ASC, LOWER(artist_display) ASC",
+            "alpha_desc": "LOWER(title) DESC, LOWER(artist_display) ASC",
+            "plays_desc": "(lastfm_playcount + local_playcount) DESC, LOWER(title) ASC",
+            "recent": "added_at DESC, LOWER(title) ASC",
+        }
+        order_sql = order_map.get(sort_by, order_map["track_num"])
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = conn.execute(
-            f"SELECT * FROM tracks {where_sql} ORDER BY added_at DESC, title ASC",
+            f"SELECT * FROM tracks {where_sql} ORDER BY {order_sql}",
             params,
         ).fetchall()
         return [self._row_to_track(r) for r in rows]
@@ -1391,6 +1667,7 @@ class DatabaseRepository:
             artists=artists if isinstance(artists, list) else [str(row["artist_display"])],
             album_artist=str(row["album_artist"]),
             album=str(row["album"]),
+            track_number=int(row["track_number"]) if "track_number" in keys else 0,
             release_year=str(row["release_year"]),
             original_year=str(row["original_year"]),
             duration=int(row["duration"]),
@@ -1413,7 +1690,7 @@ db_repo = DatabaseRepository()
 
 ### File: `src/musiclinker/infrastructure/lastfm_client.py`
 ```python
-"""Bi-directional Last.fm API client supporting chart extraction, date-range aggregation, and signed scrobbling."""
+"""Bi-directional Last.fm API client supporting chart extraction, album tracklist lookup, and signed scrobbling."""
 
 from __future__ import annotations
 
@@ -1431,11 +1708,11 @@ from musiclinker.domain.models import CandidateTrack
 from musiclinker.infrastructure.hasher import compute_track_hash
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
-USER_AGENT = "MusicLinker/2.1 (+https://github.com/FabriThomas/musicLink)"
+USER_AGENT = "MusicLinker/3.0 (+https://github.com/FabriThomas/musicLink)"
 
 
 class LastFMClient:
-    """Handles Last.fm read queries (Top Tracks, Calendar Year Scrobbles) and write calls (Now Playing, Scrobble)."""
+    """Handles Last.fm read queries (Top Tracks, Calendar Year Scrobbles, Album Tracklists) and write calls (Now Playing, Scrobble)."""
 
     def __init__(
         self,
@@ -1506,6 +1783,38 @@ class LastFMClient:
             raise LastFMAuthError("User has not authorized the token in the browser yet.")
         self.session_key = key
         return {"session_key": key, "username": name}
+
+    def fetch_album_tracklist(self, artist: str, album: str) -> list[dict[str, Any]]:
+        """Query `album.getInfo` on Last.fm as a fallback tracklist source when downloading full albums."""
+        if not self.api_key:
+            return []
+        try:
+            data = self._call("album.getInfo", {"artist": artist.strip(), "album": album.strip()})
+            album_obj = data.get("album", {})
+            tracks_container = album_obj.get("tracks", {})
+            raw_tracks = tracks_container.get("track", [])
+            if isinstance(raw_tracks, dict):
+                raw_tracks = [raw_tracks]
+            results: list[dict[str, Any]] = []
+            for idx, item in enumerate(raw_tracks, start=1):
+                attr = item.get("@attr") or {}
+                rank = int(attr.get("rank") or idx)
+                title = str(item.get("name") or "").strip()
+                if not title:
+                    continue
+                dur = int(item.get("duration") or 0)
+                results.append(
+                    {
+                        "track_number": rank,
+                        "title": title,
+                        "artist": artist.strip(),
+                        "duration": dur,
+                    }
+                )
+            return results
+        except Exception as exc:
+            logger.debug("Last.fm album.getInfo lookup skipped: %s", exc)
+            return []
 
     def fetch_top_tracks_by_period(
         self,
@@ -1669,7 +1978,7 @@ class LastFMClient:
 
 ### File: `src/musiclinker/infrastructure/youtube_client.py`
 ```python
-"""Keyless yt-dlp search engine, FFmpeg audio stream downloader, and YouTube subtitle/caption extractor."""
+"""Keyless yt-dlp search engine, playlist/album expander, FFmpeg MP3 downloader, and VTT subtitle extractor."""
 
 from __future__ import annotations
 
@@ -1691,7 +2000,7 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class YouTubeClient:
-    """Provides cached flat-search queries, MP3 extraction, and VTT subtitle extraction for rough lyric sync."""
+    """Provides cached flat-search queries, playlist/album expansion, MP3 extraction, and VTT subtitle extraction."""
 
     def __init__(self) -> None:
         self._search_cache: dict[str, list[dict[str, Any]]] = {}
@@ -1749,6 +2058,43 @@ class YouTubeClient:
             self._search_cache[cache_key] = results
         return results
 
+    def expand_playlist_or_album_url(self, playlist_url: str, default_artist: str = "") -> list[dict[str, Any]]:
+        """Extract all tracks in order (`1..N`) from a YouTube Album or Playlist URL."""
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "skip_download": True,
+            "noplaylist": False,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(playlist_url, download=False)
+        except Exception as exc:
+            raise YouTubeResolutionError(f"Failed expanding playlist/album URL '{playlist_url}': {exc}") from exc
+
+        entries = info.get("entries", []) if isinstance(info, dict) else []
+        tracks: list[dict[str, Any]] = []
+        for idx, entry in enumerate(entries, start=1):
+            if not entry:
+                continue
+            vid_id = entry.get("id", "")
+            url = entry.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else "")
+            raw_title = str(entry.get("title") or f"Track {idx}").strip()
+            artist = default_artist or str(entry.get("uploader") or "Unknown Artist").replace(" - Topic", "").strip()
+            if " - " in raw_title and not default_artist:
+                artist, raw_title = raw_title.split(" - ", 1)
+            tracks.append(
+                {
+                    "track_number": idx,
+                    "title": raw_title.strip(),
+                    "artist": artist.strip(),
+                    "duration": int(entry.get("duration") or 0),
+                    "youtube_url": url,
+                }
+            )
+        return tracks
+
     def resolve_best_audio_match(self, artist: str, title: str) -> dict[str, Any]:
         query = f"{artist} - {title} official audio"
         matches = self.search_videos(query, max_results=3)
@@ -1768,12 +2114,6 @@ class YouTubeClient:
         bitrate_kbps: int = 320,
         progress_cb: Callable[[float], None] | None = None,
     ) -> tuple[Path, dict[str, Any], str]:
-        """
-        Download audio stream to staging directory, transcode to MP3, and extract YouTube subtitles/auto-captions
-        if available so tracks without LRCLIB entries still get rough synced lyrics from the download source.
-
-        Returns `(mp3_path, yt_info_dict, youtube_lrc_fallback)`.
-        """
         staging_dir.mkdir(parents=True, exist_ok=True)
         outtmpl = str(staging_dir / f"{stem_name}.%(ext)s")
         valid_bitrate = "320" if bitrate_kbps >= 256 else "192"
@@ -1823,7 +2163,6 @@ class YouTubeClient:
                 raise YouTubeResolutionError("FFmpeg post-processing did not produce an MP3 file.")
             mp3_path = candidates[0]
 
-        # Check if yt-dlp wrote a .vtt subtitle file alongside the audio for rough lyric sync
         yt_lrc_fallback = ""
         vtt_files = list(staging_dir.glob(f"{stem_name}*.vtt"))
         if vtt_files:
@@ -1837,7 +2176,6 @@ class YouTubeClient:
 
     @staticmethod
     def convert_vtt_to_lrc(raw_vtt: str) -> str:
-        """Convert WebVTT subtitle cues from YouTube into standard `[mm:ss.xx]` LRC lines."""
         lrc_lines: list[str] = []
         last_text = ""
         lines = raw_vtt.splitlines()
@@ -1871,7 +2209,7 @@ youtube_client = YouTubeClient()
 
 ### File: `src/musiclinker/infrastructure/musicbrainz_client.py`
 ```python
-"""MusicBrainz & Cover Art Archive client resolving original release years (TDOR), cleaned albums, and cover art."""
+"""MusicBrainz & Cover Art Archive client resolving original release years (TDOR), track numbers, and full album tracklists."""
 
 from __future__ import annotations
 
@@ -1887,11 +2225,11 @@ from musiclinker.infrastructure.hasher import clean_album_name
 
 MB_BASE_URL = "https://musicbrainz.org/ws/2"
 CAA_BASE_URL = "https://coverartarchive.org"
-MB_USER_AGENT = "MusicLinker/2.1 ( https://github.com/FabriThomas/musicLink )"
+MB_USER_AGENT = "MusicLinker/3.0 ( https://github.com/FabriThomas/musicLink )"
 
 
 class MusicBrainzClient:
-    """Rate-limited (1 req/sec) MusicBrainz metadata resolver with automatic album cleaning."""
+    """Rate-limited (1 req/sec) MusicBrainz metadata and full album tracklist resolver."""
 
     def __init__(self) -> None:
         self.session = requests.Session()
@@ -1907,20 +2245,96 @@ class MusicBrainzClient:
                 time.sleep(1.05 - elapsed)
             self._last_call_ts = time.monotonic()
 
+    def fetch_album_tracklist(self, artist: str, album: str) -> dict[str, Any]:
+        """
+        Resolve a complete studio album's ordered tracklist (`1..N`), release year, and front cover URL from MusicBrainz.
+        """
+        clean_alb = clean_album_name(album)
+        result: dict[str, Any] = {
+            "artist": artist.strip(),
+            "album": clean_alb,
+            "release_year": "",
+            "release_mbid": "",
+            "cover_url": "",
+            "tracks": [],
+        }
+        try:
+            self._throttle()
+            query = f'artist:"{artist.strip()}" AND release:"{clean_alb}" AND status:official'
+            resp = self.session.get(
+                f"{MB_BASE_URL}/release",
+                params={"query": query, "limit": 5, "fmt": "json"},
+                timeout=10.0,
+            )
+            if not resp.ok:
+                return result
+            releases = resp.json().get("releases", [])
+            if not releases:
+                return result
+
+            chosen = releases[0]
+            release_mbid = str(chosen.get("id") or "")
+            result["release_mbid"] = release_mbid
+            result["album"] = clean_album_name(str(chosen.get("title") or clean_alb))
+            rel_date = str(chosen.get("date") or "")
+            if len(rel_date) >= 4:
+                result["release_year"] = rel_date[:4]
+            if release_mbid:
+                result["cover_url"] = f"{CAA_BASE_URL}/release/{release_mbid}/front-500"
+
+            # Fetch full medium/track listing for the chosen release
+            self._throttle()
+            detail_resp = self.session.get(
+                f"{MB_BASE_URL}/release/{release_mbid}",
+                params={"inc": "recordings+artist-credits", "fmt": "json"},
+                timeout=10.0,
+            )
+            if detail_resp.ok:
+                media = detail_resp.json().get("media", [])
+                tracks_out: list[dict[str, Any]] = []
+                running_num = 1
+                for medium in media:
+                    for tr in medium.get("tracks", []) or []:
+                        title = str(tr.get("title") or "").strip()
+                        if not title:
+                            continue
+                        pos = int(tr.get("position") or running_num)
+                        length_ms = int(tr.get("length") or 0)
+                        tracks_out.append(
+                            {
+                                "track_number": pos,
+                                "title": title,
+                                "artist": artist.strip(),
+                                "duration": round(length_ms / 1000) if length_ms > 0 else 0,
+                                "youtube_url": "",
+                            }
+                        )
+                        running_num += 1
+                result["tracks"] = tracks_out
+        except Exception as exc:
+            logger.warning("MusicBrainz album tracklist lookup failed for %s - %s: %s", artist, album, exc)
+
+        return result
+
     def resolve_release_metadata(
         self,
         artist: str,
         title: str,
         fallback_album: str = "",
         fallback_thumb_url: str = "",
+        fallback_track_number: int = 0,
     ) -> ReleaseMetadata:
-        cache_key = f"{artist.lower().strip()}::{title.lower().strip()}"
+        cache_key = f"{artist.lower().strip()}::{title.lower().strip()}::{fallback_album.lower().strip()}"
         if cache_key in self._cache:
-            return self._cache[cache_key]
+            cached = self._cache[cache_key]
+            if fallback_track_number > 0 and cached.track_number == 0:
+                cached.track_number = fallback_track_number
+            return cached
 
         meta = ReleaseMetadata(
             album=clean_album_name(fallback_album, title),
             album_artist=artist,
+            track_number=fallback_track_number,
         )
         try:
             self._throttle()
@@ -1950,6 +2364,16 @@ class MusicBrainzClient:
                             meta.release_year = rel_date[:4]
                             if not meta.original_year:
                                 meta.original_year = meta.release_year
+
+                        # Extract track number from media -> track[0].number if present
+                        if meta.track_number == 0:
+                            media_list = chosen.get("media") or []
+                            if media_list and isinstance(media_list[0], dict):
+                                tr_list = media_list[0].get("track") or []
+                                if tr_list and isinstance(tr_list[0], dict):
+                                    num_str = str(tr_list[0].get("number") or "")
+                                    if num_str.isdigit():
+                                        meta.track_number = int(num_str)
         except Exception as exc:
             logger.debug("MusicBrainz lookup skipped for %s - %s: %s", artist, title, exc)
 
@@ -2028,7 +2452,7 @@ class LyricsClient:
 
     def __init__(self) -> None:
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "MusicLinker/2.1 (https://github.com/FabriThomas/musicLink)"})
+        self.session.headers.update({"User-Agent": "MusicLinker/3.0 (https://github.com/FabriThomas/musicLink)"})
 
     def fetch_and_save_lrc(
         self,
@@ -2039,9 +2463,6 @@ class LyricsClient:
         target_lrc_path: Path,
         youtube_lrc_fallback: str = "",
     ) -> tuple[str, str, str]:
-        """
-        Fetch lyrics, write `.lrc` file with embedded sync-mode header, and return `(lrc_text, sync_mode, summary_msg)`.
-        """
         synced_text, plain_text = self.fetch_lyrics(artist, title, album, duration)
         sync_mode = "none"
         final_body = ""
@@ -2075,7 +2496,6 @@ class LyricsClient:
 
     @staticmethod
     def interpolate_plain_lyrics_to_lrc(plain_text: str, duration: int) -> str:
-        """Assign rough proportional `[mm:ss.xx]` timestamps to plain lyrics across 8%..92% of song duration."""
         raw_lines = [l.strip() for l in plain_text.splitlines() if l.strip()]
         if not raw_lines:
             return ""
@@ -2122,10 +2542,6 @@ class LyricsClient:
 
     @classmethod
     def parse_lrc_content(cls, raw_lrc: str, fallback_duration: int = 200) -> dict[str, Any]:
-        """
-        Parse `.lrc` content into structured lines with `sync_mode` (`exact_lrc`, `youtube_captions`, `rough_interpolated`).
-        If a file contains plain lines without timestamps, automatically interpolates rough timestamps.
-        """
         if not raw_lrc.strip():
             return {"synced": False, "sync_mode": "none", "lines": []}
 
@@ -2171,7 +2587,7 @@ lyrics_client = LyricsClient()
 
 ### File: `src/musiclinker/infrastructure/tagger.py`
 ```python
-"""Advanced ID3v2.4 tagger supporting null-delimited multi-artist frames, original year, ReplayGain, and cover art."""
+"""Advanced ID3v2.4 tagger supporting TRCK track numbers, null-delimited multi-artist frames, ReplayGain, and cover art."""
 
 from __future__ import annotations
 
@@ -2189,6 +2605,7 @@ from mutagen.id3 import (
     TIT2,
     TPE1,
     TPE2,
+    TRCK,
     TXXX,
     USLT,
 )
@@ -2199,7 +2616,7 @@ from musiclinker.infrastructure.hasher import clean_album_name, compute_track_ha
 
 
 class AudioTagger:
-    """Reads and writes audiophile-grade ID3v2.4 metadata frames on MP3 files."""
+    """Reads and writes audiophile-grade ID3v2.4 metadata frames (`TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`, `TDRC`, `TDOR`, `APIC`)."""
 
     def write_id3v24_tags(
         self,
@@ -2209,6 +2626,7 @@ class AudioTagger:
         artists: list[str],
         album_artist: str,
         album: str,
+        track_number: int = 0,
         release_year: str = "",
         original_year: str = "",
         lastfm_playcount: int = 0,
@@ -2234,6 +2652,10 @@ class AudioTagger:
 
             tags.delall("TALB")
             tags.add(TALB(encoding=3, text=[album or "Singles"]))
+
+            if track_number and track_number > 0:
+                tags.delall("TRCK")
+                tags.add(TRCK(encoding=3, text=[str(track_number)]))
 
             if release_year:
                 tags.delall("TDRC")
@@ -2295,10 +2717,10 @@ class AudioTagger:
         artists: list[str],
         album_artist: str,
         album: str,
+        track_number: int = 0,
         release_year: str = "",
         original_year: str = "",
     ) -> None:
-        """Update core text frames (`TIT2`, `TPE1`, `TPE2`, `TALB`, `TDRC`, `TDOR`) while preserving cover art and audio."""
         try:
             try:
                 tags = ID3(str(mp3_path))
@@ -2316,6 +2738,10 @@ class AudioTagger:
 
             tags.delall("TALB")
             tags.add(TALB(encoding=3, text=[album or "Singles"]))
+
+            if track_number and track_number > 0:
+                tags.delall("TRCK")
+                tags.add(TRCK(encoding=3, text=[str(track_number)]))
 
             if release_year:
                 tags.delall("TDRC")
@@ -2351,6 +2777,7 @@ class AudioTagger:
                 "artists": artists,
                 "album_artist": album_artist,
                 "album": clean_album_name(raw_album, clean_title),
+                "track_number": 0,
                 "release_year": "",
                 "original_year": "",
                 "duration": duration,
@@ -2377,6 +2804,13 @@ class AudioTagger:
         talb = tags.get("TALB")
         album = str(talb.text[0]).strip() if (talb and talb.text) else "Singles"
 
+        trck = tags.get("TRCK")
+        track_number = 0
+        if trck and trck.text:
+            raw_trck = str(trck.text[0]).split("/")[0].strip()
+            if raw_trck.isdigit():
+                track_number = int(raw_trck)
+
         tdrc = tags.get("TDRC")
         release_year = str(tdrc.text[0])[:4] if (tdrc and tdrc.text) else ""
 
@@ -2402,6 +2836,7 @@ class AudioTagger:
             "artists": artists,
             "album_artist": album_artist,
             "album": album,
+            "track_number": track_number,
             "release_year": release_year,
             "original_year": original_year,
             "duration": duration,
@@ -2438,15 +2873,9 @@ from typing import Any
 
 import requests
 
-from musiclinker.core.logging_config import logger
-
 
 class LLMClient:
-    """
-    Calls any OpenAI-compatible API endpoint or user-supplied reverse proxy URL
-    (e.g. OpenAI, OpenRouter, Gemini OpenAI-compat, Groq, Ollama, or custom proxy)
-    to deduplicate repeated tracks (e.g. Remastered vs Radio Edit) and canonicalize track/album names.
-    """
+    """Calls any OpenAI-compatible API endpoint or reverse proxy URL for track deduplication and album canonicalization."""
 
     def __init__(self, base_url: str, api_key: str = "", model: str = "gpt-4o-mini", timeout: float = 35.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -2470,16 +2899,6 @@ class LLMClient:
         return f"{self.base_url}/v1/chat/completions"
 
     def curate_tracks_json(self, tracks_payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """
-        Send a batch of tracks to the LLM proxy and return structured curation instructions:
-          - `track_id`: int
-          - `action_type`: `'rename' | 'duplicate_remove' | 'keep'`
-          - `proposed_title`: clean canonical song title
-          - `proposed_artist`: clean artist string
-          - `proposed_album`: proper canonical studio album name
-          - `duplicate_of_track_id`: int | null (when two versions of the same song exist)
-          - `reason`: short explanation
-        """
         system_prompt = (
             "You are an expert music discography curator and audio library deduplicator.\n"
             "Given a JSON list of tracks (each with id, title, artist, album, playcount), analyze them and return ONLY a valid JSON object with a single key \"actions\" containing an array of objects.\n"
@@ -2538,7 +2957,7 @@ class LLMClient:
 
 ### File: `src/musiclinker/services/library_service.py`
 ```python
-"""Library synchronizer, internal album/track renamer (SQLite + ID3v2.4 + disk move), and 3-tier lyrics loader."""
+"""Library synchronizer, external album tracklist resolver, internal album/track renamer, and 3-tier lyrics loader."""
 
 from __future__ import annotations
 
@@ -2553,8 +2972,11 @@ from musiclinker.core.paths import PATHS
 from musiclinker.domain.models import AlbumBulkRenamePayload, TrackEntity, TrackMetadataUpdatePayload
 from musiclinker.infrastructure.db import DatabaseRepository, db_repo
 from musiclinker.infrastructure.hasher import compute_track_hash, split_artists
+from musiclinker.infrastructure.lastfm_client import LastFMClient
 from musiclinker.infrastructure.lyrics_client import lyrics_client
+from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
 from musiclinker.infrastructure.tagger import audio_tagger
+from musiclinker.infrastructure.youtube_client import youtube_client
 
 _SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -2565,13 +2987,12 @@ def sanitize_filename(name: str, fallback: str = "Unknown") -> str:
 
 
 class LibraryService:
-    """Manages local music library indexing, internal album/track renaming, and probabilistic song transitions."""
+    """Manages local music library indexing, external album lookups, internal renaming, and song transitions."""
 
     def __init__(self, repo: DatabaseRepository = db_repo) -> None:
         self.repo = repo
 
     def scan_and_sync_downloads(self) -> dict[str, int]:
-        """Scan `downloads/` for MP3 files, apply album alias filters, and index tracks into `library.db`."""
         pruned = self.repo.remove_missing_files()
         indexed = 0
 
@@ -2600,6 +3021,7 @@ class LibraryService:
                     artists=meta["artists"],
                     album_artist=meta["album_artist"],
                     album=canonical_album,
+                    track_number=int(meta.get("track_number") or 0),
                     release_year=meta["release_year"],
                     original_year=meta["original_year"],
                     duration=meta["duration"],
@@ -2618,10 +3040,61 @@ class LibraryService:
         logger.info("Library sync complete: %d track(s) indexed, %d missing entry(s) pruned", indexed, pruned)
         return {"indexed": indexed, "pruned": pruned}
 
+    def lookup_external_album_tracklist(self, artist: str, album_or_url: str) -> dict[str, Any]:
+        """
+        Resolve the full tracklist (`1..N`) for an album so the user can preview and download the entire album:
+          1. If `album_or_url` is a YouTube playlist/album URL, expand via `yt-dlp`.
+          2. Otherwise query MusicBrainz for the official release tracklist.
+          3. Fallback to Last.fm `album.getInfo` if MusicBrainz has no match.
+        """
+        if album_or_url.strip().startswith(("http://", "https://")):
+            yt_tracks = youtube_client.expand_playlist_or_album_url(album_or_url.strip(), default_artist=artist)
+            return {
+                "artist": artist.strip() or (yt_tracks[0]["artist"] if yt_tracks else "Unknown Artist"),
+                "album": "Downloaded Album",
+                "release_year": "",
+                "source": "youtube_playlist",
+                "tracks": yt_tracks,
+            }
+
+        mb_data = musicbrainz_client.fetch_album_tracklist(artist, album_or_url)
+        if mb_data.get("tracks"):
+            mb_data["source"] = "musicbrainz"
+            return mb_data
+
+        cfg = self.repo.get_settings()
+        lfm = LastFMClient(api_key=str(cfg.get("lastfm_api_key", "")))
+        lfm_tracks = lfm.fetch_album_tracklist(artist, album_or_url)
+        if lfm_tracks:
+            return {
+                "artist": artist.strip(),
+                "album": album_or_url.strip(),
+                "release_year": "",
+                "source": "lastfm",
+                "tracks": lfm_tracks,
+            }
+
+        # Final fallback: search YouTube for tracks matching "<Artist> <Album>"
+        yt_matches = youtube_client.search_videos(f"{artist} {album_or_url} audio", max_results=10)
+        fallback_tracks = [
+            {
+                "track_number": idx,
+                "title": m["title"],
+                "artist": artist.strip(),
+                "duration": int(m.get("duration") or 0),
+                "youtube_url": m["url"],
+            }
+            for idx, m in enumerate(yt_matches, start=1)
+        ]
+        return {
+            "artist": artist.strip(),
+            "album": album_or_url.strip(),
+            "release_year": "",
+            "source": "youtube_search",
+            "tracks": fallback_tracks,
+        }
+
     def update_track_metadata(self, track_id: int, payload: TrackMetadataUpdatePayload) -> TrackEntity:
-        """
-        Rename a track's title, artist, or album internally in SQLite AND rewrite its MP3 ID3v2.4 frames + folder path.
-        """
         track = self.repo.get_track(track_id)
         if not track:
             raise ValueError(f"Track ID {track_id} not found.")
@@ -2630,6 +3103,7 @@ class LibraryService:
         album_artist, artists_list, clean_title = split_artists(payload.artist_display, payload.title)
         artist_display = ", ".join(artists_list)
         new_album = payload.album.strip() or "Singles"
+        new_track_num = payload.track_number if payload.track_number > 0 else track.track_number
         new_hash = compute_track_hash(album_artist, clean_title)
 
         if payload.remember_album_alias and old_album.lower() != new_album.lower():
@@ -2646,6 +3120,7 @@ class LibraryService:
                 artists=artists_list,
                 album_artist=album_artist,
                 album=new_album,
+                track_number=new_track_num,
                 release_year=payload.release_year or track.release_year,
                 original_year=payload.original_year or track.original_year,
             )
@@ -2655,7 +3130,8 @@ class LibraryService:
                 / sanitize_filename(new_album, "Singles")
             )
             dest_dir.mkdir(parents=True, exist_ok=True)
-            base_name = f"{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
+            prefix = f"{new_track_num:02d} - " if new_track_num > 0 else ""
+            base_name = f"{prefix}{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
             target_mp3 = dest_dir / f"{base_name}.mp3"
 
             if target_mp3.resolve() != old_mp3.resolve():
@@ -2675,6 +3151,7 @@ class LibraryService:
             artists=artists_list,
             album_artist=album_artist,
             album=new_album,
+            track_number=new_track_num,
             release_year=payload.release_year or track.release_year,
             original_year=payload.original_year or track.original_year,
             file_path=str(new_mp3.resolve()),
@@ -2683,7 +3160,6 @@ class LibraryService:
         return updated or track
 
     def bulk_rename_album(self, payload: AlbumBulkRenamePayload) -> dict[str, Any]:
-        """Bulk-rename an album across all matching tracks, update their MP3 ID3 `TALB` frames, and save the alias rule."""
         tracks = self.repo.list_tracks(album=payload.old_album)
         if payload.album_artist.strip():
             tracks = [
@@ -2701,6 +3177,7 @@ class LibraryService:
                     title=tr.title,
                     artist_display=tr.artist_display,
                     album=payload.new_album,
+                    track_number=tr.track_number,
                     release_year=tr.release_year,
                     original_year=tr.original_year,
                     remember_album_alias=payload.remember_alias,
@@ -2715,7 +3192,6 @@ class LibraryService:
         }
 
     def get_track_lyrics(self, track: TrackEntity) -> dict[str, Any]:
-        """Return parsed synced or rough-interpolated lyrics for a track, fetching from LRCLIB on demand if missing."""
         if track.lrc_path and Path(track.lrc_path).exists():
             raw = Path(track.lrc_path).read_text(encoding="utf-8", errors="replace")
             return lyrics_client.parse_lrc_content(raw, fallback_duration=track.duration)
@@ -2741,6 +3217,7 @@ class LibraryService:
                 artists=track.artists,
                 album_artist=track.album_artist,
                 album=track.album,
+                track_number=track.track_number,
                 release_year=track.release_year,
                 original_year=track.original_year,
                 duration=track.duration,
@@ -2803,12 +3280,7 @@ from musiclinker.services.library_service import LibraryService, library_service
 
 
 class CurationService:
-    """
-    Provides two intelligent curation workflows via an OpenAI-compatible LLM API/Proxy
-    (with an automatic local fuzzy-matching & regex fallback when offline):
-      1. `filter_candidates_before_download()`: Deduplicates repeated versions of songs and fixes track/album names prior to YouTube download.
-      2. `analyze_library()` & `apply_curation_actions()`: Audits existing indexed tracks, flags duplicate versions, and renames messy titles/albums.
-    """
+    """Provides LLM API/Proxy and fuzzy-matching deduplication and track/album canonicalization."""
 
     def __init__(
         self,
@@ -3021,6 +3493,7 @@ class CurationService:
                         title=act.proposed_title,
                         artist_display=act.proposed_artist,
                         album=act.proposed_album,
+                        track_number=track.track_number,
                         release_year=track.release_year,
                         original_year=track.original_year,
                         remember_album_alias=True,
@@ -3158,7 +3631,7 @@ scrobble_service = ScrobbleService()
 
 ### File: `src/musiclinker/services/job_service.py`
 ```python
-"""Background extraction & audio acquisition pipeline with SSE event streaming, LLM pre-filtering, and lyric sync telemetry."""
+"""Background extraction, direct download, and Full Album Download pipeline with SSE telemetry."""
 
 from __future__ import annotations
 
@@ -3177,6 +3650,7 @@ from musiclinker.core.exceptions import JobCancelledError
 from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
 from musiclinker.domain.models import (
+    AlbumDownloadRequest,
     CandidateTrack,
     DirectDownloadRequest,
     ExtractionJobRequest,
@@ -3191,12 +3665,12 @@ from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
 from musiclinker.infrastructure.tagger import audio_tagger
 from musiclinker.infrastructure.youtube_client import youtube_client
 from musiclinker.services.curation_service import curation_service
-from musiclinker.services.library_service import sanitize_filename
+from musiclinker.services.library_service import library_service, sanitize_filename
 
 
 @dataclass
 class JobRecord:
-    """In-memory state of an active or historical extraction/download job including lyric sync telemetry."""
+    """In-memory state of an active or historical extraction, track download, or full album download job."""
 
     job_id: str
     job_type: str
@@ -3241,7 +3715,7 @@ class JobRecord:
 
 
 class JobService:
-    """Executes extraction and download pipelines in a bounded worker pool with atomic staging."""
+    """Executes Last.fm extraction, single track downloads, and Full Album Downloads with atomic staging."""
 
     def __init__(self, repo: DatabaseRepository = db_repo) -> None:
         self.repo = repo
@@ -3278,6 +3752,103 @@ class JobService:
             self._jobs[job_id] = record
         self._executor.submit(self._run_direct_download, record, req)
         return record
+
+    def start_album_download_job(self, req: AlbumDownloadRequest) -> JobRecord:
+        """Start a background job that resolves and downloads an entire album in track # order (`1..N`)."""
+        job_id = uuid.uuid4().hex[:10]
+        record = JobRecord(job_id=job_id, job_type="album_download")
+        with self._lock:
+            self._jobs[job_id] = record
+        self._executor.submit(self._run_album_download_pipeline, record, req)
+        return record
+
+    def _run_album_download_pipeline(self, job: JobRecord, req: AlbumDownloadRequest) -> None:
+        job.status = JobStatus.RUNNING
+        job.current_stage = "resolving_album"
+        job_staging = PATHS.staging_dir / job.job_id
+        try:
+            tracks_to_dl = req.tracks
+            canonical_album = self.repo.resolve_album_alias(req.artist, req.album)
+
+            if not tracks_to_dl:
+                job.append_log(f"Resolving official tracklist for album '{req.artist} — {req.album}'...")
+                lookup = library_service.lookup_external_album_tracklist(req.artist, req.album)
+                canonical_album = str(lookup.get("album") or canonical_album)
+                raw_list = lookup.get("tracks") or []
+                from musiclinker.domain.models import AlbumTrackItem
+
+                tracks_to_dl = [
+                    AlbumTrackItem(
+                        track_number=int(item.get("track_number") or idx),
+                        title=str(item.get("title") or f"Track {idx}"),
+                        artist=str(item.get("artist") or req.artist),
+                        duration=int(item.get("duration") or 0),
+                        youtube_url=str(item.get("youtube_url") or ""),
+                    )
+                    for idx, item in enumerate(raw_list, start=1)
+                ]
+
+            if not tracks_to_dl:
+                raise ValueError(f"Could not find tracklist for album '{req.artist} — {req.album}'.")
+
+            job.total_candidates = len(tracks_to_dl)
+            job.append_log(f"Album '{canonical_album}' resolved: {len(tracks_to_dl)} track(s) queued.")
+
+            total = len(tracks_to_dl)
+            for idx, item in enumerate(tracks_to_dl, start=1):
+                if job.cancel_requested:
+                    raise JobCancelledError("Album download cancelled by user.")
+
+                thash = compute_track_hash(item.artist, item.title)
+                if req.skip_existing and self.repo.is_hash_seen(thash):
+                    job.skipped_seen_count += 1
+                    job.append_log(f"[{idx}/{total}] Skipping #{item.track_number:02d} {item.title} (already in library)")
+                    continue
+
+                base_pct = ((idx - 1) / total) * 100.0
+                job.progress_pct = base_pct
+                job.append_log(f"[{idx}/{total}] Downloading Track #{item.track_number:02d}: {item.artist} - {item.title}")
+                try:
+                    entity = self._acquire_and_tag_single_track(
+                        job=job,
+                        artist_raw=item.artist,
+                        title_raw=item.title,
+                        album_hint=canonical_album,
+                        track_number_hint=item.track_number,
+                        query_or_url=item.youtube_url,
+                        playcount=0,
+                        bitrate_kbps=req.bitrate_kbps,
+                        staging_dir=job_staging,
+                        progress_cb=lambda p, b=base_pct, s=total: setattr(
+                            job, "progress_pct", b + (p / s)
+                        ),
+                    )
+                    job.downloaded_count += 1
+                    job.tracks_added.append(entity.to_dict())
+                    job.append_log(
+                        f"Indexed #{entity.track_number:02d}: {entity.title} [{entity.album} | Lyrics: {entity.lyric_sync_mode}]"
+                    )
+                except Exception as track_exc:
+                    logger.warning("Album track download failed (%s): %s", item.title, track_exc)
+                    job.append_log(f"Skipped #{item.track_number:02d} '{item.title}': {track_exc}")
+
+            job.progress_pct = 100.0
+            job.current_stage = "completed"
+            job.status = JobStatus.COMPLETED
+            job.append_log(
+                f"Album '{canonical_album}' complete: {job.downloaded_count}/{total} track(s) downloaded."
+            )
+        except JobCancelledError as exc:
+            job.status = JobStatus.CANCELLED
+            job.current_stage = "cancelled"
+            job.append_log(str(exc))
+        except Exception as exc:
+            logger.exception("Album download job %s failed", job.job_id)
+            job.status = JobStatus.FAILED
+            job.current_stage = "failed"
+            job.append_log(f"Error: {exc}")
+        finally:
+            shutil.rmtree(job_staging, ignore_errors=True)
 
     def _run_extraction_pipeline(self, job: JobRecord, req: ExtractionJobRequest) -> None:
         job.status = JobStatus.RUNNING
@@ -3359,6 +3930,7 @@ class JobService:
                         artist_raw=cand.artist,
                         title_raw=cand.title,
                         album_hint=cand.album,
+                        track_number_hint=cand.track_number,
                         query_or_url="",
                         playcount=cand.playcount,
                         bitrate_kbps=req.bitrate_kbps,
@@ -3403,6 +3975,7 @@ class JobService:
                 artist_raw=req.artist_override,
                 title_raw=req.title_override,
                 album_hint=req.album_override,
+                track_number_hint=req.track_number_override,
                 query_or_url=req.query_or_url,
                 playcount=0,
                 bitrate_kbps=req.bitrate_kbps,
@@ -3430,6 +4003,7 @@ class JobService:
         artist_raw: str,
         title_raw: str,
         album_hint: str,
+        track_number_hint: int = 0,
         query_or_url: str,
         playcount: int,
         bitrate_kbps: int,
@@ -3478,9 +4052,11 @@ class JobService:
             title=clean_title,
             fallback_album=album_hint or "Singles",
             fallback_thumb_url=thumb_url,
+            fallback_track_number=track_number_hint,
         )
         raw_album = album_hint or mb_meta.album or "Singles"
         final_album = self.repo.resolve_album_alias(album_artist, raw_album, clean_title)
+        final_track_num = track_number_hint if track_number_hint > 0 else mb_meta.track_number
 
         dest_dir = (
             PATHS.downloads_dir
@@ -3488,7 +4064,8 @@ class JobService:
             / sanitize_filename(final_album, "Singles")
         )
         dest_dir.mkdir(parents=True, exist_ok=True)
-        base_filename = f"{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
+        num_prefix = f"{final_track_num:02d} - " if final_track_num > 0 else ""
+        base_filename = f"{num_prefix}{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
         final_mp3_path = dest_dir / f"{base_filename}.mp3"
         final_lrc_path = dest_dir / f"{base_filename}.lrc"
 
@@ -3512,6 +4089,7 @@ class JobService:
             artists=artists_list,
             album_artist=album_artist,
             album=final_album,
+            track_number=final_track_num,
             release_year=mb_meta.release_year,
             original_year=mb_meta.original_year,
             lastfm_playcount=playcount,
@@ -3530,6 +4108,7 @@ class JobService:
             artists=artists_list,
             album_artist=album_artist,
             album=final_album,
+            track_number=final_track_num,
             release_year=mb_meta.release_year,
             original_year=mb_meta.original_year,
             duration=duration or approx_duration,
@@ -3556,7 +4135,7 @@ job_service = JobService()
 
 ### File: `src/musiclinker/api/app.py`
 ```python
-"""FastAPI server delivering HTTP 206 streaming, SSE job events, Album Auto-Filter/Rename, and LLM Curation."""
+"""FastAPI server delivering HTTP 206 streaming, SSE jobs, Layered Hierarchy, Album Downloader, and LLM Curation."""
 
 from __future__ import annotations
 
@@ -3576,6 +4155,7 @@ from musiclinker.core.paths import PATHS
 from musiclinker.core.security import build_pairing_url, detect_lan_ip, verify_request_access
 from musiclinker.domain.models import (
     AlbumBulkRenamePayload,
+    AlbumDownloadRequest,
     BatchScrobblePayload,
     DirectDownloadRequest,
     ExtractionJobRequest,
@@ -3618,7 +4198,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="2.1.0",
+        version="3.0.0",
         lifespan=lifespan,
     )
 
@@ -3630,12 +4210,21 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ---- Library, Album Filtering & Internal Renaming Endpoints ----
+    # ---- Library, Sorting, Layered Hierarchy & Album Endpoints ----
 
     @app.get("/api/tracks", dependencies=[Depends(require_paired_client)])
-    async def list_tracks(search: str = "", artist: str = "", album: str = "") -> dict[str, Any]:
-        tracks = db_repo.list_tracks(search=search, artist=artist, album=album)
+    async def list_tracks(
+        search: str = "",
+        artist: str = "",
+        album: str = "",
+        sort_by: str = "track_num",
+    ) -> dict[str, Any]:
+        tracks = db_repo.list_tracks(search=search, artist=artist, album=album, sort_by=sort_by)
         return {"tracks": [t.to_dict() for t in tracks], "total": len(tracks)}
+
+    @app.get("/api/artists", dependencies=[Depends(require_paired_client)])
+    async def list_artists() -> dict[str, Any]:
+        return {"artists": db_repo.list_artists_summary()}
 
     @app.get("/api/albums", dependencies=[Depends(require_paired_client)])
     async def list_albums() -> dict[str, Any]:
@@ -3643,6 +4232,14 @@ def create_app() -> FastAPI:
             "albums": db_repo.list_albums_summary(),
             "aliases": db_repo.list_album_aliases(),
         }
+
+    @app.get("/api/albums/lookup", dependencies=[Depends(require_paired_client)])
+    async def lookup_external_album(
+        artist: str = Query(default=""),
+        album: str = Query(..., min_length=1),
+    ) -> dict[str, Any]:
+        """Resolve an album's tracklist (`1..N`) from MusicBrainz, Last.fm, or YouTube prior to downloading."""
+        return library_service.lookup_external_album_tracklist(artist=artist, album_or_url=album)
 
     @app.post("/api/albums/rename", dependencies=[Depends(require_paired_client)])
     async def rename_album_endpoint(payload: AlbumBulkRenamePayload) -> dict[str, Any]:
@@ -3790,7 +4387,7 @@ def create_app() -> FastAPI:
         resolved = library_service.resolve_next_transition(track_id)
         return {"transition": resolved}
 
-    # ---- YouTube Search & Background Extraction Jobs ----
+    # ---- YouTube Search, Last.fm Extraction & Full Album Download Jobs ----
 
     @app.get("/api/youtube/search", dependencies=[Depends(require_paired_client)])
     async def search_youtube(q: str = Query(..., min_length=2)) -> dict[str, Any]:
@@ -3805,6 +4402,11 @@ def create_app() -> FastAPI:
     @app.post("/api/jobs/download", dependencies=[Depends(require_paired_client)])
     async def start_direct_download(req: DirectDownloadRequest) -> dict[str, Any]:
         job = job_service.start_direct_download_job(req)
+        return job.to_dict()
+
+    @app.post("/api/jobs/download-album", dependencies=[Depends(require_paired_client)])
+    async def start_album_download(req: AlbumDownloadRequest) -> dict[str, Any]:
+        job = job_service.start_album_download_job(req)
         return job.to_dict()
 
     @app.get("/api/jobs", dependencies=[Depends(require_paired_client)])
@@ -3840,7 +4442,7 @@ def create_app() -> FastAPI:
 
         return StreamingResponse(_event_generator(), media_type="text/event-stream")
 
-    # ---- Phone LAN Pairing & Settings Endpoints ----
+    # ---- Phone / APK LAN Pairing & Settings Endpoints ----
 
     @app.get("/api/sync/info", dependencies=[Depends(require_paired_client)])
     async def get_sync_info(request: Request) -> dict[str, Any]:
@@ -3851,6 +4453,7 @@ def create_app() -> FastAPI:
         return {
             "lan_ip": detect_lan_ip(),
             "port": port,
+            "server_origin": f"http://{detect_lan_ip()}:{port}",
             "pairing_url": pairing_url,
             "pair_token": token,
             "pending_scrobbles": len(db_repo.get_pending_scrobbles(limit=500)),
@@ -3906,7 +4509,7 @@ def create_app() -> FastAPI:
         )
         return session_info
 
-    # ---- PWA Static Files & Root Entrypoint ----
+    # ---- PWA / APK Static Files & Root Entrypoint ----
 
     if (PATHS.web_dir / "js").exists():
         app.mount("/js", StaticFiles(directory=str(PATHS.web_dir / "js")), name="js")
@@ -4043,6 +4646,7 @@ class DesktopAppController:
                 pystray.MenuItem("Play / Pause", lambda: self._eval_js("window.MusicLinkerApp?.togglePlay()")),
                 pystray.MenuItem("Next Track", lambda: self._eval_js("window.MusicLinkerApp?.nextTrack()")),
                 pystray.MenuItem("Previous Track", lambda: self._eval_js("window.MusicLinkerApp?.prevTrack()")),
+                pystray.MenuItem("Toggle Randomizer", lambda: self._eval_js("window.MusicLinkerApp?.toggleShuffle()")),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Open in Default Browser", lambda: webbrowser.open(self.local_url)),
                 pystray.MenuItem("Quit MusicLinker", self._quit_app),
@@ -4084,11 +4688,11 @@ class DesktopAppController:
             import webview
 
             self.window = webview.create_window(
-                title="MusicLinker Studio v2.1",
+                title="MusicLinker Studio v3.0",
                 url=self.local_url,
-                width=1340,
-                height=860,
-                min_size=(960, 640),
+                width=1380,
+                height=880,
+                min_size=(980, 660),
                 background_color="#09090b",
                 text_select=False,
             )
@@ -4128,7 +4732,7 @@ if __name__ == "__main__":
 
 ### File: `src/musiclinker/entrypoints/cli.py`
 ```python
-"""Interactive CLI Wizard and scriptable headless runner for Last.fm extraction and LLM curation."""
+"""Interactive CLI Wizard and scriptable headless runner for Last.fm extraction and Full Album downloading."""
 
 from __future__ import annotations
 
@@ -4136,14 +4740,14 @@ import argparse
 import sys
 import time
 
-from musiclinker.domain.models import ExtractionJobRequest, JobStatus
+from musiclinker.domain.models import AlbumDownloadRequest, ExtractionJobRequest, JobStatus
 from musiclinker.infrastructure.db import db_repo
 from musiclinker.services.job_service import job_service
 
 
 def run_interactive_wizard() -> ExtractionJobRequest:
     cfg = db_repo.get_settings()
-    print("=== MusicLinker v2.1 Interactive CLI Wizard ===")
+    print("=== MusicLinker v3.0 Interactive CLI Wizard ===")
     default_user = cfg.get("lastfm_username") or ""
     username = input(f"Last.fm Username [{default_user}]: ").strip() or default_user
     if not username:
@@ -4185,19 +4789,30 @@ def run_interactive_wizard() -> ExtractionJobRequest:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="MusicLinker Headless CLI & Interactive Wizard")
+    parser = argparse.ArgumentParser(description="MusicLinker Headless CLI & Album Downloader")
     parser.add_argument("--username", type=str, help="Last.fm username")
     parser.add_argument("--period", type=str, default="12month", help="Last.fm period or 'custom_year'")
     parser.add_argument("--year", type=int, default=None, help="Calendar year when --period custom_year")
     parser.add_argument("--min-plays", type=int, default=10, help="Minimum play count filter (default: 10)")
     parser.add_argument("--cap", type=int, default=25, help="Maximum tracks to download (default: 25)")
     parser.add_argument("--bitrate", type=int, default=320, choices=[192, 320], help="Target MP3 bitrate")
-    parser.add_argument("--llm-filter", action="store_true", help="Enable LLM deduplication & album fixing before download")
+    parser.add_argument("--llm-filter", action="store_true", help="Enable LLM deduplication & album fixing")
     parser.add_argument("--download", action="store_true", help="Enable MP3 downloading in non-interactive mode")
+    parser.add_argument("--artist", type=str, help="Artist name for full album download mode")
+    parser.add_argument("--album", type=str, help="Album title or playlist URL for full album download mode")
     args = parser.parse_args()
 
-    if not args.username:
+    if args.album:
+        job = job_service.start_album_download_job(
+            AlbumDownloadRequest(
+                artist=args.artist or "Unknown Artist",
+                album=args.album,
+                bitrate_kbps=args.bitrate,
+            )
+        )
+    elif not args.username:
         req = run_interactive_wizard()
+        job = job_service.start_lastfm_extraction_job(req)
     else:
         req = ExtractionJobRequest(
             username=args.username,
@@ -4209,8 +4824,8 @@ def main() -> None:
             download_enabled=args.download,
             use_llm_filter=args.llm_filter,
         )
+        job = job_service.start_lastfm_extraction_job(req)
 
-    job = job_service.start_lastfm_extraction_job(req)
     seen_logs = 0
     while job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
         current_logs = job.logs
@@ -4224,8 +4839,6 @@ def main() -> None:
 
     if job.status == JobStatus.COMPLETED:
         print(f"\nSuccess! Downloaded {job.downloaded_count} track(s).")
-        if job.excess_saved_path:
-            print(f"Excess track list saved to: {job.excess_saved_path}")
     else:
         print(f"\nJob finished with status: {job.status.value}")
         sys.exit(1)
@@ -4265,6 +4878,7 @@ def render_dashboard() -> None:
             tracks,
             column_order=[
                 "id",
+                "track_number",
                 "artist_display",
                 "title",
                 "album",
@@ -4312,9 +4926,9 @@ if __name__ == "__main__":
 ### File: `src/musiclinker/web/manifest.json`
 ```json
 {
-  "name": "MusicLinker Studio Player",
+  "name": "MusicLinker Studio & APK Player",
   "short_name": "MusicLinker",
-  "description": "Offline-first personal music player with 3-tier synced/rough karaoke lyrics, AI metadata curator, Car Mode, and Last.fm scrobbling.",
+  "description": "Offline-first personal music player with 3-Layer Selection, Play by Album, Randomizer, Album Downloader, and AI Curator.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#09090b",
@@ -4460,8 +5074,8 @@ input[type="range"].ml-slider:hover::-moz-range-thumb {
 
 ### File: `src/musiclinker/web/sw.js`
 ```javascript
-const STATIC_CACHE = "musiclinker-static-v2.1";
-const AUDIO_CACHE = "musiclinker-audio-v2.1";
+const STATIC_CACHE = "musiclinker-static-v3.0";
+const AUDIO_CACHE = "musiclinker-audio-v3.0";
 
 const APP_SHELL = [
   "/",
@@ -4546,20 +5160,74 @@ self.addEventListener("fetch", (event) => {
 ### File: `src/musiclinker/web/js/api.js`
 ```javascript
 /**
- * Authenticated API client and SSE job stream subscriber.
+ * APK-aware API client supporting dynamic PC Server Origin (`http://<LAN_IP>:8000`) and pairing tokens.
  */
 class MusicLinkerAPI {
   constructor() {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get("pair_token");
+    const urlServer = params.get("server");
     if (urlToken) {
       localStorage.setItem("ml_pair_token", urlToken);
+    }
+    if (urlServer) {
+      this.setServerOrigin(urlServer);
+    }
+    if (urlToken || urlServer) {
       window.history.replaceState({}, document.title, "/");
     }
   }
 
   getPairToken() {
     return localStorage.getItem("ml_pair_token") || "";
+  }
+
+  setPairToken(token) {
+    if (token) {
+      localStorage.setItem("ml_pair_token", token.trim());
+    }
+  }
+
+  /**
+   * Returns the configured remote PC server origin when running inside the Capacitor Android APK,
+   * or "" (relative current origin) when running directly on the PC or LAN browser.
+   */
+  getServerOrigin() {
+    const saved = (localStorage.getItem("ml_server_origin") || "").trim().replace(/\/+$/, "");
+    if (saved) return saved;
+    const proto = window.location.protocol;
+    const host = window.location.hostname;
+    // Inside Capacitor APK, protocol is capacitor: or hostname is localhost without port 8000
+    if (proto === "capacitor:" || proto === "file:") {
+      return "";
+    }
+    return "";
+  }
+
+  setServerOrigin(originUrl) {
+    if (!originUrl) {
+      localStorage.removeItem("ml_server_origin");
+      return;
+    }
+    try {
+      const parsed = new URL(originUrl.trim());
+      const tokenParam = parsed.searchParams.get("pair_token");
+      if (tokenParam) {
+        this.setPairToken(tokenParam);
+      }
+      localStorage.setItem("ml_server_origin", `${parsed.protocol}//${parsed.host}`);
+    } catch (_err) {
+      localStorage.setItem("ml_server_origin", originUrl.trim().replace(/\/+$/, ""));
+    }
+  }
+
+  resolveUrl(path) {
+    if (!path) return "";
+    if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("blob:")) {
+      return path;
+    }
+    const base = this.getServerOrigin();
+    return `${base}${path.startsWith("/") ? path : `/${path}`}`;
   }
 
   async request(path, options = {}) {
@@ -4572,10 +5240,10 @@ class MusicLinkerAPI {
       headers.set("Content-Type", "application/json");
     }
 
-    const resp = await fetch(path, {
+    const fullUrl = this.resolveUrl(path);
+    const resp = await fetch(fullUrl, {
       ...options,
       headers,
-      credentials: "same-origin",
     });
     if (!resp.ok) {
       const errBody = await resp.json().catch(() => ({}));
@@ -4586,7 +5254,7 @@ class MusicLinkerAPI {
 
   subscribeJobEvents(jobId, onUpdate) {
     const token = encodeURIComponent(this.getPairToken());
-    const url = `/api/jobs/${jobId}/events${token ? `?pair_token=${token}` : ""}`;
+    const url = this.resolveUrl(`/api/jobs/${jobId}/events${token ? `?pair_token=${token}` : ""}`);
     const source = new EventSource(url);
     source.onmessage = (evt) => {
       try {
@@ -4610,11 +5278,14 @@ export const api = new MusicLinkerAPI();
 ### File: `src/musiclinker/web/js/offline-store.js`
 ```javascript
 /**
- * IndexedDB + Cache API offline storage manager for Android PWA caching and offline scrobble outbox.
+ * IndexedDB + Cache API offline storage manager for Android APK / PWA:
+ *  - Caches single tracks or entire albums for 100% offline playback
+ *  - Serves direct Blob URLs when offline inside the native Android APK
+ *  - Queues offline scrobbles in IndexedDB and flushes them in batch when reconnected
  */
 const DB_NAME = "musiclinker_pwa_db";
 const DB_VERSION = 1;
-const AUDIO_CACHE_NAME = "musiclinker-audio-v2.1";
+const AUDIO_CACHE_NAME = "musiclinker-audio-v3.0";
 
 class OfflineStore {
   constructor() {
@@ -4638,36 +5309,79 @@ class OfflineStore {
     });
   }
 
-  async saveTrackForOffline(track, pairToken = "") {
-    const fileUrl = `/api/tracks/${track.id}/file`;
-    const headers = pairToken ? { "X-Pair-Token": pairToken } : {};
-    const response = await fetch(fileUrl, { headers });
+  canonicalCacheKey(trackId) {
+    return `/api/tracks/${trackId}/file`;
+  }
+
+  async saveTrackForOffline(track, apiClient) {
+    const canonicalKey = this.canonicalCacheKey(track.id);
+    const fetchUrl = apiClient.resolveUrl(canonicalKey);
+    const token = apiClient.getPairToken();
+    const headers = token ? { "X-Pair-Token": token } : {};
+
+    const response = await fetch(fetchUrl, { headers });
     if (!response.ok) {
       throw new Error(`Failed to fetch audio blob (${response.status})`);
     }
     const cache = await caches.open(AUDIO_CACHE_NAME);
-    await cache.put(fileUrl, response.clone());
+    await cache.put(canonicalKey, response.clone());
 
-    if (track.cover_url) {
-      fetch(track.cover_url).catch(() => {});
-    }
+    // Cache lyrics JSON inside track record so lyrics work 100% offline in the APK
+    let offlineLyrics = null;
     if (track.lyrics_url) {
-      fetch(track.lyrics_url, { headers }).catch(() => {});
+      try {
+        offlineLyrics = await apiClient.request(track.lyrics_url);
+      } catch (_err) {}
     }
 
     const db = await this.dbPromise;
     await new Promise((resolve, reject) => {
       const tx = db.transaction("offline_tracks", "readwrite");
-      tx.objectStore("offline_tracks").put({ ...track, saved_offline_at: Date.now() });
+      tx.objectStore("offline_tracks").put({
+        ...track,
+        offline_lyrics: offlineLyrics,
+        saved_offline_at: Date.now(),
+      });
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
   }
 
+  async saveBatchTracksForOffline(tracks, apiClient, onProgress) {
+    let saved = 0;
+    for (let i = 0; i < tracks.length; i++) {
+      await this.saveTrackForOffline(tracks[i], apiClient);
+      saved++;
+      onProgress?.(saved, tracks.length, tracks[i]);
+    }
+    return saved;
+  }
+
+  async getOfflineAudioBlobUrl(trackId) {
+    try {
+      const cache = await caches.open(AUDIO_CACHE_NAME);
+      const match = await cache.match(this.canonicalCacheKey(trackId));
+      if (!match) return null;
+      const blob = await match.blob();
+      return URL.createObjectURL(blob);
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async getOfflineTrackRecord(trackId) {
+    const db = await this.dbPromise;
+    return new Promise((resolve) => {
+      const tx = db.transaction("offline_tracks", "readonly");
+      const req = tx.objectStore("offline_tracks").get(Number(trackId));
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
   async removeOfflineTrack(trackId) {
-    const fileUrl = `/api/tracks/${trackId}/file`;
     const cache = await caches.open(AUDIO_CACHE_NAME);
-    await cache.delete(fileUrl);
+    await cache.delete(this.canonicalCacheKey(trackId));
 
     const db = await this.dbPromise;
     await new Promise((resolve, reject) => {
@@ -4737,8 +5451,10 @@ export const offlineStore = new OfflineStore();
 ### File: `src/musiclinker/web/js/audio-engine.js`
 ```javascript
 /**
- * HTML5 Audio + ReplayGain Volume Normalization + Official 50% / 4-Minute Scrobble Tracker + MediaSession Bridge.
+ * HTML5 Audio + APK Offline Blob Playback + ReplayGain Volume Normalization + Scrobble Tracker + MediaSession Bridge.
  */
+import { offlineStore } from "./offline-store.js";
+
 export class AudioEngine {
   constructor({ onTimeUpdate, onTrackEnded, onScrobbleDue, onNowPlaying, onStateChange }) {
     this.audio = new Audio();
@@ -4752,6 +5468,7 @@ export class AudioEngine {
     this.onStateChange = onStateChange;
 
     this.currentTrack = null;
+    this.currentBlobUrl = null;
     this.normalizeEnabled = true;
     this.baseVolume = 0.85;
     this.scrobbledCurrentTrack = false;
@@ -4822,21 +5539,37 @@ export class AudioEngine {
     this.audio.volume = targetVolume;
   }
 
-  async loadAndPlay(track, pairToken = "") {
+  async loadAndPlay(track, apiClient) {
     this.currentTrack = track;
     this.scrobbledCurrentTrack = false;
     this.accumulatedPlaySeconds = 0;
     this.lastTickTimestamp = null;
 
-    this.applyReplayGain(track);
-    const sep = track.stream_url.includes("?") ? "&" : "?";
-    const srcUrl = pairToken
-      ? `${track.stream_url}${sep}pair_token=${encodeURIComponent(pairToken)}`
-      : track.stream_url;
+    if (this.currentBlobUrl) {
+      URL.revokeObjectURL(this.currentBlobUrl);
+      this.currentBlobUrl = null;
+    }
 
-    this.audio.src = srcUrl;
+    this.applyReplayGain(track);
+
+    // 1. Check if track is cached locally in CacheStorage (instant 100% offline playback on Android APK)
+    const offlineBlobUrl = await offlineStore.getOfflineAudioBlobUrl(track.id);
+    if (offlineBlobUrl) {
+      this.currentBlobUrl = offlineBlobUrl;
+      this.audio.removeAttribute("crossorigin");
+      this.audio.src = offlineBlobUrl;
+    } else {
+      this.audio.crossOrigin = "anonymous";
+      const baseStreamUrl = apiClient.resolveUrl(track.stream_url);
+      const pairToken = apiClient.getPairToken();
+      const sep = baseStreamUrl.includes("?") ? "&" : "?";
+      this.audio.src = pairToken
+        ? `${baseStreamUrl}${sep}pair_token=${encodeURIComponent(pairToken)}`
+        : baseStreamUrl;
+    }
+
     await this.audio.play();
-    this._setupMediaSession(track);
+    this._setupMediaSession(track, apiClient);
     this.onNowPlaying?.(track);
   }
 
@@ -4863,15 +5596,14 @@ export class AudioEngine {
     }
   }
 
-  _setupMediaSession(track) {
+  _setupMediaSession(track, apiClient) {
     if (!("mediaSession" in navigator)) return;
+    const coverSrc = track.cover_url ? apiClient.resolveUrl(track.cover_url) : "/icon.svg";
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title,
       artist: track.artist_display,
       album: track.album || "MusicLinker",
-      artwork: track.cover_url
-        ? [{ src: track.cover_url, sizes: "512x512", type: "image/jpeg" }]
-        : [{ src: "/icon.svg", sizes: "256x256", type: "image/svg+xml" }],
+      artwork: [{ src: coverSrc, sizes: "512x512", type: "image/jpeg" }],
     });
   }
 
@@ -4895,12 +5627,14 @@ export class AudioEngine {
 ### File: `src/musiclinker/web/js/app.js`
 ```javascript
 /**
- * Main UI controller for MusicLinker Studio v2.1:
- *  - Isolated #lyrics-container scroll math (never calls scrollIntoView, never hijacks download/page scroll)
- *  - 3-Tier Synced & Rough Lyrics Position Indicator + ±0.5s offset controls
- *  - Album Filter Pill Bar + Bulk Album Rename + Inline Track Metadata Editor
- *  - LLM Smart Curator & Deduplicator (via API Link / Proxy)
- *  - Custom Slider CSS (--progress) updater
+ * Main UI controller for MusicLinker Studio & Android APK v3.0:
+ *  - Play by Album (1..N track_number order), Randomizer (Shuffle), and Sort by Track # / Alphabetical / Plays
+ *  - 3-Layer Selection Mode:
+ *      Layer 1 (Artists): starts 100% unselected
+ *      Layer 2 (Albums, optional): starts 100% unselected (if 0 selected, all albums for selected artists pass through)
+ *      Layer 3 (Tracks): starts 100% SELECTED for all matching tracks
+ *  - Full Album Downloader (MusicBrainz / Last.fm / YouTube playlist lookup + batch download) & Offline Album Caching
+ *  - Isolated #lyrics-container scroll math + 3-Tier Synced/Rough Lyrics
  */
 import { api } from "./api.js";
 import { offlineStore } from "./offline-store.js";
@@ -4908,11 +5642,27 @@ import { AudioEngine } from "./audio-engine.js";
 
 class MusicLinkerController {
   constructor() {
+    this.allTracks = [];
     this.tracks = [];
+    this.playQueue = [];
     this.albums = [];
     this.selectedAlbum = "";
+    this.sortBy = "track_num";
+    this.shuffleEnabled = false;
     this.offlineIds = new Set();
     this.currentIndex = -1;
+
+    // 3-Layer Selection Mode State
+    // Layer 1 (Artists): starts 100% UNSELECTED
+    // Layer 2 (Albums): starts 100% UNSELECTED
+    // Layer 3 (Tracks): starts 100% SELECTED (we track only explicitly unchecked track IDs)
+    this.viewMode = "standard"; // 'standard' | 'layered'
+    this.layerSelectedArtists = new Set();
+    this.layerSelectedAlbums = new Set();
+    this.layerExcludedTrackIds = new Set();
+
+    // External Album Downloader Preview State
+    this.previewedAlbumTracks = [];
 
     // Lyrics & Non-Hijacking Scroll State
     this.lyricsData = { synced: false, sync_mode: "none", lines: [] };
@@ -4942,7 +5692,7 @@ class MusicLinkerController {
   }
 
   async init() {
-    if ("serviceWorker" in navigator) {
+    if ("serviceWorker" in navigator && window.location.protocol.startsWith("http")) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
     this.bindDOMEvents();
@@ -4972,7 +5722,7 @@ class MusicLinkerController {
     });
   }
 
-  // ---- Library & Album Auto-Filtering ----
+  // ---- Library, Sorting & Play by Album ----
 
   async refreshOfflineState() {
     const cached = await offlineStore.getOfflineTracks();
@@ -4983,19 +5733,27 @@ class MusicLinkerController {
     try {
       const data = await api.request("/api/albums");
       this.albums = data.albums || [];
-      this.renderAlbumFilterBar();
     } catch (_err) {
-      this.albums = [];
+      const cached = await offlineStore.getOfflineTracks();
+      const map = new Map();
+      cached.forEach((t) => {
+        const key = t.album || "Singles";
+        const cur = map.get(key) || { album: key, album_artist: t.album_artist || t.artist_display, track_count: 0 };
+        cur.track_count++;
+        map.set(key, cur);
+      });
+      this.albums = Array.from(map.values());
     }
+    this.renderAlbumFilterBar();
   }
 
   renderAlbumFilterBar() {
     const bar = document.getElementById("album-filter-bar");
-    const renameBtn = document.getElementById("btn-rename-selected-album");
+    const albumActions = document.getElementById("selected-album-actions");
     if (!bar) return;
 
-    if (renameBtn) {
-      renameBtn.classList.toggle("hidden", !this.selectedAlbum);
+    if (albumActions) {
+      albumActions.classList.toggle("hidden", !this.selectedAlbum);
     }
 
     const allActive = !this.selectedAlbum;
@@ -5041,23 +5799,67 @@ class MusicLinkerController {
     });
   }
 
+  sortTracksClientSide(list, sortMode) {
+    const copy = [...list];
+    if (sortMode === "track_num") {
+      copy.sort((a, b) => {
+        const albCmp = (a.album || "").localeCompare(b.album || "", undefined, { sensitivity: "base" });
+        if (albCmp !== 0) return albCmp;
+        const tnA = a.track_number > 0 ? a.track_number : 9999;
+        const tnB = b.track_number > 0 ? b.track_number : 9999;
+        if (tnA !== tnB) return tnA - tnB;
+        return (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" });
+      });
+    } else if (sortMode === "alpha_asc") {
+      copy.sort((a, b) => (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" }));
+    } else if (sortMode === "alpha_desc") {
+      copy.sort((a, b) => (b.title || "").localeCompare(a.title || "", undefined, { sensitivity: "base" }));
+    } else if (sortMode === "plays_desc") {
+      copy.sort((a, b) => (b.lastfm_playcount + b.local_playcount) - (a.lastfm_playcount + a.local_playcount));
+    } else if (sortMode === "recent") {
+      copy.sort((a, b) => (b.added_at || 0) - (a.added_at || 0));
+    }
+    return copy;
+  }
+
   async loadLibrary(search = "") {
     try {
+      const allRes = await api.request(`/api/tracks?sort_by=${encodeURIComponent(this.sortBy)}`);
+      this.allTracks = allRes.tracks || [];
       const qs = new URLSearchParams({
         search,
         album: this.selectedAlbum,
+        sort_by: this.sortBy,
       });
       const data = await api.request(`/api/tracks?${qs.toString()}`);
       this.tracks = data.tracks || [];
     } catch (_err) {
       const cached = await offlineStore.getOfflineTracks();
-      this.tracks = this.selectedAlbum
-        ? cached.filter((t) => (t.album || "").toLowerCase() === this.selectedAlbum.toLowerCase())
-        : cached;
+      this.allTracks = this.sortTracksClientSide(cached, this.sortBy);
+      let filtered = this.allTracks;
+      if (this.selectedAlbum) {
+        filtered = filtered.filter((t) => (t.album || "").toLowerCase() === this.selectedAlbum.toLowerCase());
+      }
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        filtered = filtered.filter(
+          (t) =>
+            (t.title || "").toLowerCase().includes(q) ||
+            (t.artist_display || "").toLowerCase().includes(q) ||
+            (t.album || "").toLowerCase().includes(q)
+        );
+      }
+      this.tracks = filtered;
     }
+
+    if (!this.playQueue.length) {
+      this.playQueue = [...this.tracks];
+    }
+
     const countBadge = document.getElementById("library-count-badge");
     if (countBadge) countBadge.textContent = `${this.tracks.length} tracks`;
     this.renderTrackList();
+    this.renderLayeredSelector();
   }
 
   renderTrackList() {
@@ -5068,16 +5870,20 @@ class MusicLinkerController {
         <div class="p-10 text-center text-zinc-400 space-y-2">
           <div class="text-2xl">🎵</div>
           <div class="text-sm">No tracks match the current filter.</div>
-          <div class="text-xs text-zinc-500">Use the <b>Extractor</b> tab to pull your top Last.fm tracks or clear the album filter.</div>
+          <div class="text-xs text-zinc-500">Use the <b>Extractor & Album Downloader</b> tab to pull tracks or full studio albums.</div>
         </div>`;
       return;
     }
 
+    const activeTrackId = this.playQueue[this.currentIndex]?.id;
+
     container.innerHTML = this.tracks
       .map((t, idx) => {
         const isOffline = this.offlineIds.has(t.id);
-        const isCurrent = idx === this.currentIndex;
+        const isCurrent = t.id === activeTrackId;
         const yearBadge = t.original_year || t.release_year || "";
+        const numBadge = t.track_number > 0 ? `#${String(t.track_number).padStart(2, "0")}` : "";
+        const coverSrc = t.cover_url ? api.resolveUrl(t.cover_url) : "";
         const syncIcon =
           t.lyric_sync_mode === "exact_lrc"
             ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30" title="Exact LRCLIB Synced Lyrics">LRC</span>`
@@ -5094,13 +5900,14 @@ class MusicLinkerController {
             <div class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer" data-play-idx="${idx}">
               <div class="w-11 h-11 rounded-lg bg-zinc-800 flex items-center justify-center overflow-hidden shrink-0 border border-zinc-700/50">
                 ${
-                  t.cover_url
-                    ? `<img src="${t.cover_url}" class="w-full h-full object-cover" alt="cover"/>`
+                  coverSrc
+                    ? `<img src="${coverSrc}" class="w-full h-full object-cover" alt="cover"/>`
                     : `<span class="text-emerald-400 font-bold">♪</span>`
                 }
               </div>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
+                  ${numBadge ? `<span class="text-[11px] font-mono text-emerald-400 font-semibold">${numBadge}</span>` : ""}
                   <span class="font-semibold text-sm text-zinc-100 truncate">${this.escape(t.title)}</span>
                   ${syncIcon}
                 </div>
@@ -5112,11 +5919,11 @@ class MusicLinkerController {
                 </div>
               </div>
             </div>
-            <div class="flex items-center gap-2 shrink-0 ml-2">
+            <div class="flex items-center gap-1.5 shrink-0 ml-2">
               <span class="text-[11px] text-zinc-500 hidden md:inline font-mono">${t.lastfm_playcount || 0}p</span>
               <button
                 data-edit-idx="${idx}"
-                title="Rename Track or Album Internally (Updates SQLite & MP3 ID3 Tags)"
+                title="Rename Track, Track #, or Album Internally"
                 class="px-2 py-1 rounded-lg text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700/60 border border-transparent hover:border-zinc-600 transition">
                 ✎
               </button>
@@ -5146,6 +5953,7 @@ class MusicLinkerController {
           this.loadLibrary(document.getElementById("search-input")?.value || "");
           return;
         }
+        this.playQueue = [...this.tracks];
         this.playByIndex(Number(el.dataset.playIdx));
       });
     });
@@ -5167,6 +5975,433 @@ class MusicLinkerController {
     });
   }
 
+  // ---- Play by Album, Randomizer (Shuffle), and Offline Album Caching ----
+
+  async playSelectedAlbumInOrder() {
+    if (!this.selectedAlbum) return;
+    const albumTracks = this.sortTracksClientSide(
+      this.allTracks.filter((t) => (t.album || "").toLowerCase() === this.selectedAlbum.toLowerCase()),
+      "track_num"
+    );
+    if (!albumTracks.length) return;
+    this.shuffleEnabled = false;
+    this.updateShuffleButtonUI();
+    this.playQueue = albumTracks;
+    await this.playByIndex(0);
+  }
+
+  async cacheSelectedAlbumOffline() {
+    if (!this.selectedAlbum) return;
+    const albumTracks = this.allTracks.filter(
+      (t) => (t.album || "").toLowerCase() === this.selectedAlbum.toLowerCase()
+    );
+    if (!albumTracks.length) return;
+    const btn = document.getElementById("btn-cache-selected-album");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = `Caching 0/${albumTracks.length}...`;
+    }
+    try {
+      await offlineStore.saveBatchTracksForOffline(albumTracks, api, (done, total) => {
+        if (btn) btn.textContent = `Caching ${done}/${total}...`;
+      });
+      await this.refreshOfflineState();
+      this.renderTrackList();
+      if (btn) btn.textContent = "✓ Album Cached Offline";
+    } catch (err) {
+      alert(`Failed caching album offline: ${err.message}`);
+      if (btn) btn.textContent = "↓ Cache Album Offline";
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  toggleShuffle() {
+    this.shuffleEnabled = !this.shuffleEnabled;
+    this.updateShuffleButtonUI();
+  }
+
+  randomizeAndPlayCurrentView() {
+    const pool = this.viewMode === "layered" ? this.getLayerSelectedTracks() : this.tracks;
+    if (!pool.length) return;
+    const shuffled = [...pool];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    this.shuffleEnabled = true;
+    this.updateShuffleButtonUI();
+    this.playQueue = shuffled;
+    this.playByIndex(0);
+  }
+
+  updateShuffleButtonUI() {
+    const btn = document.getElementById("btn-shuffle");
+    if (!btn) return;
+    btn.className = this.shuffleEnabled
+      ? "px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 text-xs font-semibold transition"
+      : "px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs font-medium transition";
+  }
+
+  // ---- 3-Layer Hierarchical Selection Mode (Artists [Unselected] -> Albums [Unselected] -> Tracks [Selected]) ----
+
+  switchLibraryViewMode(mode) {
+    this.viewMode = mode;
+    const stdPanel = document.getElementById("standard-library-view");
+    const layerPanel = document.getElementById("layered-selector-view");
+    const btnStd = document.getElementById("btn-view-standard");
+    const btnLayer = document.getElementById("btn-view-layered");
+
+    const isLayered = mode === "layered";
+    if (stdPanel) stdPanel.classList.toggle("hidden", isLayered);
+    if (layerPanel) layerPanel.classList.toggle("hidden", !isLayered);
+
+    if (btnStd) {
+      btnStd.className = !isLayered
+        ? "px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950"
+        : "px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200";
+    }
+    if (btnLayer) {
+      btnLayer.className = isLayered
+        ? "px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950"
+        : "px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200";
+    }
+    if (isLayered) {
+      this.renderLayeredSelector();
+    }
+  }
+
+  /**
+   * Computes candidate tracks for Layer 3 based on:
+   *  - Layer 1 (`this.layerSelectedArtists`): starts empty (unselected).
+   *  - Layer 2 (`this.layerSelectedAlbums`): starts empty (unselected).
+   *    If 0 albums are selected in Layer 2, ALL albums by the selected artists pass through!
+   *    If >=1 albums are selected in Layer 2, only those albums pass through.
+   *  - Layer 3 (`tracks`): ALL matching tracks are SELECTED by default unless in `this.layerExcludedTrackIds`.
+   */
+  getLayerCandidateTracks() {
+    if (this.layerSelectedArtists.size === 0) {
+      return [];
+    }
+    let pool = this.allTracks.filter((t) =>
+      this.layerSelectedArtists.has((t.album_artist || t.artist_display || "").toLowerCase())
+    );
+    if (this.layerSelectedAlbums.size > 0) {
+      pool = pool.filter((t) => this.layerSelectedAlbums.has((t.album || "").toLowerCase()));
+    }
+    return this.sortTracksClientSide(pool, this.sortBy);
+  }
+
+  getLayerSelectedTracks() {
+    return this.getLayerCandidateTracks().filter((t) => !this.layerExcludedTrackIds.has(t.id));
+  }
+
+  renderLayeredSelector() {
+    const artistsBox = document.getElementById("layer-1-artists");
+    const albumsBox = document.getElementById("layer-2-albums");
+    const tracksBox = document.getElementById("layer-3-tracks");
+    const summaryEl = document.getElementById("layer-selection-summary");
+    if (!artistsBox || !albumsBox || !tracksBox) return;
+
+    // Group distinct artists from allTracks
+    const artistMap = new Map();
+    this.allTracks.forEach((t) => {
+      const name = t.album_artist || t.artist_display || "Unknown Artist";
+      const key = name.toLowerCase();
+      const entry = artistMap.get(key) || { name, key, count: 0 };
+      entry.count++;
+      artistMap.set(key, entry);
+    });
+    const artists = Array.from(artistMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Render Layer 1: Artists (Default: ALL UNSELECTED)
+    artistsBox.innerHTML = artists.length
+      ? artists
+          .map((art) => {
+            const checked = this.layerSelectedArtists.has(art.key);
+            return `
+              <label class="flex items-center justify-between p-2 rounded-xl border text-xs cursor-pointer transition ${
+                checked
+                  ? "bg-emerald-500/15 border-emerald-500/50 text-emerald-200 font-semibold"
+                  : "bg-zinc-950/60 border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+              }">
+                <div class="flex items-center gap-2 truncate">
+                  <input type="checkbox" data-layer-artist="${this.escapeAttr(art.key)}" ${checked ? "checked" : ""} class="accent-emerald-500" />
+                  <span class="truncate">${this.escape(art.name)}</span>
+                </div>
+                <span class="text-[10px] font-mono opacity-75">${art.count}</span>
+              </label>
+            `;
+          })
+          .join("")
+      : `<div class="text-xs text-zinc-500 p-3">No artists in library.</div>`;
+
+    // Group albums belonging to selected artists in Layer 1
+    const albumMap = new Map();
+    this.allTracks.forEach((t) => {
+      const artKey = (t.album_artist || t.artist_display || "Unknown Artist").toLowerCase();
+      if (!this.layerSelectedArtists.has(artKey)) return;
+      const albName = t.album || "Singles";
+      const albKey = albName.toLowerCase();
+      const entry = albumMap.get(albKey) || {
+        name: albName,
+        key: albKey,
+        artist: t.album_artist || t.artist_display,
+        count: 0,
+      };
+      entry.count++;
+      albumMap.set(albKey, entry);
+    });
+    const candidateAlbums = Array.from(albumMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Render Layer 2: Albums (Optional Filter — Default: ALL UNSELECTED)
+    if (this.layerSelectedArtists.size === 0) {
+      albumsBox.innerHTML = `<div class="text-xs text-zinc-500 p-3 italic">Select 1 or more artists in Layer 1 first.</div>`;
+    } else {
+      albumsBox.innerHTML = candidateAlbums
+        .map((alb) => {
+          const checked = this.layerSelectedAlbums.has(alb.key);
+          return `
+            <label class="flex items-center justify-between p-2 rounded-xl border text-xs cursor-pointer transition ${
+              checked
+                ? "bg-emerald-500/15 border-emerald-500/50 text-emerald-200 font-semibold"
+                : "bg-zinc-950/60 border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+            }">
+              <div class="flex items-center gap-2 truncate">
+                <input type="checkbox" data-layer-album="${this.escapeAttr(alb.key)}" ${checked ? "checked" : ""} class="accent-emerald-500" />
+                <div class="truncate">
+                  <div class="truncate">${this.escape(alb.name)}</div>
+                  <div class="text-[10px] text-zinc-500 truncate">${this.escape(alb.artist)}</div>
+                </div>
+              </div>
+              <span class="text-[10px] font-mono opacity-75">${alb.count}</span>
+            </label>
+          `;
+        })
+        .join("");
+    }
+
+    // Render Layer 3: Tracks (Default: 100% SELECTED for all matching tracks)
+    const candidateTracks = this.getLayerCandidateTracks();
+    const selectedTracks = candidateTracks.filter((t) => !this.layerExcludedTrackIds.has(t.id));
+
+    if (!candidateTracks.length) {
+      tracksBox.innerHTML = `<div class="text-xs text-zinc-500 p-3 italic">Pick artists in Layer 1 to populate tracks (all matching tracks start 100% selected).</div>`;
+    } else {
+      tracksBox.innerHTML = candidateTracks
+        .map((t) => {
+          const checked = !this.layerExcludedTrackIds.has(t.id);
+          const numBadge = t.track_number > 0 ? `#${String(t.track_number).padStart(2, "0")} ` : "";
+          return `
+            <label class="flex items-center justify-between p-2 rounded-xl border text-xs cursor-pointer transition ${
+              checked
+                ? "bg-emerald-950/40 border-emerald-500/40 text-zinc-100"
+                : "bg-zinc-950/40 border-zinc-800/60 text-zinc-500"
+            }">
+              <div class="flex items-center gap-2 min-w-0">
+                <input type="checkbox" data-layer-track="${t.id}" ${checked ? "checked" : ""} class="accent-emerald-500" />
+                <div class="truncate">
+                  <span class="font-mono text-emerald-400">${numBadge}</span>
+                  <span class="font-medium">${this.escape(t.title)}</span>
+                  <span class="text-zinc-500"> • ${this.escape(t.album)}</span>
+                </div>
+              </div>
+            </label>
+          `;
+        })
+        .join("");
+    }
+
+    if (summaryEl) {
+      summaryEl.textContent = `${this.layerSelectedArtists.size} artist(s) • ${
+        this.layerSelectedAlbums.size === 0 ? "All albums" : `${this.layerSelectedAlbums.size} album(s)`
+      } • ${selectedTracks.length}/${candidateTracks.length} track(s) selected`;
+    }
+
+    // Bind Layer 1, 2, 3 checkbox events
+    artistsBox.querySelectorAll("[data-layer-artist]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const key = cb.dataset.layerArtist;
+        if (cb.checked) {
+          this.layerSelectedArtists.add(key);
+        } else {
+          this.layerSelectedArtists.delete(key);
+        }
+        // Keep Layer 3 tracks 100% selected when changing artist filters
+        this.layerExcludedTrackIds.clear();
+        this.renderLayeredSelector();
+      });
+    });
+
+    albumsBox.querySelectorAll("[data-layer-album]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const key = cb.dataset.layerAlbum;
+        if (cb.checked) {
+          this.layerSelectedAlbums.add(key);
+        } else {
+          this.layerSelectedAlbums.delete(key);
+        }
+        this.layerExcludedTrackIds.clear();
+        this.renderLayeredSelector();
+      });
+    });
+
+    tracksBox.querySelectorAll("[data-layer-track]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const id = Number(cb.dataset.layerTrack);
+        if (cb.checked) {
+          this.layerExcludedTrackIds.delete(id);
+        } else {
+          this.layerExcludedTrackIds.add(id);
+        }
+        this.renderLayeredSelector();
+      });
+    });
+  }
+
+  playLayeredSelectionQueue() {
+    const selected = this.getLayerSelectedTracks();
+    if (!selected.length) {
+      alert("Select at least one artist in Layer 1 first.");
+      return;
+    }
+    this.playQueue = selected;
+    this.playByIndex(0);
+  }
+
+  async cacheLayeredSelectionOffline() {
+    const selected = this.getLayerSelectedTracks();
+    if (!selected.length) {
+      alert("Select at least one artist in Layer 1 first.");
+      return;
+    }
+    const btn = document.getElementById("btn-layer-cache-offline");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = `Caching 0/${selected.length}...`;
+    }
+    try {
+      await offlineStore.saveBatchTracksForOffline(selected, api, (done, total) => {
+        if (btn) btn.textContent = `Caching ${done}/${total}...`;
+      });
+      await this.refreshOfflineState();
+      this.renderTrackList();
+      if (btn) btn.textContent = `✓ Cached ${selected.length} Tracks`;
+    } catch (err) {
+      alert(`Offline cache error: ${err.message}`);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // ---- Full Album Downloader (Preview & Batch Download) ----
+
+  async previewAlbumForDownload() {
+    const artist = document.getElementById("dl-album-artist")?.value.trim() || "";
+    const album = document.getElementById("dl-album-title")?.value.trim() || "";
+    const box = document.getElementById("dl-album-preview-list");
+    if (!album) {
+      alert("Enter an Album name or YouTube Album/Playlist URL.");
+      return;
+    }
+    if (box) box.innerHTML = `<div class="text-xs text-zinc-400 p-2">Looking up official album tracklist...</div>`;
+
+    try {
+      const qs = new URLSearchParams({ artist, album });
+      const res = await api.request(`/api/albums/lookup?${qs.toString()}`);
+      this.previewedAlbumTracks = res.tracks || [];
+      if (!this.previewedAlbumTracks.length) {
+        if (box) box.innerHTML = `<div class="text-xs text-amber-400 p-2">No tracks found. Try entering both Artist and Album name.</div>`;
+        return;
+      }
+      if (box) {
+        box.innerHTML = this.previewedAlbumTracks
+          .map(
+            (tr, idx) => `
+            <label class="flex items-center justify-between p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs">
+              <div class="flex items-center gap-2 truncate">
+                <input type="checkbox" data-dl-album-track="${idx}" checked class="accent-emerald-500" />
+                <span class="font-mono text-emerald-400">#${String(tr.track_number || idx + 1).padStart(2, "0")}</span>
+                <span class="truncate">${this.escape(tr.title)}</span>
+              </div>
+            </label>
+          `
+          )
+          .join("");
+      }
+    } catch (err) {
+      if (box) box.innerHTML = `<div class="text-xs text-rose-400 p-2">Lookup failed: ${this.escape(err.message)}</div>`;
+    }
+  }
+
+  async startAlbumDownloadJob() {
+    const artist = document.getElementById("dl-album-artist")?.value.trim() || "Unknown Artist";
+    const album = document.getElementById("dl-album-title")?.value.trim() || "";
+    const bitrate = Number(document.getElementById("ext-bitrate")?.value || 320);
+    if (!album) {
+      alert("Please enter an Album Title or Playlist URL to download.");
+      return;
+    }
+
+    let selectedTracks = [];
+    const checkboxes = document.querySelectorAll("[data-dl-album-track]:checked");
+    if (checkboxes.length && this.previewedAlbumTracks.length) {
+      selectedTracks = Array.from(checkboxes).map(
+        (cb) => this.previewedAlbumTracks[Number(cb.dataset.dlAlbumTrack)]
+      );
+    }
+
+    const logBox = document.getElementById("job-logs");
+    const banner = document.getElementById("live-job-banner");
+    if (logBox) logBox.textContent = `Starting full album download for '${artist} — ${album}'...`;
+    if (banner) banner.classList.remove("hidden");
+
+    try {
+      const job = await api.request("/api/jobs/download-album", {
+        method: "POST",
+        body: JSON.stringify({
+          artist,
+          album,
+          bitrate_kbps: bitrate,
+          tracks: selectedTracks,
+          skip_existing: true,
+        }),
+      });
+      this.subscribeToJobProgress(job.job_id);
+    } catch (err) {
+      alert(`Album download failed to start: ${err.message}`);
+    }
+  }
+
+  subscribeToJobProgress(jobId) {
+    const logBox = document.getElementById("job-logs");
+    api.subscribeJobEvents(jobId, (state) => {
+      if (logBox) {
+        logBox.textContent = (state.logs || []).join("\n");
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+      const pct = `${state.progress_pct}%`;
+      const bar = document.getElementById("job-progress-bar");
+      const bannerBar = document.getElementById("banner-progress-bar");
+      const bannerStep = document.getElementById("banner-step-text");
+      const bannerLyric = document.getElementById("banner-lyric-status");
+
+      if (bar) bar.style.width = pct;
+      if (bannerBar) bannerBar.style.width = pct;
+      if (bannerStep) {
+        bannerStep.textContent = `${state.current_step} (${state.progress_pct}%)`;
+      }
+      if (bannerLyric) {
+        bannerLyric.textContent = `Lyrics: ${state.lyric_sync_status || "Checking..."}`;
+      }
+
+      if (state.status === "completed") {
+        this.loadAlbums();
+        this.loadLibrary(document.getElementById("search-input")?.value || "");
+      }
+    });
+  }
+
   // ---- Internal Track & Bulk Album Renaming ----
 
   openEditTrackModal(track) {
@@ -5176,6 +6411,7 @@ class MusicLinkerController {
     document.getElementById("edit-track-title").value = track.title || "";
     document.getElementById("edit-track-artist").value = track.artist_display || "";
     document.getElementById("edit-track-album").value = track.album || "";
+    document.getElementById("edit-track-number").value = String(track.track_number || 0);
     document.getElementById("edit-track-year").value = track.original_year || track.release_year || "";
     modal.classList.remove("hidden");
   }
@@ -5185,6 +6421,7 @@ class MusicLinkerController {
     const title = document.getElementById("edit-track-title")?.value.trim();
     const artist = document.getElementById("edit-track-artist")?.value.trim();
     const album = document.getElementById("edit-track-album")?.value.trim();
+    const trackNumber = Number(document.getElementById("edit-track-number")?.value || 0);
     const year = document.getElementById("edit-track-year")?.value.trim();
     const rememberAlias = document.getElementById("edit-remember-alias")?.checked ?? true;
 
@@ -5200,6 +6437,7 @@ class MusicLinkerController {
           title,
           artist_display: artist,
           album,
+          track_number: trackNumber,
           release_year: year,
           original_year: year,
           remember_album_alias: rememberAlias,
@@ -5256,7 +6494,7 @@ class MusicLinkerController {
       if (this.offlineIds.has(track.id)) {
         await offlineStore.removeOfflineTrack(track.id);
       } else {
-        await offlineStore.saveTrackForOffline(track, api.getPairToken());
+        await offlineStore.saveTrackForOffline(track, api);
       }
       await this.refreshOfflineState();
       this.renderTrackList();
@@ -5267,21 +6505,25 @@ class MusicLinkerController {
   }
 
   async playByIndex(index) {
-    if (index < 0 || index >= this.tracks.length) return;
+    if (!this.playQueue.length) {
+      this.playQueue = [...this.tracks];
+    }
+    if (index < 0 || index >= this.playQueue.length) return;
     this.currentIndex = index;
     this.lastActiveLyricIdx = -1;
     this.lyricOffsetSec = 0.0;
     this.updateLyricOffsetLabel();
 
-    const track = this.tracks[index];
+    const track = this.playQueue[index];
     this.renderTrackList();
     this.updateNowPlayingBar(track);
-    await this.engine.loadAndPlay(track, api.getPairToken());
+    await this.engine.loadAndPlay(track, api);
     this.loadLyricsForTrack(track);
   }
 
   togglePlay() {
     if (this.currentIndex === -1 && this.tracks.length) {
+      this.playQueue = [...this.tracks];
       this.playByIndex(0);
       return;
     }
@@ -5289,19 +6531,19 @@ class MusicLinkerController {
   }
 
   prevTrack() {
-    if (!this.tracks.length) return;
-    const nextIdx = (this.currentIndex - 1 + this.tracks.length) % this.tracks.length;
+    if (!this.playQueue.length) return;
+    const nextIdx = (this.currentIndex - 1 + this.playQueue.length) % this.playQueue.length;
     this.playByIndex(nextIdx);
   }
 
   async nextTrack() {
-    if (!this.tracks.length) return;
-    const current = this.tracks[this.currentIndex];
+    if (!this.playQueue.length) return;
+    const current = this.playQueue[this.currentIndex];
     if (current) {
       try {
         const res = await api.request(`/api/tracks/${current.id}/next-transition`);
         if (res.transition?.next_track) {
-          const foundIdx = this.tracks.findIndex((t) => t.id === res.transition.next_track.id);
+          const foundIdx = this.playQueue.findIndex((t) => t.id === res.transition.next_track.id);
           if (foundIdx !== -1) {
             await this.playByIndex(foundIdx);
             return;
@@ -5309,7 +6551,17 @@ class MusicLinkerController {
         }
       } catch (_err) {}
     }
-    const nextIdx = (this.currentIndex + 1) % this.tracks.length;
+
+    if (this.shuffleEnabled && this.playQueue.length > 1) {
+      let randIdx = this.currentIndex;
+      while (randIdx === this.currentIndex) {
+        randIdx = Math.floor(Math.random() * this.playQueue.length);
+      }
+      await this.playByIndex(randIdx);
+      return;
+    }
+
+    const nextIdx = (this.currentIndex + 1) % this.playQueue.length;
     await this.playByIndex(nextIdx);
   }
 
@@ -5357,7 +6609,8 @@ class MusicLinkerController {
     try {
       this.lyricsData = await api.request(track.lyrics_url);
     } catch (_err) {
-      this.lyricsData = { synced: false, sync_mode: "none", lines: [] };
+      const offlineRec = await offlineStore.getOfflineTrackRecord(track.id);
+      this.lyricsData = offlineRec?.offline_lyrics || { synced: false, sync_mode: "none", lines: [] };
     }
     this.lastActiveLyricIdx = -1;
     this.renderLyrics();
@@ -5407,7 +6660,6 @@ class MusicLinkerController {
       })
       .join("");
 
-    // Clicking any lyric line jumps the player to that timestamp
     box.querySelectorAll("[data-lyric-time]").forEach((el) => {
       el.addEventListener("click", () => {
         const t = Number(el.dataset.lyricTime || 0);
@@ -5416,12 +6668,6 @@ class MusicLinkerController {
     });
   }
 
-  /**
-   * Crucial Bug Fix:
-   *  - Never calls `el.scrollIntoView()`, which scrolled ancestor containers and prevented checking downloads.
-   *  - Computes `box.scrollTo({ top })` strictly inside `#lyrics-container` ONLY when `activeIdx` changes,
-   *    and respects `this.userScrollLockUntil` when the user manually scrolls.
-   */
   handleTimeUpdate(cur, dur) {
     const seekEl = document.getElementById("seek-bar");
     const timeEl = document.getElementById("time-display");
@@ -5446,7 +6692,6 @@ class MusicLinkerController {
       }
     }
 
-    // Update rough/exact lyric progress indicator bar & text
     const roughPct = Math.round(((activeIdx + 1) / totalLines) * 100);
     const roughPosEl = document.getElementById("lyric-rough-pos");
     const roughBarEl = document.getElementById("lyric-progress-fill");
@@ -5457,7 +6702,6 @@ class MusicLinkerController {
       roughBarEl.style.width = `${roughPct}%`;
     }
 
-    // Only touch DOM classes and container scroll when the active line actually changes
     if (activeIdx === this.lastActiveLyricIdx) return;
 
     const prevEl = document.getElementById(`lyric-line-${this.lastActiveLyricIdx}`);
@@ -5505,10 +6749,11 @@ class MusicLinkerController {
     const coverEl = document.getElementById("np-cover");
     const carTitle = document.getElementById("car-title");
     const carArtist = document.getElementById("car-artist");
-    if (titleEl) titleEl.textContent = track.title;
+    const numPrefix = track.track_number > 0 ? `#${String(track.track_number).padStart(2, "0")} ` : "";
+    if (titleEl) titleEl.textContent = `${numPrefix}${track.title}`;
     if (artistEl) artistEl.textContent = `${track.artist_display} • ${track.album}`;
     if (coverEl) {
-      coverEl.src = track.cover_url || "/icon.svg";
+      coverEl.src = track.cover_url ? api.resolveUrl(track.cover_url) : "/icon.svg";
     }
     if (carTitle) carTitle.textContent = track.title;
     if (carArtist) carArtist.textContent = track.artist_display;
@@ -5539,7 +6784,7 @@ class MusicLinkerController {
     });
   }
 
-  // ---- Extraction Job & Pinned Live Download Telemetry ----
+  // ---- Extraction Job ----
 
   async startExtractionJob() {
     const username = document.getElementById("ext-username")?.value.trim();
@@ -5572,31 +6817,7 @@ class MusicLinkerController {
           use_llm_filter: useLlmFilter,
         }),
       });
-      api.subscribeJobEvents(job.job_id, (state) => {
-        if (logBox) {
-          logBox.textContent = (state.logs || []).join("\n");
-          logBox.scrollTop = logBox.scrollHeight;
-        }
-        const pct = `${state.progress_pct}%`;
-        const bar = document.getElementById("job-progress-bar");
-        const bannerBar = document.getElementById("banner-progress-bar");
-        const bannerStep = document.getElementById("banner-step-text");
-        const bannerLyric = document.getElementById("banner-lyric-status");
-
-        if (bar) bar.style.width = pct;
-        if (bannerBar) bannerBar.style.width = pct;
-        if (bannerStep) {
-          bannerStep.textContent = `${state.current_step} (${state.progress_pct}%)`;
-        }
-        if (bannerLyric) {
-          bannerLyric.textContent = `Lyrics: ${state.lyric_sync_status || "Checking..."}`;
-        }
-
-        if (state.status === "completed") {
-          this.loadAlbums();
-          this.loadLibrary(document.getElementById("search-input")?.value || "");
-        }
-      });
+      this.subscribeToJobProgress(job.job_id);
     } catch (err) {
       alert(`Failed starting job: ${err.message}`);
     }
@@ -5612,7 +6833,6 @@ class MusicLinkerController {
     if (listEl) listEl.innerHTML = "";
 
     try {
-      // Save any updated proxy fields first
       await this.saveSettings(true);
       const res = await api.request("/api/curation/analyze", { method: "POST" });
       this.proposedCurationActions = res.actions || [];
@@ -5690,9 +6910,13 @@ class MusicLinkerController {
     }
   }
 
-  // ---- Settings & Phone Sync ----
+  // ---- Settings & APK / Phone LAN Sync ----
 
   async loadSettingsIntoUI() {
+    const originInput = document.getElementById("apk-server-url-input");
+    if (originInput) {
+      originInput.value = api.getServerOrigin();
+    }
     try {
       const cfg = await api.request("/api/settings");
       const setVal = (id, v) => {
@@ -5734,14 +6958,29 @@ class MusicLinkerController {
   async openSyncModal() {
     const modal = document.getElementById("sync-modal");
     const urlBox = document.getElementById("sync-pairing-url");
+    const originInput = document.getElementById("apk-server-url-input");
     if (!modal) return;
     modal.classList.remove("hidden");
+    if (originInput) {
+      originInput.value = api.getServerOrigin();
+    }
     try {
       const info = await api.request("/api/sync/info");
       if (urlBox) urlBox.textContent = info.pairing_url;
-    } catch (err) {
-      if (urlBox) urlBox.textContent = err.message;
+    } catch (_err) {
+      if (urlBox) {
+        urlBox.textContent = "Offline / APK Standalone Mode — Paste your PC's Pairing URL below to sync.";
+      }
     }
+  }
+
+  async saveApkServerConnection() {
+    const rawUrl = document.getElementById("apk-server-url-input")?.value.trim() || "";
+    api.setServerOrigin(rawUrl);
+    document.getElementById("sync-modal")?.classList.add("hidden");
+    await this.loadAlbums();
+    await this.loadLibrary();
+    offlineStore.flushOfflineScrobbles(api).catch(() => {});
   }
 
   async toggleCarMode() {
@@ -5763,15 +7002,42 @@ class MusicLinkerController {
   }
 
   bindDOMEvents() {
-    // Player controls
+    // Player controls & Randomizer
     document.getElementById("btn-play")?.addEventListener("click", () => this.togglePlay());
     document.getElementById("btn-prev")?.addEventListener("click", () => this.prevTrack());
     document.getElementById("btn-next")?.addEventListener("click", () => this.nextTrack());
+    document.getElementById("btn-shuffle")?.addEventListener("click", () => this.toggleShuffle());
+    document.getElementById("btn-randomize-now")?.addEventListener("click", () => this.randomizeAndPlayCurrentView());
     document.getElementById("car-btn-play")?.addEventListener("click", () => this.togglePlay());
     document.getElementById("car-btn-prev")?.addEventListener("click", () => this.prevTrack());
     document.getElementById("car-btn-next")?.addEventListener("click", () => this.nextTrack());
     document.getElementById("btn-car-mode")?.addEventListener("click", () => this.toggleCarMode());
     document.getElementById("btn-exit-car")?.addEventListener("click", () => this.toggleCarMode());
+
+    // Sort order selector (Track #, Alphabetical, Plays, Recent)
+    document.getElementById("sort-select")?.addEventListener("change", (e) => {
+      this.sortBy = e.target.value || "track_num";
+      this.loadLibrary(document.getElementById("search-input")?.value || "");
+    });
+
+    // View mode switcher: Standard Library vs 3-Layer Selector
+    document.getElementById("btn-view-standard")?.addEventListener("click", () => this.switchLibraryViewMode("standard"));
+    document.getElementById("btn-view-layered")?.addEventListener("click", () => this.switchLibraryViewMode("layered"));
+
+    // 3-Layer Selector action buttons
+    document.getElementById("btn-layer-play")?.addEventListener("click", () => this.playLayeredSelectionQueue());
+    document.getElementById("btn-layer-shuffle")?.addEventListener("click", () => this.randomizeAndPlayCurrentView());
+    document.getElementById("btn-layer-cache-offline")?.addEventListener("click", () => this.cacheLayeredSelectionOffline());
+    document.getElementById("btn-layer-clear-artists")?.addEventListener("click", () => {
+      this.layerSelectedArtists.clear();
+      this.layerSelectedAlbums.clear();
+      this.layerExcludedTrackIds.clear();
+      this.renderLayeredSelector();
+    });
+
+    // Play by Album & Offline Album Cache buttons
+    document.getElementById("btn-play-selected-album")?.addEventListener("click", () => this.playSelectedAlbumInOrder());
+    document.getElementById("btn-cache-selected-album")?.addEventListener("click", () => this.cacheSelectedAlbumOffline());
 
     // Styled Seek & Volume Sliders
     document.getElementById("seek-bar")?.addEventListener("input", (e) => {
@@ -5783,7 +7049,7 @@ class MusicLinkerController {
       this.engine.setBaseVolume(Number(e.target.value) / 100.0);
     });
 
-    // Pause Lyric Auto-Scroll for 4.5s when user manually scrolls or touches #lyrics-container
+    // Pause Lyric Auto-Scroll on manual interaction
     const lyricsBox = document.getElementById("lyrics-container");
     if (lyricsBox) {
       const lockScroll = () => {
@@ -5794,7 +7060,6 @@ class MusicLinkerController {
       lyricsBox.addEventListener("mousedown", lockScroll);
     }
 
-    // Lyric timing offset buttons
     document.getElementById("btn-lyric-earlier")?.addEventListener("click", () => this.adjustLyricOffset(-0.5));
     document.getElementById("btn-lyric-later")?.addEventListener("click", () => this.adjustLyricOffset(0.5));
 
@@ -5811,11 +7076,14 @@ class MusicLinkerController {
     document.getElementById("btn-confirm-album-rename")?.addEventListener("click", () => this.submitBulkAlbumRename());
     document.getElementById("btn-save-track-edit")?.addEventListener("click", () => this.saveEditedTrackMetadata());
 
-    // Jobs, LLM Curation & Settings
+    // Jobs, Full Album Downloader, LLM Curation & APK Pairing
     document.getElementById("btn-start-extract")?.addEventListener("click", () => this.startExtractionJob());
+    document.getElementById("btn-preview-album")?.addEventListener("click", () => this.previewAlbumForDownload());
+    document.getElementById("btn-download-album")?.addEventListener("click", () => this.startAlbumDownloadJob());
     document.getElementById("btn-run-curator")?.addEventListener("click", () => this.runLLMLibraryAudit());
     document.getElementById("btn-apply-curation")?.addEventListener("click", () => this.applySelectedCurationActions());
     document.getElementById("btn-show-sync")?.addEventListener("click", () => this.openSyncModal());
+    document.getElementById("btn-save-apk-server")?.addEventListener("click", () => this.saveApkServerConnection());
     document.getElementById("btn-save-settings")?.addEventListener("click", () => this.saveSettings(false));
     document.getElementById("btn-save-llm-settings")?.addEventListener("click", () => this.saveSettings(false));
   }
@@ -5849,7 +7117,7 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>MusicLinker Studio v2.1 — Personal Player, Lyrics & AI Curator</title>
+  <title>MusicLinker Studio & APK v3.0 — Layered Player, Album Downloader & AI Curator</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/styles.css" />
@@ -5858,60 +7126,139 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
 </head>
 <body class="bg-zinc-950 text-zinc-100 h-screen flex flex-col overflow-hidden select-none">
   <!-- Top Studio Header -->
-  <header class="border-b border-zinc-800/80 bg-zinc-900/70 backdrop-blur-md px-5 py-3 flex items-center justify-between gap-4 shrink-0">
+  <header class="border-b border-zinc-800/80 bg-zinc-900/70 backdrop-blur-md px-4 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
     <div class="flex items-center gap-3">
       <img src="/icon.svg" alt="MusicLinker" class="w-8 h-8 shadow-md rounded-lg" />
       <div>
         <div class="flex items-center gap-2">
-          <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker Studio</h1>
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v2.1</span>
+          <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker</h1>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.0 APK + Desktop</span>
         </div>
-        <p class="text-[11px] text-zinc-400 hidden sm:block">Offline-First Personal Server • 3-Tier Synced/Rough Lyrics • AI Metadata Curator</p>
+        <p class="text-[11px] text-zinc-400 hidden sm:block">3-Layer Selector • Play by Album • Track # / Alpha Order • Album Downloader</p>
       </div>
     </div>
 
-    <div class="flex items-center gap-2.5">
+    <div class="flex items-center gap-2">
       <input
         id="search-input"
         type="search"
         placeholder="Filter songs, artists, albums..."
-        class="bg-zinc-900/90 border border-zinc-700/80 rounded-xl px-3.5 py-1.5 text-xs sm:text-sm focus:outline-none focus:border-emerald-500 w-40 sm:w-64 transition"
+        class="bg-zinc-900/90 border border-zinc-700/80 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 w-36 sm:w-56 transition"
       />
-      <button id="btn-car-mode" class="px-3 py-1.5 rounded-xl bg-zinc-800/90 hover:bg-zinc-700 text-xs font-medium border border-zinc-700/60 transition">
-        🚗 Car Mode
+      <button id="btn-randomize-now" class="px-2.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium border border-zinc-700/60" title="Randomize & Play Queue">
+        🎲 Randomize
+      </button>
+      <button id="btn-car-mode" class="px-2.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium border border-zinc-700/60 hidden sm:inline-block">
+        🚗 Car
       </button>
       <button id="btn-show-sync" class="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs shadow-sm transition">
-        📱 Phone Sync
+        📱 APK / Sync
       </button>
     </div>
   </header>
 
-  <!-- Main Fixed-Height Split Workspace (Never scrolls the outer window) -->
+  <!-- Main Fixed-Height Split Workspace -->
   <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 min-h-0 overflow-hidden">
-    <!-- Left Column: Library + Album Auto-Filter Bar (7 cols) -->
+    <!-- Left Column: Standard Library OR 3-Layer Hierarchical Selector (7 cols) -->
     <section class="lg:col-span-7 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col min-h-0 overflow-hidden">
-      <div class="flex items-center justify-between gap-2 mb-2.5 shrink-0">
+      <!-- Library Toolbar: View Mode Toggle + Sort Selector -->
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5 shrink-0">
+        <div class="flex items-center gap-1.5 bg-zinc-950/80 border border-zinc-800 p-1 rounded-xl">
+          <button id="btn-view-standard" class="px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950">
+            🎵 Standard Library
+          </button>
+          <button id="btn-view-layered" class="px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200">
+            🗂 3-Layer Selector
+          </button>
+        </div>
+
         <div class="flex items-center gap-2">
-          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Local Library</h2>
+          <select id="sort-select" class="bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1 text-xs text-zinc-300">
+            <option value="track_num">Order: Album & Track # (1..N)</option>
+            <option value="alpha_asc">Order: Alphabetical (A → Z)</option>
+            <option value="alpha_desc">Order: Alphabetical (Z → A)</option>
+            <option value="plays_desc">Order: Most Played</option>
+            <option value="recent">Order: Recently Added</option>
+          </select>
           <span id="library-count-badge" class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300">0 tracks</span>
         </div>
-        <button
-          id="btn-rename-selected-album"
-          class="hidden px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-medium transition">
-          ✎ Rename Selected Album
-        </button>
       </div>
 
-      <!-- Horizontal Album Filter Pill Bar -->
-      <div id="album-filter-bar" class="flex items-center gap-1.5 overflow-x-auto ml-scroll pb-2 mb-2 border-b border-zinc-800/70 shrink-0"></div>
+      <!-- View 1: Standard Library with Play by Album Controls -->
+      <div id="standard-library-view" class="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div id="album-filter-bar" class="flex items-center gap-1.5 overflow-x-auto ml-scroll pb-2 mb-2 border-b border-zinc-800/70 shrink-0"></div>
 
-      <!-- Scrollable Track List (Isolated Scroll Container) -->
-      <div id="track-list" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+        <!-- Contextual Action Bar when an Album is selected -->
+        <div id="selected-album-actions" class="hidden flex flex-wrap items-center justify-between gap-2 bg-emerald-950/30 border border-emerald-500/30 rounded-xl p-2 mb-2 shrink-0">
+          <div class="flex items-center gap-2">
+            <button id="btn-play-selected-album" class="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs">
+              ▶ Play Album in Track # Order
+            </button>
+            <button id="btn-cache-selected-album" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-emerald-300 border border-emerald-500/30 text-xs font-medium">
+              ↓ Cache Album Offline (APK)
+            </button>
+          </div>
+          <button id="btn-rename-selected-album" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs">
+            ✎ Rename Album
+          </button>
+        </div>
+
+        <div id="track-list" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+      </div>
+
+      <!-- View 2: 3-Layer Hierarchical Selection Mode (Artists [Unselected] -> Albums [Unselected] -> Tracks [Selected]) -->
+      <div id="layered-selector-view" class="hidden flex-1 flex flex-col min-h-0 overflow-hidden gap-2.5">
+        <div class="flex flex-wrap items-center justify-between gap-2 bg-zinc-950/70 border border-zinc-800 rounded-xl px-3 py-2 shrink-0">
+          <div id="layer-selection-summary" class="text-xs text-emerald-400 font-mono">
+            0 artist(s) • All albums • 0 track(s) selected
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="btn-layer-clear-artists" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs">
+              Reset
+            </button>
+            <button id="btn-layer-play" class="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs">
+              ▶ Play Selected
+            </button>
+            <button id="btn-layer-shuffle" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs font-semibold">
+              🎲 Shuffle Selected
+            </button>
+            <button id="btn-layer-cache-offline" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs">
+              ↓ Offline
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 grid grid-cols-1 md:grid-cols-3 gap-2.5 min-h-0 overflow-hidden">
+          <!-- Layer 1: Artists (Starts 100% Unselected) -->
+          <div class="bg-zinc-950/40 border border-zinc-800/80 rounded-xl p-2.5 flex flex-col min-h-0 overflow-hidden">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 shrink-0">
+              1. Artists <span class="text-zinc-500 font-normal">(Unselected)</span>
+            </div>
+            <div id="layer-1-artists" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+          </div>
+
+          <!-- Layer 2: Albums (Optional Filter — Starts 100% Unselected) -->
+          <div class="bg-zinc-950/40 border border-zinc-800/80 rounded-xl p-2.5 flex flex-col min-h-0 overflow-hidden">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 shrink-0">
+              2. Albums <span class="text-zinc-500 font-normal">(Optional)</span>
+            </div>
+            <div id="layer-2-albums" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+          </div>
+
+          <!-- Layer 3: Tracks (Starts 100% Selected) -->
+          <div class="bg-zinc-950/40 border border-zinc-800/80 rounded-xl p-2.5 flex flex-col min-h-0 overflow-hidden">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-emerald-400 mb-1.5 shrink-0">
+              3. Tracks <span class="text-emerald-500/80 font-normal">(100% Selected)</span>
+            </div>
+            <div id="layer-3-tracks" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Right Column: Pinned Live Download Telemetry + Tabbed Studio Workspace (5 cols) -->
     <section class="lg:col-span-5 flex flex-col gap-3 min-h-0 overflow-hidden">
-      <!-- Pinned Live Download & Lyric Sync Progress Banner (Always visible across tabs when a job runs) -->
+      <!-- Pinned Live Download & Lyric Sync Progress Banner -->
       <div id="live-job-banner" class="hidden bg-zinc-900/90 border border-emerald-500/40 rounded-2xl p-3 space-y-1.5 shrink-0 shadow-lg">
         <div class="flex items-center justify-between text-xs">
           <span class="font-semibold text-emerald-400 flex items-center gap-1.5">
@@ -5929,10 +7276,10 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
       <!-- Studio Navigation Tabs -->
       <div class="flex items-center gap-1.5 bg-zinc-900/60 border border-zinc-800/80 p-1.5 rounded-2xl shrink-0">
         <button id="tab-btn-lyrics" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500 text-zinc-950 shadow-sm transition">
-          🎤 Lyrics Sync
+          🎤 Lyrics
         </button>
         <button id="tab-btn-extractor" class="px-3 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 transition">
-          ⬇ Extractor
+          💿 Albums & Last.fm
         </button>
         <button id="tab-btn-curator" class="px-3 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 transition">
           ✨ AI Curator
@@ -5952,70 +7299,81 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
             <span id="lyric-rough-pos" class="text-[11px] font-mono text-zinc-400">—</span>
           </div>
           <div class="flex items-center gap-1 text-[11px]">
-            <button id="btn-lyric-earlier" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300" title="Shift lyrics 0.5s earlier">-0.5s</button>
+            <button id="btn-lyric-earlier" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">-0.5s</button>
             <span id="lyric-offset-label" class="font-mono text-zinc-400 px-1">+0.0s</span>
-            <button id="btn-lyric-later" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300" title="Shift lyrics 0.5s later">+0.5s</button>
+            <button id="btn-lyric-later" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">+0.5s</button>
           </div>
         </div>
 
-        <!-- Rough / Exact Vocal Progress Bar -->
         <div class="w-full bg-zinc-800/80 h-1 rounded-full overflow-hidden mb-3 shrink-0">
           <div id="lyric-progress-fill" class="bg-emerald-400 h-full w-0 transition-all duration-300"></div>
         </div>
 
-        <!-- Strictly Isolated Lyrics Scroll Box (Never scrolls parent or window) -->
         <div id="lyrics-container" class="flex-1 overflow-y-auto ml-scroll space-y-1 px-2 text-center min-h-0">
           <p class="text-zinc-500 text-sm py-12">Select a song to view exact LRCLIB or rough-interpolated karaoke lyrics.</p>
         </div>
       </div>
 
-      <!-- Tab Panel 2: Last.fm Extractor & Downloader -->
+      <!-- Tab Panel 2: Full Album Downloader & Last.fm Extractor -->
       <div id="tab-panel-extractor" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-3 min-h-0 overflow-y-auto ml-scroll">
-        <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm Extractor & Downloader</h2>
-        <div class="grid grid-cols-2 gap-2.5 text-xs sm:text-sm">
-          <input id="ext-username" type="text" placeholder="Last.fm Username" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2" />
-          <select id="ext-period" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2">
-            <option value="12month">Last 12 Months</option>
-            <option value="6month">Last 6 Months</option>
-            <option value="3month">Last 3 Months</option>
-            <option value="1month">Last 1 Month</option>
-            <option value="overall">Overall All-Time</option>
-          </select>
-          <div>
-            <label class="block text-[10px] text-zinc-400 mb-1">Minimum Plays</label>
-            <input id="ext-min-plays" type="number" value="10" min="1" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5" />
+        <!-- Card A: Full Studio Album Downloader -->
+        <div class="bg-zinc-950/70 border border-zinc-800 rounded-xl p-3 space-y-2.5">
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">💿 Full Album Downloader (Track # 1..N)</h2>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <input id="dl-album-artist" type="text" placeholder="Artist (e.g. Daft Punk)" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
+            <input id="dl-album-title" type="text" placeholder="Album Name or Playlist URL" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
           </div>
-          <div>
-            <label class="block text-[10px] text-zinc-400 mb-1">Download Cap</label>
-            <input id="ext-cap" type="number" value="25" min="1" max="500" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5" />
+          <div class="flex gap-2">
+            <button id="btn-preview-album" class="flex-1 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium">
+              🔍 Preview Tracklist
+            </button>
+            <button id="btn-download-album" class="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs">
+              ⬇ Download Full Album
+            </button>
           </div>
-          <select id="ext-bitrate" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 col-span-2">
-            <option value="320">320 kbps MP3 (Audiophile Quality)</option>
-            <option value="192">192 kbps MP3 (Compact Mobile)</option>
-          </select>
+          <div id="dl-album-preview-list" class="max-h-28 overflow-y-auto ml-scroll space-y-1"></div>
         </div>
 
-        <label class="flex items-center gap-2.5 p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800 text-xs cursor-pointer">
-          <input id="ext-use-llm" type="checkbox" checked class="accent-emerald-500" />
-          <span>✨ <b>AI Smart Filter:</b> Auto-deduplicate repeated versions (Remaster/Edit) & canonicalize albums before downloading</span>
-        </label>
+        <!-- Card B: Last.fm Top Tracks Extractor -->
+        <div class="bg-zinc-950/70 border border-zinc-800 rounded-xl p-3 space-y-2.5">
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">📻 Last.fm Chart Extractor</h2>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <input id="ext-username" type="text" placeholder="Last.fm Username" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
+            <select id="ext-period" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5">
+              <option value="12month">Last 12 Months</option>
+              <option value="6month">Last 6 Months</option>
+              <option value="3month">Last 3 Months</option>
+              <option value="1month">Last 1 Month</option>
+              <option value="overall">Overall All-Time</option>
+            </select>
+            <input id="ext-min-plays" type="number" value="10" min="1" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" title="Min Plays" />
+            <input id="ext-cap" type="number" value="25" min="1" max="500" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" title="Download Cap" />
+            <select id="ext-bitrate" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 col-span-2">
+              <option value="320">320 kbps MP3 (Audiophile Quality)</option>
+              <option value="192">192 kbps MP3 (Compact Mobile)</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 text-xs cursor-pointer">
+            <input id="ext-use-llm" type="checkbox" checked class="accent-emerald-500" />
+            <span>✨ AI Smart Filter: Deduplicate repeated versions & fix albums</span>
+          </label>
+          <button id="btn-start-extract" class="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs">
+            Extract & Download Qualifying Tracks
+          </button>
+        </div>
 
-        <button id="btn-start-extract" class="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs sm:text-sm shadow-sm transition">
-          Extract & Download Qualifying Tracks
-        </button>
-
-        <div class="w-full bg-zinc-800 h-2 rounded-full overflow-hidden shrink-0">
+        <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden shrink-0">
           <div id="job-progress-bar" class="bg-emerald-500 h-full w-0 transition-all"></div>
         </div>
-        <pre id="job-logs" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs text-zinc-300 overflow-y-auto ml-scroll font-mono min-h-[140px]">Idle.</pre>
+        <pre id="job-logs" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-300 overflow-y-auto ml-scroll font-mono min-h-[100px]">Idle.</pre>
       </div>
 
-      <!-- Tab Panel 3: AI Smart Curator & Deduplicator (LLM API / Proxy) -->
+      <!-- Tab Panel 3: AI Smart Curator & Deduplicator -->
       <div id="tab-panel-curator" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-3 min-h-0 overflow-y-auto ml-scroll">
         <div>
           <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">✨ AI Library Curator & Deduplicator</h2>
           <p class="text-xs text-zinc-400 mt-0.5">
-            Connect any OpenAI-compatible LLM API link or reverse proxy to detect repeated track versions (e.g. Remastered vs Radio Edit), auto-rename messy titles, and rename albums into their canonical studio names.
+            Connect any OpenAI-compatible LLM API link or reverse proxy to detect repeated track versions, auto-rename messy titles, and canonicalize studio albums.
           </p>
         </div>
 
@@ -6027,58 +7385,61 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="block text-[10px] text-zinc-400 mb-1">API / Proxy Key</label>
-              <input id="llm-api-key" type="password" placeholder="sk-... (optional for local proxy)" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs" />
+              <input id="llm-api-key" type="password" placeholder="sk-..." class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs" />
             </div>
             <div>
               <label class="block text-[10px] text-zinc-400 mb-1">Model Name</label>
-              <input id="llm-model" type="text" value="gpt-4o-mini" placeholder="gpt-4o-mini / gemini-2.5-flash" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 font-mono text-xs" />
+              <input id="llm-model" type="text" value="gpt-4o-mini" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 font-mono text-xs" />
             </div>
           </div>
-          <button id="btn-save-llm-settings" class="w-full py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs transition">
+          <button id="btn-save-llm-settings" class="w-full py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs">
             Save Proxy Configuration
           </button>
         </div>
 
-        <button id="btn-run-curator" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs sm:text-sm transition">
+        <button id="btn-run-curator" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs">
           🔍 Scan Library for Duplicate Tracks & Wrong Albums
         </button>
 
         <div id="curator-status" class="text-xs text-zinc-400 font-mono">Ready to scan.</div>
         <div id="curator-actions-list" class="flex-1 overflow-y-auto ml-scroll space-y-2 min-h-[120px]"></div>
 
-        <button id="btn-apply-curation" class="hidden w-full py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-xs sm:text-sm transition">
+        <button id="btn-apply-curation" class="hidden w-full py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-xs">
           ✓ Apply Selected Fixes to Library & MP3 ID3 Tags
         </button>
       </div>
 
-      <!-- Tab Panel 4: Last.fm Credentials & Preferences -->
+      <!-- Tab Panel 4: Last.fm Credentials -->
       <div id="tab-panel-settings" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-3 min-h-0 overflow-y-auto ml-scroll">
         <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm API Credentials</h2>
         <input id="set-api-key" type="text" placeholder="Last.fm API Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
         <input id="set-api-secret" type="password" placeholder="Last.fm API Secret" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
         <input id="set-username" type="text" placeholder="Default Last.fm Username" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-        <button id="btn-save-settings" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs sm:text-sm transition">
+        <button id="btn-save-settings" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs">
           Save Credentials
         </button>
       </div>
     </section>
   </main>
 
-  <!-- Bottom Persistent Player Bar with Custom Styled Sliders -->
+  <!-- Bottom Persistent Player Bar with Custom Styled Sliders & Randomizer Toggle -->
   <footer class="border-t border-zinc-800/90 bg-zinc-900/95 backdrop-blur-md px-5 py-3 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
     <div class="flex items-center gap-3 min-w-0 w-full sm:w-64">
       <img id="np-cover" src="/icon.svg" alt="Cover" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 border border-zinc-700/60 shrink-0" />
       <div class="min-w-0">
         <div id="np-title" class="font-semibold text-sm truncate">Not Playing</div>
-        <div id="np-artist" class="text-xs text-zinc-400 truncate">Select a track from your library</div>
+        <div id="np-artist" class="text-xs text-zinc-400 truncate">Select a track or album</div>
       </div>
     </div>
 
     <div class="flex flex-col items-center gap-2 flex-1 max-w-xl w-full">
-      <div class="flex items-center gap-3">
-        <button id="btn-prev" class="px-3.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition">⏮ Prev</button>
+      <div class="flex items-center gap-2.5">
+        <button id="btn-prev" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition">⏮ Prev</button>
         <button id="btn-play" class="px-6 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-sm shadow-sm transition">▶ Play</button>
-        <button id="btn-next" class="px-3.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition">Next ⏭</button>
+        <button id="btn-next" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition">Next ⏭</button>
+        <button id="btn-shuffle" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs font-medium transition" title="Toggle Randomizer">
+          🔀 Shuffle
+        </button>
       </div>
       <div class="flex items-center gap-3 w-full">
         <input id="seek-bar" type="range" min="0" max="1000" value="0" class="ml-slider flex-1" />
@@ -6094,9 +7455,9 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
 
   <!-- Inline Track & Album Metadata Editor Modal -->
   <div id="edit-track-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
-    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-3.5 shadow-2xl">
-      <h3 class="font-bold text-base">✎ Edit Track & Album Metadata</h3>
-      <p class="text-xs text-zinc-400">Updates SQLite and rewrites MP3 ID3v2.4 frames (`TIT2`, `TPE1`, `TPE2`, `TALB`) on disk.</p>
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-3 shadow-2xl">
+      <h3 class="font-bold text-base">✎ Edit Track, Track # & Album Metadata</h3>
+      <p class="text-xs text-zinc-400">Updates SQLite and rewrites MP3 ID3v2.4 frames (`TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`) on disk.</p>
       <input id="edit-track-id" type="hidden" />
       <div class="space-y-2 text-xs">
         <div>
@@ -6107,9 +7468,15 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
           <label class="block text-zinc-400 mb-1">Artist(s)</label>
           <input id="edit-track-artist" type="text" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
         </div>
-        <div>
-          <label class="block text-zinc-400 mb-1">Canonical Album Name</label>
-          <input id="edit-track-album" type="text" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+        <div class="grid grid-cols-3 gap-2">
+          <div class="col-span-2">
+            <label class="block text-zinc-400 mb-1">Canonical Album Name</label>
+            <input id="edit-track-album" type="text" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-zinc-400 mb-1">Track #</label>
+            <input id="edit-track-number" type="number" min="0" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+          </div>
         </div>
         <div>
           <label class="block text-zinc-400 mb-1">Release Year</label>
@@ -6131,7 +7498,6 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
   <div id="rename-album-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
     <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-3.5 shadow-2xl">
       <h3 class="font-bold text-base">✎ Bulk Rename Album</h3>
-      <p class="text-xs text-zinc-400">Renames this album across all matching tracks in your library, updates their MP3 ID3 tags, and remembers the rule for future downloads.</p>
       <div class="space-y-2 text-xs">
         <div>
           <label class="block text-zinc-400 mb-1">Current Album Name</label>
@@ -6166,17 +7532,27 @@ window.addEventListener("DOMContentLoaded", () => window.MusicLinkerApp.init());
     </div>
   </div>
 
-  <!-- Phone LAN Pairing Modal -->
+  <!-- Android APK & Wi-Fi Server Pairing Modal -->
   <div id="sync-modal" class="hidden fixed inset-0 bg-black/75 z-40 flex items-center justify-center p-4">
     <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-4">
-      <h3 class="font-bold text-lg">📱 Android Wi-Fi Sync & Pairing</h3>
+      <h3 class="font-bold text-lg">📱 Android APK & Wi-Fi Server Pairing</h3>
       <p class="text-xs text-zinc-400">
-        Open this URL on your Android phone connected to the same Wi-Fi network to install the PWA and cache tracks for offline playback:
+        <b>On Desktop:</b> Copy or scan this LAN Pairing URL into your Android phone.<br/>
+        <b>Inside the Android APK:</b> Paste your PC's Pairing URL below to stream and cache albums for 100% offline playback:
       </p>
       <div id="sync-pairing-url" class="p-3 rounded-xl bg-zinc-950 border border-zinc-800 font-mono text-xs text-emerald-400 break-all"></div>
-      <button onclick="document.getElementById('sync-modal').classList.add('hidden')" class="w-full py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm font-semibold">
-        Close
-      </button>
+      <div class="space-y-1.5 text-xs">
+        <label class="block text-zinc-400">Remote PC Server URL (for Native Android APK)</label>
+        <input id="apk-server-url-input" type="text" placeholder="http://192.168.1.50:8000/?pair_token=..." class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 font-mono text-xs" />
+      </div>
+      <div class="flex gap-2">
+        <button onclick="document.getElementById('sync-modal').classList.add('hidden')" class="flex-1 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold">
+          Close
+        </button>
+        <button id="btn-save-apk-server" class="flex-1 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-bold">
+          Connect APK to Server
+        </button>
+      </div>
     </div>
   </div>
 

@@ -1,4 +1,4 @@
-"""Keyless yt-dlp search engine, FFmpeg audio stream downloader, and YouTube subtitle/caption extractor."""
+"""Keyless yt-dlp search engine, playlist/album expander, FFmpeg MP3 downloader, and VTT subtitle extractor."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class YouTubeClient:
-    """Provides cached flat-search queries, MP3 extraction, and VTT subtitle extraction for rough lyric sync."""
+    """Provides cached flat-search queries, playlist/album expansion, MP3 extraction, and VTT subtitle extraction."""
 
     def __init__(self) -> None:
         self._search_cache: dict[str, list[dict[str, Any]]] = {}
@@ -78,6 +78,43 @@ class YouTubeClient:
             self._search_cache[cache_key] = results
         return results
 
+    def expand_playlist_or_album_url(self, playlist_url: str, default_artist: str = "") -> list[dict[str, Any]]:
+        """Extract all tracks in order (`1..N`) from a YouTube Album or Playlist URL."""
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "skip_download": True,
+            "noplaylist": False,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(playlist_url, download=False)
+        except Exception as exc:
+            raise YouTubeResolutionError(f"Failed expanding playlist/album URL '{playlist_url}': {exc}") from exc
+
+        entries = info.get("entries", []) if isinstance(info, dict) else []
+        tracks: list[dict[str, Any]] = []
+        for idx, entry in enumerate(entries, start=1):
+            if not entry:
+                continue
+            vid_id = entry.get("id", "")
+            url = entry.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else "")
+            raw_title = str(entry.get("title") or f"Track {idx}").strip()
+            artist = default_artist or str(entry.get("uploader") or "Unknown Artist").replace(" - Topic", "").strip()
+            if " - " in raw_title and not default_artist:
+                artist, raw_title = raw_title.split(" - ", 1)
+            tracks.append(
+                {
+                    "track_number": idx,
+                    "title": raw_title.strip(),
+                    "artist": artist.strip(),
+                    "duration": int(entry.get("duration") or 0),
+                    "youtube_url": url,
+                }
+            )
+        return tracks
+
     def resolve_best_audio_match(self, artist: str, title: str) -> dict[str, Any]:
         query = f"{artist} - {title} official audio"
         matches = self.search_videos(query, max_results=3)
@@ -97,12 +134,6 @@ class YouTubeClient:
         bitrate_kbps: int = 320,
         progress_cb: Callable[[float], None] | None = None,
     ) -> tuple[Path, dict[str, Any], str]:
-        """
-        Download audio stream to staging directory, transcode to MP3, and extract YouTube subtitles/auto-captions
-        if available so tracks without LRCLIB entries still get rough synced lyrics from the download source.
-
-        Returns `(mp3_path, yt_info_dict, youtube_lrc_fallback)`.
-        """
         staging_dir.mkdir(parents=True, exist_ok=True)
         outtmpl = str(staging_dir / f"{stem_name}.%(ext)s")
         valid_bitrate = "320" if bitrate_kbps >= 256 else "192"
@@ -152,7 +183,6 @@ class YouTubeClient:
                 raise YouTubeResolutionError("FFmpeg post-processing did not produce an MP3 file.")
             mp3_path = candidates[0]
 
-        # Check if yt-dlp wrote a .vtt subtitle file alongside the audio for rough lyric sync
         yt_lrc_fallback = ""
         vtt_files = list(staging_dir.glob(f"{stem_name}*.vtt"))
         if vtt_files:
@@ -166,7 +196,6 @@ class YouTubeClient:
 
     @staticmethod
     def convert_vtt_to_lrc(raw_vtt: str) -> str:
-        """Convert WebVTT subtitle cues from YouTube into standard `[mm:ss.xx]` LRC lines."""
         lrc_lines: list[str] = []
         last_text = ""
         lines = raw_vtt.splitlines()

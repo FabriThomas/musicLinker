@@ -1,6 +1,8 @@
 /**
- * HTML5 Audio + ReplayGain Volume Normalization + Official 50% / 4-Minute Scrobble Tracker + MediaSession Bridge.
+ * HTML5 Audio + APK Offline Blob Playback + ReplayGain Volume Normalization + Scrobble Tracker + MediaSession Bridge.
  */
+import { offlineStore } from "./offline-store.js";
+
 export class AudioEngine {
   constructor({ onTimeUpdate, onTrackEnded, onScrobbleDue, onNowPlaying, onStateChange }) {
     this.audio = new Audio();
@@ -14,6 +16,7 @@ export class AudioEngine {
     this.onStateChange = onStateChange;
 
     this.currentTrack = null;
+    this.currentBlobUrl = null;
     this.normalizeEnabled = true;
     this.baseVolume = 0.85;
     this.scrobbledCurrentTrack = false;
@@ -84,21 +87,37 @@ export class AudioEngine {
     this.audio.volume = targetVolume;
   }
 
-  async loadAndPlay(track, pairToken = "") {
+  async loadAndPlay(track, apiClient) {
     this.currentTrack = track;
     this.scrobbledCurrentTrack = false;
     this.accumulatedPlaySeconds = 0;
     this.lastTickTimestamp = null;
 
-    this.applyReplayGain(track);
-    const sep = track.stream_url.includes("?") ? "&" : "?";
-    const srcUrl = pairToken
-      ? `${track.stream_url}${sep}pair_token=${encodeURIComponent(pairToken)}`
-      : track.stream_url;
+    if (this.currentBlobUrl) {
+      URL.revokeObjectURL(this.currentBlobUrl);
+      this.currentBlobUrl = null;
+    }
 
-    this.audio.src = srcUrl;
+    this.applyReplayGain(track);
+
+    // 1. Check if track is cached locally in CacheStorage (instant 100% offline playback on Android APK)
+    const offlineBlobUrl = await offlineStore.getOfflineAudioBlobUrl(track.id);
+    if (offlineBlobUrl) {
+      this.currentBlobUrl = offlineBlobUrl;
+      this.audio.removeAttribute("crossorigin");
+      this.audio.src = offlineBlobUrl;
+    } else {
+      this.audio.crossOrigin = "anonymous";
+      const baseStreamUrl = apiClient.resolveUrl(track.stream_url);
+      const pairToken = apiClient.getPairToken();
+      const sep = baseStreamUrl.includes("?") ? "&" : "?";
+      this.audio.src = pairToken
+        ? `${baseStreamUrl}${sep}pair_token=${encodeURIComponent(pairToken)}`
+        : baseStreamUrl;
+    }
+
     await this.audio.play();
-    this._setupMediaSession(track);
+    this._setupMediaSession(track, apiClient);
     this.onNowPlaying?.(track);
   }
 
@@ -125,15 +144,14 @@ export class AudioEngine {
     }
   }
 
-  _setupMediaSession(track) {
+  _setupMediaSession(track, apiClient) {
     if (!("mediaSession" in navigator)) return;
+    const coverSrc = track.cover_url ? apiClient.resolveUrl(track.cover_url) : "/icon.svg";
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title,
       artist: track.artist_display,
       album: track.album || "MusicLinker",
-      artwork: track.cover_url
-        ? [{ src: track.cover_url, sizes: "512x512", type: "image/jpeg" }]
-        : [{ src: "/icon.svg", sizes: "256x256", type: "image/svg+xml" }],
+      artwork: [{ src: coverSrc, sizes: "512x512", type: "image/jpeg" }],
     });
   }
 

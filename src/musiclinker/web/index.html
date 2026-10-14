@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>MusicLinker Studio v2.1 — Personal Player, Lyrics & AI Curator</title>
+  <title>MusicLinker Studio & APK v3.0 — Layered Player, Album Downloader & AI Curator</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/styles.css" />
@@ -12,60 +12,139 @@
 </head>
 <body class="bg-zinc-950 text-zinc-100 h-screen flex flex-col overflow-hidden select-none">
   <!-- Top Studio Header -->
-  <header class="border-b border-zinc-800/80 bg-zinc-900/70 backdrop-blur-md px-5 py-3 flex items-center justify-between gap-4 shrink-0">
+  <header class="border-b border-zinc-800/80 bg-zinc-900/70 backdrop-blur-md px-4 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
     <div class="flex items-center gap-3">
       <img src="/icon.svg" alt="MusicLinker" class="w-8 h-8 shadow-md rounded-lg" />
       <div>
         <div class="flex items-center gap-2">
-          <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker Studio</h1>
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v2.1</span>
+          <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker</h1>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.0 APK + Desktop</span>
         </div>
-        <p class="text-[11px] text-zinc-400 hidden sm:block">Offline-First Personal Server • 3-Tier Synced/Rough Lyrics • AI Metadata Curator</p>
+        <p class="text-[11px] text-zinc-400 hidden sm:block">3-Layer Selector • Play by Album • Track # / Alpha Order • Album Downloader</p>
       </div>
     </div>
 
-    <div class="flex items-center gap-2.5">
+    <div class="flex items-center gap-2">
       <input
         id="search-input"
         type="search"
         placeholder="Filter songs, artists, albums..."
-        class="bg-zinc-900/90 border border-zinc-700/80 rounded-xl px-3.5 py-1.5 text-xs sm:text-sm focus:outline-none focus:border-emerald-500 w-40 sm:w-64 transition"
+        class="bg-zinc-900/90 border border-zinc-700/80 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 w-36 sm:w-56 transition"
       />
-      <button id="btn-car-mode" class="px-3 py-1.5 rounded-xl bg-zinc-800/90 hover:bg-zinc-700 text-xs font-medium border border-zinc-700/60 transition">
-        🚗 Car Mode
+      <button id="btn-randomize-now" class="px-2.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium border border-zinc-700/60" title="Randomize & Play Queue">
+        🎲 Randomize
+      </button>
+      <button id="btn-car-mode" class="px-2.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium border border-zinc-700/60 hidden sm:inline-block">
+        🚗 Car
       </button>
       <button id="btn-show-sync" class="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs shadow-sm transition">
-        📱 Phone Sync
+        📱 APK / Sync
       </button>
     </div>
   </header>
 
-  <!-- Main Fixed-Height Split Workspace (Never scrolls the outer window) -->
+  <!-- Main Fixed-Height Split Workspace -->
   <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 min-h-0 overflow-hidden">
-    <!-- Left Column: Library + Album Auto-Filter Bar (7 cols) -->
+    <!-- Left Column: Standard Library OR 3-Layer Hierarchical Selector (7 cols) -->
     <section class="lg:col-span-7 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col min-h-0 overflow-hidden">
-      <div class="flex items-center justify-between gap-2 mb-2.5 shrink-0">
+      <!-- Library Toolbar: View Mode Toggle + Sort Selector -->
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5 shrink-0">
+        <div class="flex items-center gap-1.5 bg-zinc-950/80 border border-zinc-800 p-1 rounded-xl">
+          <button id="btn-view-standard" class="px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950">
+            🎵 Standard Library
+          </button>
+          <button id="btn-view-layered" class="px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200">
+            🗂 3-Layer Selector
+          </button>
+        </div>
+
         <div class="flex items-center gap-2">
-          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Local Library</h2>
+          <select id="sort-select" class="bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1 text-xs text-zinc-300">
+            <option value="track_num">Order: Album & Track # (1..N)</option>
+            <option value="alpha_asc">Order: Alphabetical (A → Z)</option>
+            <option value="alpha_desc">Order: Alphabetical (Z → A)</option>
+            <option value="plays_desc">Order: Most Played</option>
+            <option value="recent">Order: Recently Added</option>
+          </select>
           <span id="library-count-badge" class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300">0 tracks</span>
         </div>
-        <button
-          id="btn-rename-selected-album"
-          class="hidden px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-medium transition">
-          ✎ Rename Selected Album
-        </button>
       </div>
 
-      <!-- Horizontal Album Filter Pill Bar -->
-      <div id="album-filter-bar" class="flex items-center gap-1.5 overflow-x-auto ml-scroll pb-2 mb-2 border-b border-zinc-800/70 shrink-0"></div>
+      <!-- View 1: Standard Library with Play by Album Controls -->
+      <div id="standard-library-view" class="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div id="album-filter-bar" class="flex items-center gap-1.5 overflow-x-auto ml-scroll pb-2 mb-2 border-b border-zinc-800/70 shrink-0"></div>
 
-      <!-- Scrollable Track List (Isolated Scroll Container) -->
-      <div id="track-list" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+        <!-- Contextual Action Bar when an Album is selected -->
+        <div id="selected-album-actions" class="hidden flex flex-wrap items-center justify-between gap-2 bg-emerald-950/30 border border-emerald-500/30 rounded-xl p-2 mb-2 shrink-0">
+          <div class="flex items-center gap-2">
+            <button id="btn-play-selected-album" class="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs">
+              ▶ Play Album in Track # Order
+            </button>
+            <button id="btn-cache-selected-album" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-emerald-300 border border-emerald-500/30 text-xs font-medium">
+              ↓ Cache Album Offline (APK)
+            </button>
+          </div>
+          <button id="btn-rename-selected-album" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs">
+            ✎ Rename Album
+          </button>
+        </div>
+
+        <div id="track-list" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+      </div>
+
+      <!-- View 2: 3-Layer Hierarchical Selection Mode (Artists [Unselected] -> Albums [Unselected] -> Tracks [Selected]) -->
+      <div id="layered-selector-view" class="hidden flex-1 flex flex-col min-h-0 overflow-hidden gap-2.5">
+        <div class="flex flex-wrap items-center justify-between gap-2 bg-zinc-950/70 border border-zinc-800 rounded-xl px-3 py-2 shrink-0">
+          <div id="layer-selection-summary" class="text-xs text-emerald-400 font-mono">
+            0 artist(s) • All albums • 0 track(s) selected
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="btn-layer-clear-artists" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs">
+              Reset
+            </button>
+            <button id="btn-layer-play" class="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs">
+              ▶ Play Selected
+            </button>
+            <button id="btn-layer-shuffle" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs font-semibold">
+              🎲 Shuffle Selected
+            </button>
+            <button id="btn-layer-cache-offline" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs">
+              ↓ Offline
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 grid grid-cols-1 md:grid-cols-3 gap-2.5 min-h-0 overflow-hidden">
+          <!-- Layer 1: Artists (Starts 100% Unselected) -->
+          <div class="bg-zinc-950/40 border border-zinc-800/80 rounded-xl p-2.5 flex flex-col min-h-0 overflow-hidden">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 shrink-0">
+              1. Artists <span class="text-zinc-500 font-normal">(Unselected)</span>
+            </div>
+            <div id="layer-1-artists" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+          </div>
+
+          <!-- Layer 2: Albums (Optional Filter — Starts 100% Unselected) -->
+          <div class="bg-zinc-950/40 border border-zinc-800/80 rounded-xl p-2.5 flex flex-col min-h-0 overflow-hidden">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5 shrink-0">
+              2. Albums <span class="text-zinc-500 font-normal">(Optional)</span>
+            </div>
+            <div id="layer-2-albums" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+          </div>
+
+          <!-- Layer 3: Tracks (Starts 100% Selected) -->
+          <div class="bg-zinc-950/40 border border-zinc-800/80 rounded-xl p-2.5 flex flex-col min-h-0 overflow-hidden">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-emerald-400 mb-1.5 shrink-0">
+              3. Tracks <span class="text-emerald-500/80 font-normal">(100% Selected)</span>
+            </div>
+            <div id="layer-3-tracks" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Right Column: Pinned Live Download Telemetry + Tabbed Studio Workspace (5 cols) -->
     <section class="lg:col-span-5 flex flex-col gap-3 min-h-0 overflow-hidden">
-      <!-- Pinned Live Download & Lyric Sync Progress Banner (Always visible across tabs when a job runs) -->
+      <!-- Pinned Live Download & Lyric Sync Progress Banner -->
       <div id="live-job-banner" class="hidden bg-zinc-900/90 border border-emerald-500/40 rounded-2xl p-3 space-y-1.5 shrink-0 shadow-lg">
         <div class="flex items-center justify-between text-xs">
           <span class="font-semibold text-emerald-400 flex items-center gap-1.5">
@@ -83,10 +162,10 @@
       <!-- Studio Navigation Tabs -->
       <div class="flex items-center gap-1.5 bg-zinc-900/60 border border-zinc-800/80 p-1.5 rounded-2xl shrink-0">
         <button id="tab-btn-lyrics" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500 text-zinc-950 shadow-sm transition">
-          🎤 Lyrics Sync
+          🎤 Lyrics
         </button>
         <button id="tab-btn-extractor" class="px-3 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 transition">
-          ⬇ Extractor
+          💿 Albums & Last.fm
         </button>
         <button id="tab-btn-curator" class="px-3 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 transition">
           ✨ AI Curator
@@ -106,70 +185,81 @@
             <span id="lyric-rough-pos" class="text-[11px] font-mono text-zinc-400">—</span>
           </div>
           <div class="flex items-center gap-1 text-[11px]">
-            <button id="btn-lyric-earlier" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300" title="Shift lyrics 0.5s earlier">-0.5s</button>
+            <button id="btn-lyric-earlier" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">-0.5s</button>
             <span id="lyric-offset-label" class="font-mono text-zinc-400 px-1">+0.0s</span>
-            <button id="btn-lyric-later" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300" title="Shift lyrics 0.5s later">+0.5s</button>
+            <button id="btn-lyric-later" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">+0.5s</button>
           </div>
         </div>
 
-        <!-- Rough / Exact Vocal Progress Bar -->
         <div class="w-full bg-zinc-800/80 h-1 rounded-full overflow-hidden mb-3 shrink-0">
           <div id="lyric-progress-fill" class="bg-emerald-400 h-full w-0 transition-all duration-300"></div>
         </div>
 
-        <!-- Strictly Isolated Lyrics Scroll Box (Never scrolls parent or window) -->
         <div id="lyrics-container" class="flex-1 overflow-y-auto ml-scroll space-y-1 px-2 text-center min-h-0">
           <p class="text-zinc-500 text-sm py-12">Select a song to view exact LRCLIB or rough-interpolated karaoke lyrics.</p>
         </div>
       </div>
 
-      <!-- Tab Panel 2: Last.fm Extractor & Downloader -->
+      <!-- Tab Panel 2: Full Album Downloader & Last.fm Extractor -->
       <div id="tab-panel-extractor" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-3 min-h-0 overflow-y-auto ml-scroll">
-        <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm Extractor & Downloader</h2>
-        <div class="grid grid-cols-2 gap-2.5 text-xs sm:text-sm">
-          <input id="ext-username" type="text" placeholder="Last.fm Username" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2" />
-          <select id="ext-period" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2">
-            <option value="12month">Last 12 Months</option>
-            <option value="6month">Last 6 Months</option>
-            <option value="3month">Last 3 Months</option>
-            <option value="1month">Last 1 Month</option>
-            <option value="overall">Overall All-Time</option>
-          </select>
-          <div>
-            <label class="block text-[10px] text-zinc-400 mb-1">Minimum Plays</label>
-            <input id="ext-min-plays" type="number" value="10" min="1" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5" />
+        <!-- Card A: Full Studio Album Downloader -->
+        <div class="bg-zinc-950/70 border border-zinc-800 rounded-xl p-3 space-y-2.5">
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">💿 Full Album Downloader (Track # 1..N)</h2>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <input id="dl-album-artist" type="text" placeholder="Artist (e.g. Daft Punk)" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
+            <input id="dl-album-title" type="text" placeholder="Album Name or Playlist URL" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
           </div>
-          <div>
-            <label class="block text-[10px] text-zinc-400 mb-1">Download Cap</label>
-            <input id="ext-cap" type="number" value="25" min="1" max="500" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5" />
+          <div class="flex gap-2">
+            <button id="btn-preview-album" class="flex-1 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium">
+              🔍 Preview Tracklist
+            </button>
+            <button id="btn-download-album" class="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs">
+              ⬇ Download Full Album
+            </button>
           </div>
-          <select id="ext-bitrate" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 col-span-2">
-            <option value="320">320 kbps MP3 (Audiophile Quality)</option>
-            <option value="192">192 kbps MP3 (Compact Mobile)</option>
-          </select>
+          <div id="dl-album-preview-list" class="max-h-28 overflow-y-auto ml-scroll space-y-1"></div>
         </div>
 
-        <label class="flex items-center gap-2.5 p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800 text-xs cursor-pointer">
-          <input id="ext-use-llm" type="checkbox" checked class="accent-emerald-500" />
-          <span>✨ <b>AI Smart Filter:</b> Auto-deduplicate repeated versions (Remaster/Edit) & canonicalize albums before downloading</span>
-        </label>
+        <!-- Card B: Last.fm Top Tracks Extractor -->
+        <div class="bg-zinc-950/70 border border-zinc-800 rounded-xl p-3 space-y-2.5">
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">📻 Last.fm Chart Extractor</h2>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <input id="ext-username" type="text" placeholder="Last.fm Username" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
+            <select id="ext-period" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5">
+              <option value="12month">Last 12 Months</option>
+              <option value="6month">Last 6 Months</option>
+              <option value="3month">Last 3 Months</option>
+              <option value="1month">Last 1 Month</option>
+              <option value="overall">Overall All-Time</option>
+            </select>
+            <input id="ext-min-plays" type="number" value="10" min="1" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" title="Min Plays" />
+            <input id="ext-cap" type="number" value="25" min="1" max="500" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" title="Download Cap" />
+            <select id="ext-bitrate" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 col-span-2">
+              <option value="320">320 kbps MP3 (Audiophile Quality)</option>
+              <option value="192">192 kbps MP3 (Compact Mobile)</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 text-xs cursor-pointer">
+            <input id="ext-use-llm" type="checkbox" checked class="accent-emerald-500" />
+            <span>✨ AI Smart Filter: Deduplicate repeated versions & fix albums</span>
+          </label>
+          <button id="btn-start-extract" class="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs">
+            Extract & Download Qualifying Tracks
+          </button>
+        </div>
 
-        <button id="btn-start-extract" class="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs sm:text-sm shadow-sm transition">
-          Extract & Download Qualifying Tracks
-        </button>
-
-        <div class="w-full bg-zinc-800 h-2 rounded-full overflow-hidden shrink-0">
+        <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden shrink-0">
           <div id="job-progress-bar" class="bg-emerald-500 h-full w-0 transition-all"></div>
         </div>
-        <pre id="job-logs" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs text-zinc-300 overflow-y-auto ml-scroll font-mono min-h-[140px]">Idle.</pre>
+        <pre id="job-logs" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-300 overflow-y-auto ml-scroll font-mono min-h-[100px]">Idle.</pre>
       </div>
 
-      <!-- Tab Panel 3: AI Smart Curator & Deduplicator (LLM API / Proxy) -->
+      <!-- Tab Panel 3: AI Smart Curator & Deduplicator -->
       <div id="tab-panel-curator" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-3 min-h-0 overflow-y-auto ml-scroll">
         <div>
           <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">✨ AI Library Curator & Deduplicator</h2>
           <p class="text-xs text-zinc-400 mt-0.5">
-            Connect any OpenAI-compatible LLM API link or reverse proxy to detect repeated track versions (e.g. Remastered vs Radio Edit), auto-rename messy titles, and rename albums into their canonical studio names.
+            Connect any OpenAI-compatible LLM API link or reverse proxy to detect repeated track versions, auto-rename messy titles, and canonicalize studio albums.
           </p>
         </div>
 
@@ -181,58 +271,61 @@
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="block text-[10px] text-zinc-400 mb-1">API / Proxy Key</label>
-              <input id="llm-api-key" type="password" placeholder="sk-... (optional for local proxy)" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs" />
+              <input id="llm-api-key" type="password" placeholder="sk-..." class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs" />
             </div>
             <div>
               <label class="block text-[10px] text-zinc-400 mb-1">Model Name</label>
-              <input id="llm-model" type="text" value="gpt-4o-mini" placeholder="gpt-4o-mini / gemini-2.5-flash" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 font-mono text-xs" />
+              <input id="llm-model" type="text" value="gpt-4o-mini" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 font-mono text-xs" />
             </div>
           </div>
-          <button id="btn-save-llm-settings" class="w-full py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs transition">
+          <button id="btn-save-llm-settings" class="w-full py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs">
             Save Proxy Configuration
           </button>
         </div>
 
-        <button id="btn-run-curator" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs sm:text-sm transition">
+        <button id="btn-run-curator" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs">
           🔍 Scan Library for Duplicate Tracks & Wrong Albums
         </button>
 
         <div id="curator-status" class="text-xs text-zinc-400 font-mono">Ready to scan.</div>
         <div id="curator-actions-list" class="flex-1 overflow-y-auto ml-scroll space-y-2 min-h-[120px]"></div>
 
-        <button id="btn-apply-curation" class="hidden w-full py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-xs sm:text-sm transition">
+        <button id="btn-apply-curation" class="hidden w-full py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-xs">
           ✓ Apply Selected Fixes to Library & MP3 ID3 Tags
         </button>
       </div>
 
-      <!-- Tab Panel 4: Last.fm Credentials & Preferences -->
+      <!-- Tab Panel 4: Last.fm Credentials -->
       <div id="tab-panel-settings" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-3 min-h-0 overflow-y-auto ml-scroll">
         <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm API Credentials</h2>
         <input id="set-api-key" type="text" placeholder="Last.fm API Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
         <input id="set-api-secret" type="password" placeholder="Last.fm API Secret" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
         <input id="set-username" type="text" placeholder="Default Last.fm Username" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-        <button id="btn-save-settings" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs sm:text-sm transition">
+        <button id="btn-save-settings" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs">
           Save Credentials
         </button>
       </div>
     </section>
   </main>
 
-  <!-- Bottom Persistent Player Bar with Custom Styled Sliders -->
+  <!-- Bottom Persistent Player Bar with Custom Styled Sliders & Randomizer Toggle -->
   <footer class="border-t border-zinc-800/90 bg-zinc-900/95 backdrop-blur-md px-5 py-3 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
     <div class="flex items-center gap-3 min-w-0 w-full sm:w-64">
       <img id="np-cover" src="/icon.svg" alt="Cover" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 border border-zinc-700/60 shrink-0" />
       <div class="min-w-0">
         <div id="np-title" class="font-semibold text-sm truncate">Not Playing</div>
-        <div id="np-artist" class="text-xs text-zinc-400 truncate">Select a track from your library</div>
+        <div id="np-artist" class="text-xs text-zinc-400 truncate">Select a track or album</div>
       </div>
     </div>
 
     <div class="flex flex-col items-center gap-2 flex-1 max-w-xl w-full">
-      <div class="flex items-center gap-3">
-        <button id="btn-prev" class="px-3.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition">⏮ Prev</button>
+      <div class="flex items-center gap-2.5">
+        <button id="btn-prev" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition">⏮ Prev</button>
         <button id="btn-play" class="px-6 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-sm shadow-sm transition">▶ Play</button>
-        <button id="btn-next" class="px-3.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition">Next ⏭</button>
+        <button id="btn-next" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium transition">Next ⏭</button>
+        <button id="btn-shuffle" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs font-medium transition" title="Toggle Randomizer">
+          🔀 Shuffle
+        </button>
       </div>
       <div class="flex items-center gap-3 w-full">
         <input id="seek-bar" type="range" min="0" max="1000" value="0" class="ml-slider flex-1" />
@@ -248,9 +341,9 @@
 
   <!-- Inline Track & Album Metadata Editor Modal -->
   <div id="edit-track-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
-    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-3.5 shadow-2xl">
-      <h3 class="font-bold text-base">✎ Edit Track & Album Metadata</h3>
-      <p class="text-xs text-zinc-400">Updates SQLite and rewrites MP3 ID3v2.4 frames (`TIT2`, `TPE1`, `TPE2`, `TALB`) on disk.</p>
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-3 shadow-2xl">
+      <h3 class="font-bold text-base">✎ Edit Track, Track # & Album Metadata</h3>
+      <p class="text-xs text-zinc-400">Updates SQLite and rewrites MP3 ID3v2.4 frames (`TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`) on disk.</p>
       <input id="edit-track-id" type="hidden" />
       <div class="space-y-2 text-xs">
         <div>
@@ -261,9 +354,15 @@
           <label class="block text-zinc-400 mb-1">Artist(s)</label>
           <input id="edit-track-artist" type="text" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
         </div>
-        <div>
-          <label class="block text-zinc-400 mb-1">Canonical Album Name</label>
-          <input id="edit-track-album" type="text" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+        <div class="grid grid-cols-3 gap-2">
+          <div class="col-span-2">
+            <label class="block text-zinc-400 mb-1">Canonical Album Name</label>
+            <input id="edit-track-album" type="text" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-zinc-400 mb-1">Track #</label>
+            <input id="edit-track-number" type="number" min="0" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+          </div>
         </div>
         <div>
           <label class="block text-zinc-400 mb-1">Release Year</label>
@@ -285,7 +384,6 @@
   <div id="rename-album-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
     <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-3.5 shadow-2xl">
       <h3 class="font-bold text-base">✎ Bulk Rename Album</h3>
-      <p class="text-xs text-zinc-400">Renames this album across all matching tracks in your library, updates their MP3 ID3 tags, and remembers the rule for future downloads.</p>
       <div class="space-y-2 text-xs">
         <div>
           <label class="block text-zinc-400 mb-1">Current Album Name</label>
@@ -320,17 +418,27 @@
     </div>
   </div>
 
-  <!-- Phone LAN Pairing Modal -->
+  <!-- Android APK & Wi-Fi Server Pairing Modal -->
   <div id="sync-modal" class="hidden fixed inset-0 bg-black/75 z-40 flex items-center justify-center p-4">
     <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-4">
-      <h3 class="font-bold text-lg">📱 Android Wi-Fi Sync & Pairing</h3>
+      <h3 class="font-bold text-lg">📱 Android APK & Wi-Fi Server Pairing</h3>
       <p class="text-xs text-zinc-400">
-        Open this URL on your Android phone connected to the same Wi-Fi network to install the PWA and cache tracks for offline playback:
+        <b>On Desktop:</b> Copy or scan this LAN Pairing URL into your Android phone.<br/>
+        <b>Inside the Android APK:</b> Paste your PC's Pairing URL below to stream and cache albums for 100% offline playback:
       </p>
       <div id="sync-pairing-url" class="p-3 rounded-xl bg-zinc-950 border border-zinc-800 font-mono text-xs text-emerald-400 break-all"></div>
-      <button onclick="document.getElementById('sync-modal').classList.add('hidden')" class="w-full py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm font-semibold">
-        Close
-      </button>
+      <div class="space-y-1.5 text-xs">
+        <label class="block text-zinc-400">Remote PC Server URL (for Native Android APK)</label>
+        <input id="apk-server-url-input" type="text" placeholder="http://192.168.1.50:8000/?pair_token=..." class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 font-mono text-xs" />
+      </div>
+      <div class="flex gap-2">
+        <button onclick="document.getElementById('sync-modal').classList.add('hidden')" class="flex-1 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold">
+          Close
+        </button>
+        <button id="btn-save-apk-server" class="flex-1 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-bold">
+          Connect APK to Server
+        </button>
+      </div>
     </div>
   </div>
 

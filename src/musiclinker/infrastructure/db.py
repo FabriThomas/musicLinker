@@ -1,4 +1,4 @@
-"""Thread-safe SQLite WAL repository with album alias mapping, metadata editing, and LLM proxy settings."""
+"""Thread-safe SQLite WAL repository with track_number indexing, multi-mode sorting, album aliases, and LLM settings."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
 from musiclinker.core.security import generate_pair_token
 from musiclinker.domain.models import TrackEntity
-from musiclinker.infrastructure.hasher import clean_album_name, compute_track_hash, normalize_text
+from musiclinker.infrastructure.hasher import clean_album_name, normalize_text
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "lastfm_api_key": os.environ.get("LASTFM_API_KEY", ""),
@@ -70,6 +70,7 @@ class DatabaseRepository:
                     artists_json TEXT NOT NULL DEFAULT '[]',
                     album_artist TEXT NOT NULL DEFAULT '',
                     album TEXT NOT NULL DEFAULT '',
+                    track_number INTEGER NOT NULL DEFAULT 0,
                     release_year TEXT NOT NULL DEFAULT '',
                     original_year TEXT NOT NULL DEFAULT '',
                     duration INTEGER NOT NULL DEFAULT 0,
@@ -137,10 +138,11 @@ class DatabaseRepository:
                 );
                 """
             )
-            # Ensure lyric_sync_mode column exists on older v2.0 databases
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracks)").fetchall()}
             if "lyric_sync_mode" not in cols:
                 conn.execute("ALTER TABLE tracks ADD COLUMN lyric_sync_mode TEXT NOT NULL DEFAULT 'none'")
+            if "track_number" not in cols:
+                conn.execute("ALTER TABLE tracks ADD COLUMN track_number INTEGER NOT NULL DEFAULT 0")
 
             for key, default_val in DEFAULT_SETTINGS.items():
                 conn.execute(
@@ -217,10 +219,9 @@ class DatabaseRepository:
             conn.commit()
         return self.get_settings()
 
-    # ---- Album Alias & Auto-Filter Operations ----
+    # ---- Album Alias, Artist Summary & Hierarchy Operations ----
 
     def resolve_album_alias(self, artist: str, raw_album: str, track_title: str = "") -> str:
-        """Apply auto-cleaning regex and check `album_aliases` for user/LLM-defined canonical album overrides."""
         auto_clean = bool(self.get_settings().get("auto_clean_albums", True))
         candidate = clean_album_name(raw_album, track_title) if auto_clean else (raw_album.strip() or "Singles")
 
@@ -260,8 +261,23 @@ class DatabaseRepository:
             )
             conn.commit()
 
+    def list_artists_summary(self) -> list[dict[str, Any]]:
+        """Return distinct album artists with album and track counts for Layer 1 of the Layered Selector."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT album_artist AS artist,
+                   COUNT(DISTINCT album) AS album_count,
+                   COUNT(*) AS track_count
+            FROM tracks
+            GROUP BY album_artist
+            ORDER BY LOWER(album_artist) ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def list_albums_summary(self) -> list[dict[str, Any]]:
-        """Return distinct albums in the library with track counts and primary artist for the UI Album Filter bar."""
+        """Return distinct albums in the library with track counts and primary artist."""
         conn = self._get_conn()
         rows = conn.execute(
             """
@@ -271,7 +287,7 @@ class DatabaseRepository:
                    MAX(has_cover) AS has_cover
             FROM tracks
             GROUP BY album, album_artist
-            ORDER BY track_count DESC, album ASC
+            ORDER BY LOWER(album) ASC
             """
         ).fetchall()
         return [dict(r) for r in rows]
@@ -311,9 +327,10 @@ class DatabaseRepository:
         artists: list[str],
         album_artist: str,
         album: str,
-        release_year: str,
-        original_year: str,
-        duration: int,
+        track_number: int = 0,
+        release_year: str = "",
+        original_year: str = "",
+        duration: int = 0,
         file_path: str,
         lrc_path: str = "",
         lyric_sync_mode: str = "none",
@@ -331,16 +348,17 @@ class DatabaseRepository:
                 """
                 INSERT INTO tracks (
                     track_hash, title, artist_display, artists_json, album_artist,
-                    album, release_year, original_year, duration, file_path,
+                    album, track_number, release_year, original_year, duration, file_path,
                     lrc_path, lyric_sync_mode, cover_mime, has_cover, lastfm_playcount,
                     replaygain_db, bitrate_kbps, added_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(track_hash) DO UPDATE SET
                     title = excluded.title,
                     artist_display = excluded.artist_display,
                     artists_json = excluded.artists_json,
                     album_artist = excluded.album_artist,
                     album = excluded.album,
+                    track_number = CASE WHEN excluded.track_number > 0 THEN excluded.track_number ELSE tracks.track_number END,
                     release_year = CASE WHEN excluded.release_year != '' THEN excluded.release_year ELSE tracks.release_year END,
                     original_year = CASE WHEN excluded.original_year != '' THEN excluded.original_year ELSE tracks.original_year END,
                     duration = CASE WHEN excluded.duration > 0 THEN excluded.duration ELSE tracks.duration END,
@@ -360,6 +378,7 @@ class DatabaseRepository:
                     json.dumps(artists, ensure_ascii=False),
                     album_artist,
                     canonical_album,
+                    int(track_number or 0),
                     release_year,
                     original_year,
                     duration,
@@ -392,6 +411,7 @@ class DatabaseRepository:
         artists: list[str],
         album_artist: str,
         album: str,
+        track_number: int,
         release_year: str,
         original_year: str,
         file_path: str,
@@ -403,8 +423,8 @@ class DatabaseRepository:
                 """
                 UPDATE tracks
                 SET track_hash = ?, title = ?, artist_display = ?, artists_json = ?,
-                    album_artist = ?, album = ?, release_year = ?, original_year = ?,
-                    file_path = ?, lrc_path = ?
+                    album_artist = ?, album = ?, track_number = ?, release_year = ?,
+                    original_year = ?, file_path = ?, lrc_path = ?
                 WHERE id = ?
                 """,
                 (
@@ -414,6 +434,7 @@ class DatabaseRepository:
                     json.dumps(artists, ensure_ascii=False),
                     album_artist,
                     album,
+                    int(track_number or 0),
                     release_year,
                     original_year,
                     file_path,
@@ -430,7 +451,21 @@ class DatabaseRepository:
             conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
             conn.commit()
 
-    def list_tracks(self, search: str = "", artist: str = "", album: str = "") -> list[TrackEntity]:
+    def list_tracks(
+        self,
+        search: str = "",
+        artist: str = "",
+        album: str = "",
+        sort_by: str = "track_num",
+    ) -> list[TrackEntity]:
+        """
+        List tracks with flexible ordering:
+          - `track_num`: Album + Track # (`1..N`) + Title (ideal for Play by Album)
+          - `alpha_asc`: Alphabetical by Title (`A -> Z`)
+          - `alpha_desc`: Alphabetical by Title (`Z -> A`)
+          - `plays_desc`: Most played (`lastfm_playcount + local_playcount DESC`)
+          - `recent`: Recently added (`added_at DESC`)
+        """
         conn = self._get_conn()
         clauses: list[str] = []
         params: list[Any] = []
@@ -445,9 +480,18 @@ class DatabaseRepository:
         if album.strip():
             clauses.append("LOWER(album) = ?")
             params.append(album.strip().lower())
+
+        order_map = {
+            "track_num": "LOWER(album) ASC, CASE WHEN track_number > 0 THEN track_number ELSE 9999 END ASC, LOWER(title) ASC",
+            "alpha_asc": "LOWER(title) ASC, LOWER(artist_display) ASC",
+            "alpha_desc": "LOWER(title) DESC, LOWER(artist_display) ASC",
+            "plays_desc": "(lastfm_playcount + local_playcount) DESC, LOWER(title) ASC",
+            "recent": "added_at DESC, LOWER(title) ASC",
+        }
+        order_sql = order_map.get(sort_by, order_map["track_num"])
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = conn.execute(
-            f"SELECT * FROM tracks {where_sql} ORDER BY added_at DESC, title ASC",
+            f"SELECT * FROM tracks {where_sql} ORDER BY {order_sql}",
             params,
         ).fetchall()
         return [self._row_to_track(r) for r in rows]
@@ -580,6 +624,7 @@ class DatabaseRepository:
             artists=artists if isinstance(artists, list) else [str(row["artist_display"])],
             album_artist=str(row["album_artist"]),
             album=str(row["album"]),
+            track_number=int(row["track_number"]) if "track_number" in keys else 0,
             release_year=str(row["release_year"]),
             original_year=str(row["original_year"]),
             duration=int(row["duration"]),

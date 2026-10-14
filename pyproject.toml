@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "musiclinker"
-version = "2.1.0"
-description = "Offline-first Last.fm extractor, ID3v2.4 multi-artist tagger, LLM metadata curator, and Windows/Android personal music server"
+version = "3.0.0"
+description = "Offline-first Last.fm extractor, full album downloader, ID3v2.4 multi-artist tagger, LLM curator, and Windows/Android APK personal music ecosystem"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

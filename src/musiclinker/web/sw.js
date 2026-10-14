@@ -1,5 +1,5 @@
-const STATIC_CACHE = "musiclinker-static-v2.1";
-const AUDIO_CACHE = "musiclinker-audio-v2.1";
+const STATIC_CACHE = "musiclinker-static-v3.0";
+const AUDIO_CACHE = "musiclinker-audio-v3.0";
 
 const APP_SHELL = [
   "/",

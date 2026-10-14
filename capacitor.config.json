@@ -1,0 +1,15 @@
+{
+  "appId": "com.fabrithomas.musiclinker",
+  "appName": "MusicLinker",
+  "webDir": "src/musiclinker/web",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#09090b"
+  }
+}

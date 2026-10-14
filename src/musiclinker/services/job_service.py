@@ -1,4 +1,4 @@
-"""Background extraction & audio acquisition pipeline with SSE event streaming, LLM pre-filtering, and lyric sync telemetry."""
+"""Background extraction, direct download, and Full Album Download pipeline with SSE telemetry."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from musiclinker.core.exceptions import JobCancelledError
 from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
 from musiclinker.domain.models import (
+    AlbumDownloadRequest,
     CandidateTrack,
     DirectDownloadRequest,
     ExtractionJobRequest,
@@ -31,12 +32,12 @@ from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
 from musiclinker.infrastructure.tagger import audio_tagger
 from musiclinker.infrastructure.youtube_client import youtube_client
 from musiclinker.services.curation_service import curation_service
-from musiclinker.services.library_service import sanitize_filename
+from musiclinker.services.library_service import library_service, sanitize_filename
 
 
 @dataclass
 class JobRecord:
-    """In-memory state of an active or historical extraction/download job including lyric sync telemetry."""
+    """In-memory state of an active or historical extraction, track download, or full album download job."""
 
     job_id: str
     job_type: str
@@ -81,7 +82,7 @@ class JobRecord:
 
 
 class JobService:
-    """Executes extraction and download pipelines in a bounded worker pool with atomic staging."""
+    """Executes Last.fm extraction, single track downloads, and Full Album Downloads with atomic staging."""
 
     def __init__(self, repo: DatabaseRepository = db_repo) -> None:
         self.repo = repo
@@ -118,6 +119,103 @@ class JobService:
             self._jobs[job_id] = record
         self._executor.submit(self._run_direct_download, record, req)
         return record
+
+    def start_album_download_job(self, req: AlbumDownloadRequest) -> JobRecord:
+        """Start a background job that resolves and downloads an entire album in track # order (`1..N`)."""
+        job_id = uuid.uuid4().hex[:10]
+        record = JobRecord(job_id=job_id, job_type="album_download")
+        with self._lock:
+            self._jobs[job_id] = record
+        self._executor.submit(self._run_album_download_pipeline, record, req)
+        return record
+
+    def _run_album_download_pipeline(self, job: JobRecord, req: AlbumDownloadRequest) -> None:
+        job.status = JobStatus.RUNNING
+        job.current_stage = "resolving_album"
+        job_staging = PATHS.staging_dir / job.job_id
+        try:
+            tracks_to_dl = req.tracks
+            canonical_album = self.repo.resolve_album_alias(req.artist, req.album)
+
+            if not tracks_to_dl:
+                job.append_log(f"Resolving official tracklist for album '{req.artist} — {req.album}'...")
+                lookup = library_service.lookup_external_album_tracklist(req.artist, req.album)
+                canonical_album = str(lookup.get("album") or canonical_album)
+                raw_list = lookup.get("tracks") or []
+                from musiclinker.domain.models import AlbumTrackItem
+
+                tracks_to_dl = [
+                    AlbumTrackItem(
+                        track_number=int(item.get("track_number") or idx),
+                        title=str(item.get("title") or f"Track {idx}"),
+                        artist=str(item.get("artist") or req.artist),
+                        duration=int(item.get("duration") or 0),
+                        youtube_url=str(item.get("youtube_url") or ""),
+                    )
+                    for idx, item in enumerate(raw_list, start=1)
+                ]
+
+            if not tracks_to_dl:
+                raise ValueError(f"Could not find tracklist for album '{req.artist} — {req.album}'.")
+
+            job.total_candidates = len(tracks_to_dl)
+            job.append_log(f"Album '{canonical_album}' resolved: {len(tracks_to_dl)} track(s) queued.")
+
+            total = len(tracks_to_dl)
+            for idx, item in enumerate(tracks_to_dl, start=1):
+                if job.cancel_requested:
+                    raise JobCancelledError("Album download cancelled by user.")
+
+                thash = compute_track_hash(item.artist, item.title)
+                if req.skip_existing and self.repo.is_hash_seen(thash):
+                    job.skipped_seen_count += 1
+                    job.append_log(f"[{idx}/{total}] Skipping #{item.track_number:02d} {item.title} (already in library)")
+                    continue
+
+                base_pct = ((idx - 1) / total) * 100.0
+                job.progress_pct = base_pct
+                job.append_log(f"[{idx}/{total}] Downloading Track #{item.track_number:02d}: {item.artist} - {item.title}")
+                try:
+                    entity = self._acquire_and_tag_single_track(
+                        job=job,
+                        artist_raw=item.artist,
+                        title_raw=item.title,
+                        album_hint=canonical_album,
+                        track_number_hint=item.track_number,
+                        query_or_url=item.youtube_url,
+                        playcount=0,
+                        bitrate_kbps=req.bitrate_kbps,
+                        staging_dir=job_staging,
+                        progress_cb=lambda p, b=base_pct, s=total: setattr(
+                            job, "progress_pct", b + (p / s)
+                        ),
+                    )
+                    job.downloaded_count += 1
+                    job.tracks_added.append(entity.to_dict())
+                    job.append_log(
+                        f"Indexed #{entity.track_number:02d}: {entity.title} [{entity.album} | Lyrics: {entity.lyric_sync_mode}]"
+                    )
+                except Exception as track_exc:
+                    logger.warning("Album track download failed (%s): %s", item.title, track_exc)
+                    job.append_log(f"Skipped #{item.track_number:02d} '{item.title}': {track_exc}")
+
+            job.progress_pct = 100.0
+            job.current_stage = "completed"
+            job.status = JobStatus.COMPLETED
+            job.append_log(
+                f"Album '{canonical_album}' complete: {job.downloaded_count}/{total} track(s) downloaded."
+            )
+        except JobCancelledError as exc:
+            job.status = JobStatus.CANCELLED
+            job.current_stage = "cancelled"
+            job.append_log(str(exc))
+        except Exception as exc:
+            logger.exception("Album download job %s failed", job.job_id)
+            job.status = JobStatus.FAILED
+            job.current_stage = "failed"
+            job.append_log(f"Error: {exc}")
+        finally:
+            shutil.rmtree(job_staging, ignore_errors=True)
 
     def _run_extraction_pipeline(self, job: JobRecord, req: ExtractionJobRequest) -> None:
         job.status = JobStatus.RUNNING
@@ -199,6 +297,7 @@ class JobService:
                         artist_raw=cand.artist,
                         title_raw=cand.title,
                         album_hint=cand.album,
+                        track_number_hint=cand.track_number,
                         query_or_url="",
                         playcount=cand.playcount,
                         bitrate_kbps=req.bitrate_kbps,
@@ -243,6 +342,7 @@ class JobService:
                 artist_raw=req.artist_override,
                 title_raw=req.title_override,
                 album_hint=req.album_override,
+                track_number_hint=req.track_number_override,
                 query_or_url=req.query_or_url,
                 playcount=0,
                 bitrate_kbps=req.bitrate_kbps,
@@ -270,6 +370,7 @@ class JobService:
         artist_raw: str,
         title_raw: str,
         album_hint: str,
+        track_number_hint: int = 0,
         query_or_url: str,
         playcount: int,
         bitrate_kbps: int,
@@ -318,9 +419,11 @@ class JobService:
             title=clean_title,
             fallback_album=album_hint or "Singles",
             fallback_thumb_url=thumb_url,
+            fallback_track_number=track_number_hint,
         )
         raw_album = album_hint or mb_meta.album or "Singles"
         final_album = self.repo.resolve_album_alias(album_artist, raw_album, clean_title)
+        final_track_num = track_number_hint if track_number_hint > 0 else mb_meta.track_number
 
         dest_dir = (
             PATHS.downloads_dir
@@ -328,7 +431,8 @@ class JobService:
             / sanitize_filename(final_album, "Singles")
         )
         dest_dir.mkdir(parents=True, exist_ok=True)
-        base_filename = f"{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
+        num_prefix = f"{final_track_num:02d} - " if final_track_num > 0 else ""
+        base_filename = f"{num_prefix}{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
         final_mp3_path = dest_dir / f"{base_filename}.mp3"
         final_lrc_path = dest_dir / f"{base_filename}.lrc"
 
@@ -352,6 +456,7 @@ class JobService:
             artists=artists_list,
             album_artist=album_artist,
             album=final_album,
+            track_number=final_track_num,
             release_year=mb_meta.release_year,
             original_year=mb_meta.original_year,
             lastfm_playcount=playcount,
@@ -370,6 +475,7 @@ class JobService:
             artists=artists_list,
             album_artist=album_artist,
             album=final_album,
+            track_number=final_track_num,
             release_year=mb_meta.release_year,
             original_year=mb_meta.original_year,
             duration=duration or approx_duration,

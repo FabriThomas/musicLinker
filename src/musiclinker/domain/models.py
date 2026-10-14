@@ -30,12 +30,13 @@ class JobStatus(str, Enum):
 
 @dataclass(slots=True)
 class CandidateTrack:
-    """A track extracted from Last.fm or searched via YouTube prior to download."""
+    """A track extracted from Last.fm, MusicBrainz album lookup, or YouTube search prior to download."""
 
     artist: str
     title: str
     playcount: int = 0
     album: str = ""
+    track_number: int = 0
     track_hash: str = ""
     mbid: str = ""
     youtube_url: str = ""
@@ -54,6 +55,7 @@ class TrackEntity:
     artists: list[str]
     album_artist: str
     album: str
+    track_number: int
     release_year: str
     original_year: str
     duration: int
@@ -77,6 +79,7 @@ class TrackEntity:
             "artists": self.artists,
             "album_artist": self.album_artist,
             "album": self.album,
+            "track_number": self.track_number,
             "release_year": self.release_year,
             "original_year": self.original_year,
             "duration": self.duration,
@@ -101,6 +104,7 @@ class ReleaseMetadata:
 
     album: str = ""
     album_artist: str = ""
+    track_number: int = 0
     release_year: str = ""
     original_year: str = ""
     release_mbid: str = ""
@@ -132,15 +136,40 @@ class DirectDownloadRequest(BaseModel):
     artist_override: str = Field(default="")
     title_override: str = Field(default="")
     album_override: str = Field(default="")
+    track_number_override: int = Field(default=0)
     bitrate_kbps: int = Field(default=320)
 
 
+class AlbumTrackItem(BaseModel):
+    """Single track entry inside an Album Download request."""
+
+    track_number: int = Field(default=1, ge=1)
+    title: str = Field(..., min_length=1)
+    artist: str = Field(..., min_length=1)
+    duration: int = Field(default=0)
+    youtube_url: str = Field(default="")
+
+
+class AlbumDownloadRequest(BaseModel):
+    """Payload to download an entire album (either resolved via MusicBrainz/Last.fm/YouTube or custom tracklist)."""
+
+    artist: str = Field(..., min_length=1)
+    album: str = Field(..., min_length=1)
+    bitrate_kbps: int = Field(default=320)
+    tracks: list[AlbumTrackItem] = Field(
+        default_factory=list,
+        description="Optional explicit tracklist; if empty, server resolves the official tracklist automatically.",
+    )
+    skip_existing: bool = Field(default=True)
+
+
 class TrackMetadataUpdatePayload(BaseModel):
-    """Payload to rename/edit a track's title, artist, album, and release year internally & on MP3 tags."""
+    """Payload to rename/edit a track's title, artist, album, track_number, and release year internally & on MP3 tags."""
 
     title: str = Field(..., min_length=1)
     artist_display: str = Field(..., min_length=1)
     album: str = Field(..., min_length=1)
+    track_number: int = Field(default=0, ge=0)
     release_year: str = Field(default="")
     original_year: str = Field(default="")
     remember_album_alias: bool = Field(default=True)
@@ -188,7 +217,7 @@ class ScrobblePayload(BaseModel):
 
 
 class BatchScrobblePayload(BaseModel):
-    """Batch of offline scrobbles flushed from the Android PWA IndexedDB outbox."""
+    """Batch of offline scrobbles flushed from the Android APK/PWA IndexedDB outbox."""
 
     scrobbles: list[ScrobblePayload]
 

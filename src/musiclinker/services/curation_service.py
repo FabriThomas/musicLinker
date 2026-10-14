@@ -24,12 +24,7 @@ from musiclinker.services.library_service import LibraryService, library_service
 
 
 class CurationService:
-    """
-    Provides two intelligent curation workflows via an OpenAI-compatible LLM API/Proxy
-    (with an automatic local fuzzy-matching & regex fallback when offline):
-      1. `filter_candidates_before_download()`: Deduplicates repeated versions of songs and fixes track/album names prior to YouTube download.
-      2. `analyze_library()` & `apply_curation_actions()`: Audits existing indexed tracks, flags duplicate versions, and renames messy titles/albums.
-    """
+    """Provides LLM API/Proxy and fuzzy-matching deduplication and track/album canonicalization."""
 
     def __init__(
         self,
@@ -242,6 +237,7 @@ class CurationService:
                         title=act.proposed_title,
                         artist_display=act.proposed_artist,
                         album=act.proposed_album,
+                        track_number=track.track_number,
                         release_year=track.release_year,
                         original_year=track.original_year,
                         remember_album_alias=True,

@@ -1,7 +1,7 @@
 {
-  "name": "MusicLinker Studio Player",
+  "name": "MusicLinker Studio & APK Player",
   "short_name": "MusicLinker",
-  "description": "Offline-first personal music player with 3-tier synced/rough karaoke lyrics, AI metadata curator, Car Mode, and Last.fm scrobbling.",
+  "description": "Offline-first personal music player with 3-Layer Selection, Play by Album, Randomizer, Album Downloader, and AI Curator.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#09090b",

@@ -1,10 +1,12 @@
 /**
- * Main UI controller for MusicLinker Studio v2.1:
- *  - Isolated #lyrics-container scroll math (never calls scrollIntoView, never hijacks download/page scroll)
- *  - 3-Tier Synced & Rough Lyrics Position Indicator + ±0.5s offset controls
- *  - Album Filter Pill Bar + Bulk Album Rename + Inline Track Metadata Editor
- *  - LLM Smart Curator & Deduplicator (via API Link / Proxy)
- *  - Custom Slider CSS (--progress) updater
+ * Main UI controller for MusicLinker Studio & Android APK v3.0:
+ *  - Play by Album (1..N track_number order), Randomizer (Shuffle), and Sort by Track # / Alphabetical / Plays
+ *  - 3-Layer Selection Mode:
+ *      Layer 1 (Artists): starts 100% unselected
+ *      Layer 2 (Albums, optional): starts 100% unselected (if 0 selected, all albums for selected artists pass through)
+ *      Layer 3 (Tracks): starts 100% SELECTED for all matching tracks
+ *  - Full Album Downloader (MusicBrainz / Last.fm / YouTube playlist lookup + batch download) & Offline Album Caching
+ *  - Isolated #lyrics-container scroll math + 3-Tier Synced/Rough Lyrics
  */
 import { api } from "./api.js";
 import { offlineStore } from "./offline-store.js";
@@ -12,11 +14,27 @@ import { AudioEngine } from "./audio-engine.js";
 
 class MusicLinkerController {
   constructor() {
+    this.allTracks = [];
     this.tracks = [];
+    this.playQueue = [];
     this.albums = [];
     this.selectedAlbum = "";
+    this.sortBy = "track_num";
+    this.shuffleEnabled = false;
     this.offlineIds = new Set();
     this.currentIndex = -1;
+
+    // 3-Layer Selection Mode State
+    // Layer 1 (Artists): starts 100% UNSELECTED
+    // Layer 2 (Albums): starts 100% UNSELECTED
+    // Layer 3 (Tracks): starts 100% SELECTED (we track only explicitly unchecked track IDs)
+    this.viewMode = "standard"; // 'standard' | 'layered'
+    this.layerSelectedArtists = new Set();
+    this.layerSelectedAlbums = new Set();
+    this.layerExcludedTrackIds = new Set();
+
+    // External Album Downloader Preview State
+    this.previewedAlbumTracks = [];
 
     // Lyrics & Non-Hijacking Scroll State
     this.lyricsData = { synced: false, sync_mode: "none", lines: [] };
@@ -46,7 +64,7 @@ class MusicLinkerController {
   }
 
   async init() {
-    if ("serviceWorker" in navigator) {
+    if ("serviceWorker" in navigator && window.location.protocol.startsWith("http")) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
     this.bindDOMEvents();
@@ -76,7 +94,7 @@ class MusicLinkerController {
     });
   }
 
-  // ---- Library & Album Auto-Filtering ----
+  // ---- Library, Sorting & Play by Album ----
 
   async refreshOfflineState() {
     const cached = await offlineStore.getOfflineTracks();
@@ -87,19 +105,27 @@ class MusicLinkerController {
     try {
       const data = await api.request("/api/albums");
       this.albums = data.albums || [];
-      this.renderAlbumFilterBar();
     } catch (_err) {
-      this.albums = [];
+      const cached = await offlineStore.getOfflineTracks();
+      const map = new Map();
+      cached.forEach((t) => {
+        const key = t.album || "Singles";
+        const cur = map.get(key) || { album: key, album_artist: t.album_artist || t.artist_display, track_count: 0 };
+        cur.track_count++;
+        map.set(key, cur);
+      });
+      this.albums = Array.from(map.values());
     }
+    this.renderAlbumFilterBar();
   }
 
   renderAlbumFilterBar() {
     const bar = document.getElementById("album-filter-bar");
-    const renameBtn = document.getElementById("btn-rename-selected-album");
+    const albumActions = document.getElementById("selected-album-actions");
     if (!bar) return;
 
-    if (renameBtn) {
-      renameBtn.classList.toggle("hidden", !this.selectedAlbum);
+    if (albumActions) {
+      albumActions.classList.toggle("hidden", !this.selectedAlbum);
     }
 
     const allActive = !this.selectedAlbum;
@@ -145,23 +171,67 @@ class MusicLinkerController {
     });
   }
 
+  sortTracksClientSide(list, sortMode) {
+    const copy = [...list];
+    if (sortMode === "track_num") {
+      copy.sort((a, b) => {
+        const albCmp = (a.album || "").localeCompare(b.album || "", undefined, { sensitivity: "base" });
+        if (albCmp !== 0) return albCmp;
+        const tnA = a.track_number > 0 ? a.track_number : 9999;
+        const tnB = b.track_number > 0 ? b.track_number : 9999;
+        if (tnA !== tnB) return tnA - tnB;
+        return (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" });
+      });
+    } else if (sortMode === "alpha_asc") {
+      copy.sort((a, b) => (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" }));
+    } else if (sortMode === "alpha_desc") {
+      copy.sort((a, b) => (b.title || "").localeCompare(a.title || "", undefined, { sensitivity: "base" }));
+    } else if (sortMode === "plays_desc") {
+      copy.sort((a, b) => (b.lastfm_playcount + b.local_playcount) - (a.lastfm_playcount + a.local_playcount));
+    } else if (sortMode === "recent") {
+      copy.sort((a, b) => (b.added_at || 0) - (a.added_at || 0));
+    }
+    return copy;
+  }
+
   async loadLibrary(search = "") {
     try {
+      const allRes = await api.request(`/api/tracks?sort_by=${encodeURIComponent(this.sortBy)}`);
+      this.allTracks = allRes.tracks || [];
       const qs = new URLSearchParams({
         search,
         album: this.selectedAlbum,
+        sort_by: this.sortBy,
       });
       const data = await api.request(`/api/tracks?${qs.toString()}`);
       this.tracks = data.tracks || [];
     } catch (_err) {
       const cached = await offlineStore.getOfflineTracks();
-      this.tracks = this.selectedAlbum
-        ? cached.filter((t) => (t.album || "").toLowerCase() === this.selectedAlbum.toLowerCase())
-        : cached;
+      this.allTracks = this.sortTracksClientSide(cached, this.sortBy);
+      let filtered = this.allTracks;
+      if (this.selectedAlbum) {
+        filtered = filtered.filter((t) => (t.album || "").toLowerCase() === this.selectedAlbum.toLowerCase());
+      }
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        filtered = filtered.filter(
+          (t) =>
+            (t.title || "").toLowerCase().includes(q) ||
+            (t.artist_display || "").toLowerCase().includes(q) ||
+            (t.album || "").toLowerCase().includes(q)
+        );
+      }
+      this.tracks = filtered;
     }
+
+    if (!this.playQueue.length) {
+      this.playQueue = [...this.tracks];
+    }
+
     const countBadge = document.getElementById("library-count-badge");
     if (countBadge) countBadge.textContent = `${this.tracks.length} tracks`;
     this.renderTrackList();
+    this.renderLayeredSelector();
   }
 
   renderTrackList() {
@@ -172,16 +242,20 @@ class MusicLinkerController {
         <div class="p-10 text-center text-zinc-400 space-y-2">
           <div class="text-2xl">🎵</div>
           <div class="text-sm">No tracks match the current filter.</div>
-          <div class="text-xs text-zinc-500">Use the <b>Extractor</b> tab to pull your top Last.fm tracks or clear the album filter.</div>
+          <div class="text-xs text-zinc-500">Use the <b>Extractor & Album Downloader</b> tab to pull tracks or full studio albums.</div>
         </div>`;
       return;
     }
 
+    const activeTrackId = this.playQueue[this.currentIndex]?.id;
+
     container.innerHTML = this.tracks
       .map((t, idx) => {
         const isOffline = this.offlineIds.has(t.id);
-        const isCurrent = idx === this.currentIndex;
+        const isCurrent = t.id === activeTrackId;
         const yearBadge = t.original_year || t.release_year || "";
+        const numBadge = t.track_number > 0 ? `#${String(t.track_number).padStart(2, "0")}` : "";
+        const coverSrc = t.cover_url ? api.resolveUrl(t.cover_url) : "";
         const syncIcon =
           t.lyric_sync_mode === "exact_lrc"
             ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30" title="Exact LRCLIB Synced Lyrics">LRC</span>`
@@ -198,13 +272,14 @@ class MusicLinkerController {
             <div class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer" data-play-idx="${idx}">
               <div class="w-11 h-11 rounded-lg bg-zinc-800 flex items-center justify-center overflow-hidden shrink-0 border border-zinc-700/50">
                 ${
-                  t.cover_url
-                    ? `<img src="${t.cover_url}" class="w-full h-full object-cover" alt="cover"/>`
+                  coverSrc
+                    ? `<img src="${coverSrc}" class="w-full h-full object-cover" alt="cover"/>`
                     : `<span class="text-emerald-400 font-bold">♪</span>`
                 }
               </div>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
+                  ${numBadge ? `<span class="text-[11px] font-mono text-emerald-400 font-semibold">${numBadge}</span>` : ""}
                   <span class="font-semibold text-sm text-zinc-100 truncate">${this.escape(t.title)}</span>
                   ${syncIcon}
                 </div>
@@ -216,11 +291,11 @@ class MusicLinkerController {
                 </div>
               </div>
             </div>
-            <div class="flex items-center gap-2 shrink-0 ml-2">
+            <div class="flex items-center gap-1.5 shrink-0 ml-2">
               <span class="text-[11px] text-zinc-500 hidden md:inline font-mono">${t.lastfm_playcount || 0}p</span>
               <button
                 data-edit-idx="${idx}"
-                title="Rename Track or Album Internally (Updates SQLite & MP3 ID3 Tags)"
+                title="Rename Track, Track #, or Album Internally"
                 class="px-2 py-1 rounded-lg text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700/60 border border-transparent hover:border-zinc-600 transition">
                 ✎
               </button>
@@ -250,6 +325,7 @@ class MusicLinkerController {
           this.loadLibrary(document.getElementById("search-input")?.value || "");
           return;
         }
+        this.playQueue = [...this.tracks];
         this.playByIndex(Number(el.dataset.playIdx));
       });
     });
@@ -271,6 +347,433 @@ class MusicLinkerController {
     });
   }
 
+  // ---- Play by Album, Randomizer (Shuffle), and Offline Album Caching ----
+
+  async playSelectedAlbumInOrder() {
+    if (!this.selectedAlbum) return;
+    const albumTracks = this.sortTracksClientSide(
+      this.allTracks.filter((t) => (t.album || "").toLowerCase() === this.selectedAlbum.toLowerCase()),
+      "track_num"
+    );
+    if (!albumTracks.length) return;
+    this.shuffleEnabled = false;
+    this.updateShuffleButtonUI();
+    this.playQueue = albumTracks;
+    await this.playByIndex(0);
+  }
+
+  async cacheSelectedAlbumOffline() {
+    if (!this.selectedAlbum) return;
+    const albumTracks = this.allTracks.filter(
+      (t) => (t.album || "").toLowerCase() === this.selectedAlbum.toLowerCase()
+    );
+    if (!albumTracks.length) return;
+    const btn = document.getElementById("btn-cache-selected-album");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = `Caching 0/${albumTracks.length}...`;
+    }
+    try {
+      await offlineStore.saveBatchTracksForOffline(albumTracks, api, (done, total) => {
+        if (btn) btn.textContent = `Caching ${done}/${total}...`;
+      });
+      await this.refreshOfflineState();
+      this.renderTrackList();
+      if (btn) btn.textContent = "✓ Album Cached Offline";
+    } catch (err) {
+      alert(`Failed caching album offline: ${err.message}`);
+      if (btn) btn.textContent = "↓ Cache Album Offline";
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  toggleShuffle() {
+    this.shuffleEnabled = !this.shuffleEnabled;
+    this.updateShuffleButtonUI();
+  }
+
+  randomizeAndPlayCurrentView() {
+    const pool = this.viewMode === "layered" ? this.getLayerSelectedTracks() : this.tracks;
+    if (!pool.length) return;
+    const shuffled = [...pool];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    this.shuffleEnabled = true;
+    this.updateShuffleButtonUI();
+    this.playQueue = shuffled;
+    this.playByIndex(0);
+  }
+
+  updateShuffleButtonUI() {
+    const btn = document.getElementById("btn-shuffle");
+    if (!btn) return;
+    btn.className = this.shuffleEnabled
+      ? "px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 text-xs font-semibold transition"
+      : "px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs font-medium transition";
+  }
+
+  // ---- 3-Layer Hierarchical Selection Mode (Artists [Unselected] -> Albums [Unselected] -> Tracks [Selected]) ----
+
+  switchLibraryViewMode(mode) {
+    this.viewMode = mode;
+    const stdPanel = document.getElementById("standard-library-view");
+    const layerPanel = document.getElementById("layered-selector-view");
+    const btnStd = document.getElementById("btn-view-standard");
+    const btnLayer = document.getElementById("btn-view-layered");
+
+    const isLayered = mode === "layered";
+    if (stdPanel) stdPanel.classList.toggle("hidden", isLayered);
+    if (layerPanel) layerPanel.classList.toggle("hidden", !isLayered);
+
+    if (btnStd) {
+      btnStd.className = !isLayered
+        ? "px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950"
+        : "px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200";
+    }
+    if (btnLayer) {
+      btnLayer.className = isLayered
+        ? "px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950"
+        : "px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200";
+    }
+    if (isLayered) {
+      this.renderLayeredSelector();
+    }
+  }
+
+  /**
+   * Computes candidate tracks for Layer 3 based on:
+   *  - Layer 1 (`this.layerSelectedArtists`): starts empty (unselected).
+   *  - Layer 2 (`this.layerSelectedAlbums`): starts empty (unselected).
+   *    If 0 albums are selected in Layer 2, ALL albums by the selected artists pass through!
+   *    If >=1 albums are selected in Layer 2, only those albums pass through.
+   *  - Layer 3 (`tracks`): ALL matching tracks are SELECTED by default unless in `this.layerExcludedTrackIds`.
+   */
+  getLayerCandidateTracks() {
+    if (this.layerSelectedArtists.size === 0) {
+      return [];
+    }
+    let pool = this.allTracks.filter((t) =>
+      this.layerSelectedArtists.has((t.album_artist || t.artist_display || "").toLowerCase())
+    );
+    if (this.layerSelectedAlbums.size > 0) {
+      pool = pool.filter((t) => this.layerSelectedAlbums.has((t.album || "").toLowerCase()));
+    }
+    return this.sortTracksClientSide(pool, this.sortBy);
+  }
+
+  getLayerSelectedTracks() {
+    return this.getLayerCandidateTracks().filter((t) => !this.layerExcludedTrackIds.has(t.id));
+  }
+
+  renderLayeredSelector() {
+    const artistsBox = document.getElementById("layer-1-artists");
+    const albumsBox = document.getElementById("layer-2-albums");
+    const tracksBox = document.getElementById("layer-3-tracks");
+    const summaryEl = document.getElementById("layer-selection-summary");
+    if (!artistsBox || !albumsBox || !tracksBox) return;
+
+    // Group distinct artists from allTracks
+    const artistMap = new Map();
+    this.allTracks.forEach((t) => {
+      const name = t.album_artist || t.artist_display || "Unknown Artist";
+      const key = name.toLowerCase();
+      const entry = artistMap.get(key) || { name, key, count: 0 };
+      entry.count++;
+      artistMap.set(key, entry);
+    });
+    const artists = Array.from(artistMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Render Layer 1: Artists (Default: ALL UNSELECTED)
+    artistsBox.innerHTML = artists.length
+      ? artists
+          .map((art) => {
+            const checked = this.layerSelectedArtists.has(art.key);
+            return `
+              <label class="flex items-center justify-between p-2 rounded-xl border text-xs cursor-pointer transition ${
+                checked
+                  ? "bg-emerald-500/15 border-emerald-500/50 text-emerald-200 font-semibold"
+                  : "bg-zinc-950/60 border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+              }">
+                <div class="flex items-center gap-2 truncate">
+                  <input type="checkbox" data-layer-artist="${this.escapeAttr(art.key)}" ${checked ? "checked" : ""} class="accent-emerald-500" />
+                  <span class="truncate">${this.escape(art.name)}</span>
+                </div>
+                <span class="text-[10px] font-mono opacity-75">${art.count}</span>
+              </label>
+            `;
+          })
+          .join("")
+      : `<div class="text-xs text-zinc-500 p-3">No artists in library.</div>`;
+
+    // Group albums belonging to selected artists in Layer 1
+    const albumMap = new Map();
+    this.allTracks.forEach((t) => {
+      const artKey = (t.album_artist || t.artist_display || "Unknown Artist").toLowerCase();
+      if (!this.layerSelectedArtists.has(artKey)) return;
+      const albName = t.album || "Singles";
+      const albKey = albName.toLowerCase();
+      const entry = albumMap.get(albKey) || {
+        name: albName,
+        key: albKey,
+        artist: t.album_artist || t.artist_display,
+        count: 0,
+      };
+      entry.count++;
+      albumMap.set(albKey, entry);
+    });
+    const candidateAlbums = Array.from(albumMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Render Layer 2: Albums (Optional Filter — Default: ALL UNSELECTED)
+    if (this.layerSelectedArtists.size === 0) {
+      albumsBox.innerHTML = `<div class="text-xs text-zinc-500 p-3 italic">Select 1 or more artists in Layer 1 first.</div>`;
+    } else {
+      albumsBox.innerHTML = candidateAlbums
+        .map((alb) => {
+          const checked = this.layerSelectedAlbums.has(alb.key);
+          return `
+            <label class="flex items-center justify-between p-2 rounded-xl border text-xs cursor-pointer transition ${
+              checked
+                ? "bg-emerald-500/15 border-emerald-500/50 text-emerald-200 font-semibold"
+                : "bg-zinc-950/60 border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+            }">
+              <div class="flex items-center gap-2 truncate">
+                <input type="checkbox" data-layer-album="${this.escapeAttr(alb.key)}" ${checked ? "checked" : ""} class="accent-emerald-500" />
+                <div class="truncate">
+                  <div class="truncate">${this.escape(alb.name)}</div>
+                  <div class="text-[10px] text-zinc-500 truncate">${this.escape(alb.artist)}</div>
+                </div>
+              </div>
+              <span class="text-[10px] font-mono opacity-75">${alb.count}</span>
+            </label>
+          `;
+        })
+        .join("");
+    }
+
+    // Render Layer 3: Tracks (Default: 100% SELECTED for all matching tracks)
+    const candidateTracks = this.getLayerCandidateTracks();
+    const selectedTracks = candidateTracks.filter((t) => !this.layerExcludedTrackIds.has(t.id));
+
+    if (!candidateTracks.length) {
+      tracksBox.innerHTML = `<div class="text-xs text-zinc-500 p-3 italic">Pick artists in Layer 1 to populate tracks (all matching tracks start 100% selected).</div>`;
+    } else {
+      tracksBox.innerHTML = candidateTracks
+        .map((t) => {
+          const checked = !this.layerExcludedTrackIds.has(t.id);
+          const numBadge = t.track_number > 0 ? `#${String(t.track_number).padStart(2, "0")} ` : "";
+          return `
+            <label class="flex items-center justify-between p-2 rounded-xl border text-xs cursor-pointer transition ${
+              checked
+                ? "bg-emerald-950/40 border-emerald-500/40 text-zinc-100"
+                : "bg-zinc-950/40 border-zinc-800/60 text-zinc-500"
+            }">
+              <div class="flex items-center gap-2 min-w-0">
+                <input type="checkbox" data-layer-track="${t.id}" ${checked ? "checked" : ""} class="accent-emerald-500" />
+                <div class="truncate">
+                  <span class="font-mono text-emerald-400">${numBadge}</span>
+                  <span class="font-medium">${this.escape(t.title)}</span>
+                  <span class="text-zinc-500"> • ${this.escape(t.album)}</span>
+                </div>
+              </div>
+            </label>
+          `;
+        })
+        .join("");
+    }
+
+    if (summaryEl) {
+      summaryEl.textContent = `${this.layerSelectedArtists.size} artist(s) • ${
+        this.layerSelectedAlbums.size === 0 ? "All albums" : `${this.layerSelectedAlbums.size} album(s)`
+      } • ${selectedTracks.length}/${candidateTracks.length} track(s) selected`;
+    }
+
+    // Bind Layer 1, 2, 3 checkbox events
+    artistsBox.querySelectorAll("[data-layer-artist]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const key = cb.dataset.layerArtist;
+        if (cb.checked) {
+          this.layerSelectedArtists.add(key);
+        } else {
+          this.layerSelectedArtists.delete(key);
+        }
+        // Keep Layer 3 tracks 100% selected when changing artist filters
+        this.layerExcludedTrackIds.clear();
+        this.renderLayeredSelector();
+      });
+    });
+
+    albumsBox.querySelectorAll("[data-layer-album]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const key = cb.dataset.layerAlbum;
+        if (cb.checked) {
+          this.layerSelectedAlbums.add(key);
+        } else {
+          this.layerSelectedAlbums.delete(key);
+        }
+        this.layerExcludedTrackIds.clear();
+        this.renderLayeredSelector();
+      });
+    });
+
+    tracksBox.querySelectorAll("[data-layer-track]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const id = Number(cb.dataset.layerTrack);
+        if (cb.checked) {
+          this.layerExcludedTrackIds.delete(id);
+        } else {
+          this.layerExcludedTrackIds.add(id);
+        }
+        this.renderLayeredSelector();
+      });
+    });
+  }
+
+  playLayeredSelectionQueue() {
+    const selected = this.getLayerSelectedTracks();
+    if (!selected.length) {
+      alert("Select at least one artist in Layer 1 first.");
+      return;
+    }
+    this.playQueue = selected;
+    this.playByIndex(0);
+  }
+
+  async cacheLayeredSelectionOffline() {
+    const selected = this.getLayerSelectedTracks();
+    if (!selected.length) {
+      alert("Select at least one artist in Layer 1 first.");
+      return;
+    }
+    const btn = document.getElementById("btn-layer-cache-offline");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = `Caching 0/${selected.length}...`;
+    }
+    try {
+      await offlineStore.saveBatchTracksForOffline(selected, api, (done, total) => {
+        if (btn) btn.textContent = `Caching ${done}/${total}...`;
+      });
+      await this.refreshOfflineState();
+      this.renderTrackList();
+      if (btn) btn.textContent = `✓ Cached ${selected.length} Tracks`;
+    } catch (err) {
+      alert(`Offline cache error: ${err.message}`);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // ---- Full Album Downloader (Preview & Batch Download) ----
+
+  async previewAlbumForDownload() {
+    const artist = document.getElementById("dl-album-artist")?.value.trim() || "";
+    const album = document.getElementById("dl-album-title")?.value.trim() || "";
+    const box = document.getElementById("dl-album-preview-list");
+    if (!album) {
+      alert("Enter an Album name or YouTube Album/Playlist URL.");
+      return;
+    }
+    if (box) box.innerHTML = `<div class="text-xs text-zinc-400 p-2">Looking up official album tracklist...</div>`;
+
+    try {
+      const qs = new URLSearchParams({ artist, album });
+      const res = await api.request(`/api/albums/lookup?${qs.toString()}`);
+      this.previewedAlbumTracks = res.tracks || [];
+      if (!this.previewedAlbumTracks.length) {
+        if (box) box.innerHTML = `<div class="text-xs text-amber-400 p-2">No tracks found. Try entering both Artist and Album name.</div>`;
+        return;
+      }
+      if (box) {
+        box.innerHTML = this.previewedAlbumTracks
+          .map(
+            (tr, idx) => `
+            <label class="flex items-center justify-between p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs">
+              <div class="flex items-center gap-2 truncate">
+                <input type="checkbox" data-dl-album-track="${idx}" checked class="accent-emerald-500" />
+                <span class="font-mono text-emerald-400">#${String(tr.track_number || idx + 1).padStart(2, "0")}</span>
+                <span class="truncate">${this.escape(tr.title)}</span>
+              </div>
+            </label>
+          `
+          )
+          .join("");
+      }
+    } catch (err) {
+      if (box) box.innerHTML = `<div class="text-xs text-rose-400 p-2">Lookup failed: ${this.escape(err.message)}</div>`;
+    }
+  }
+
+  async startAlbumDownloadJob() {
+    const artist = document.getElementById("dl-album-artist")?.value.trim() || "Unknown Artist";
+    const album = document.getElementById("dl-album-title")?.value.trim() || "";
+    const bitrate = Number(document.getElementById("ext-bitrate")?.value || 320);
+    if (!album) {
+      alert("Please enter an Album Title or Playlist URL to download.");
+      return;
+    }
+
+    let selectedTracks = [];
+    const checkboxes = document.querySelectorAll("[data-dl-album-track]:checked");
+    if (checkboxes.length && this.previewedAlbumTracks.length) {
+      selectedTracks = Array.from(checkboxes).map(
+        (cb) => this.previewedAlbumTracks[Number(cb.dataset.dlAlbumTrack)]
+      );
+    }
+
+    const logBox = document.getElementById("job-logs");
+    const banner = document.getElementById("live-job-banner");
+    if (logBox) logBox.textContent = `Starting full album download for '${artist} — ${album}'...`;
+    if (banner) banner.classList.remove("hidden");
+
+    try {
+      const job = await api.request("/api/jobs/download-album", {
+        method: "POST",
+        body: JSON.stringify({
+          artist,
+          album,
+          bitrate_kbps: bitrate,
+          tracks: selectedTracks,
+          skip_existing: true,
+        }),
+      });
+      this.subscribeToJobProgress(job.job_id);
+    } catch (err) {
+      alert(`Album download failed to start: ${err.message}`);
+    }
+  }
+
+  subscribeToJobProgress(jobId) {
+    const logBox = document.getElementById("job-logs");
+    api.subscribeJobEvents(jobId, (state) => {
+      if (logBox) {
+        logBox.textContent = (state.logs || []).join("\n");
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+      const pct = `${state.progress_pct}%`;
+      const bar = document.getElementById("job-progress-bar");
+      const bannerBar = document.getElementById("banner-progress-bar");
+      const bannerStep = document.getElementById("banner-step-text");
+      const bannerLyric = document.getElementById("banner-lyric-status");
+
+      if (bar) bar.style.width = pct;
+      if (bannerBar) bannerBar.style.width = pct;
+      if (bannerStep) {
+        bannerStep.textContent = `${state.current_step} (${state.progress_pct}%)`;
+      }
+      if (bannerLyric) {
+        bannerLyric.textContent = `Lyrics: ${state.lyric_sync_status || "Checking..."}`;
+      }
+
+      if (state.status === "completed") {
+        this.loadAlbums();
+        this.loadLibrary(document.getElementById("search-input")?.value || "");
+      }
+    });
+  }
+
   // ---- Internal Track & Bulk Album Renaming ----
 
   openEditTrackModal(track) {
@@ -280,6 +783,7 @@ class MusicLinkerController {
     document.getElementById("edit-track-title").value = track.title || "";
     document.getElementById("edit-track-artist").value = track.artist_display || "";
     document.getElementById("edit-track-album").value = track.album || "";
+    document.getElementById("edit-track-number").value = String(track.track_number || 0);
     document.getElementById("edit-track-year").value = track.original_year || track.release_year || "";
     modal.classList.remove("hidden");
   }
@@ -289,6 +793,7 @@ class MusicLinkerController {
     const title = document.getElementById("edit-track-title")?.value.trim();
     const artist = document.getElementById("edit-track-artist")?.value.trim();
     const album = document.getElementById("edit-track-album")?.value.trim();
+    const trackNumber = Number(document.getElementById("edit-track-number")?.value || 0);
     const year = document.getElementById("edit-track-year")?.value.trim();
     const rememberAlias = document.getElementById("edit-remember-alias")?.checked ?? true;
 
@@ -304,6 +809,7 @@ class MusicLinkerController {
           title,
           artist_display: artist,
           album,
+          track_number: trackNumber,
           release_year: year,
           original_year: year,
           remember_album_alias: rememberAlias,
@@ -360,7 +866,7 @@ class MusicLinkerController {
       if (this.offlineIds.has(track.id)) {
         await offlineStore.removeOfflineTrack(track.id);
       } else {
-        await offlineStore.saveTrackForOffline(track, api.getPairToken());
+        await offlineStore.saveTrackForOffline(track, api);
       }
       await this.refreshOfflineState();
       this.renderTrackList();
@@ -371,21 +877,25 @@ class MusicLinkerController {
   }
 
   async playByIndex(index) {
-    if (index < 0 || index >= this.tracks.length) return;
+    if (!this.playQueue.length) {
+      this.playQueue = [...this.tracks];
+    }
+    if (index < 0 || index >= this.playQueue.length) return;
     this.currentIndex = index;
     this.lastActiveLyricIdx = -1;
     this.lyricOffsetSec = 0.0;
     this.updateLyricOffsetLabel();
 
-    const track = this.tracks[index];
+    const track = this.playQueue[index];
     this.renderTrackList();
     this.updateNowPlayingBar(track);
-    await this.engine.loadAndPlay(track, api.getPairToken());
+    await this.engine.loadAndPlay(track, api);
     this.loadLyricsForTrack(track);
   }
 
   togglePlay() {
     if (this.currentIndex === -1 && this.tracks.length) {
+      this.playQueue = [...this.tracks];
       this.playByIndex(0);
       return;
     }
@@ -393,19 +903,19 @@ class MusicLinkerController {
   }
 
   prevTrack() {
-    if (!this.tracks.length) return;
-    const nextIdx = (this.currentIndex - 1 + this.tracks.length) % this.tracks.length;
+    if (!this.playQueue.length) return;
+    const nextIdx = (this.currentIndex - 1 + this.playQueue.length) % this.playQueue.length;
     this.playByIndex(nextIdx);
   }
 
   async nextTrack() {
-    if (!this.tracks.length) return;
-    const current = this.tracks[this.currentIndex];
+    if (!this.playQueue.length) return;
+    const current = this.playQueue[this.currentIndex];
     if (current) {
       try {
         const res = await api.request(`/api/tracks/${current.id}/next-transition`);
         if (res.transition?.next_track) {
-          const foundIdx = this.tracks.findIndex((t) => t.id === res.transition.next_track.id);
+          const foundIdx = this.playQueue.findIndex((t) => t.id === res.transition.next_track.id);
           if (foundIdx !== -1) {
             await this.playByIndex(foundIdx);
             return;
@@ -413,7 +923,17 @@ class MusicLinkerController {
         }
       } catch (_err) {}
     }
-    const nextIdx = (this.currentIndex + 1) % this.tracks.length;
+
+    if (this.shuffleEnabled && this.playQueue.length > 1) {
+      let randIdx = this.currentIndex;
+      while (randIdx === this.currentIndex) {
+        randIdx = Math.floor(Math.random() * this.playQueue.length);
+      }
+      await this.playByIndex(randIdx);
+      return;
+    }
+
+    const nextIdx = (this.currentIndex + 1) % this.playQueue.length;
     await this.playByIndex(nextIdx);
   }
 
@@ -461,7 +981,8 @@ class MusicLinkerController {
     try {
       this.lyricsData = await api.request(track.lyrics_url);
     } catch (_err) {
-      this.lyricsData = { synced: false, sync_mode: "none", lines: [] };
+      const offlineRec = await offlineStore.getOfflineTrackRecord(track.id);
+      this.lyricsData = offlineRec?.offline_lyrics || { synced: false, sync_mode: "none", lines: [] };
     }
     this.lastActiveLyricIdx = -1;
     this.renderLyrics();
@@ -511,7 +1032,6 @@ class MusicLinkerController {
       })
       .join("");
 
-    // Clicking any lyric line jumps the player to that timestamp
     box.querySelectorAll("[data-lyric-time]").forEach((el) => {
       el.addEventListener("click", () => {
         const t = Number(el.dataset.lyricTime || 0);
@@ -520,12 +1040,6 @@ class MusicLinkerController {
     });
   }
 
-  /**
-   * Crucial Bug Fix:
-   *  - Never calls `el.scrollIntoView()`, which scrolled ancestor containers and prevented checking downloads.
-   *  - Computes `box.scrollTo({ top })` strictly inside `#lyrics-container` ONLY when `activeIdx` changes,
-   *    and respects `this.userScrollLockUntil` when the user manually scrolls.
-   */
   handleTimeUpdate(cur, dur) {
     const seekEl = document.getElementById("seek-bar");
     const timeEl = document.getElementById("time-display");
@@ -550,7 +1064,6 @@ class MusicLinkerController {
       }
     }
 
-    // Update rough/exact lyric progress indicator bar & text
     const roughPct = Math.round(((activeIdx + 1) / totalLines) * 100);
     const roughPosEl = document.getElementById("lyric-rough-pos");
     const roughBarEl = document.getElementById("lyric-progress-fill");
@@ -561,7 +1074,6 @@ class MusicLinkerController {
       roughBarEl.style.width = `${roughPct}%`;
     }
 
-    // Only touch DOM classes and container scroll when the active line actually changes
     if (activeIdx === this.lastActiveLyricIdx) return;
 
     const prevEl = document.getElementById(`lyric-line-${this.lastActiveLyricIdx}`);
@@ -609,10 +1121,11 @@ class MusicLinkerController {
     const coverEl = document.getElementById("np-cover");
     const carTitle = document.getElementById("car-title");
     const carArtist = document.getElementById("car-artist");
-    if (titleEl) titleEl.textContent = track.title;
+    const numPrefix = track.track_number > 0 ? `#${String(track.track_number).padStart(2, "0")} ` : "";
+    if (titleEl) titleEl.textContent = `${numPrefix}${track.title}`;
     if (artistEl) artistEl.textContent = `${track.artist_display} • ${track.album}`;
     if (coverEl) {
-      coverEl.src = track.cover_url || "/icon.svg";
+      coverEl.src = track.cover_url ? api.resolveUrl(track.cover_url) : "/icon.svg";
     }
     if (carTitle) carTitle.textContent = track.title;
     if (carArtist) carArtist.textContent = track.artist_display;
@@ -643,7 +1156,7 @@ class MusicLinkerController {
     });
   }
 
-  // ---- Extraction Job & Pinned Live Download Telemetry ----
+  // ---- Extraction Job ----
 
   async startExtractionJob() {
     const username = document.getElementById("ext-username")?.value.trim();
@@ -676,31 +1189,7 @@ class MusicLinkerController {
           use_llm_filter: useLlmFilter,
         }),
       });
-      api.subscribeJobEvents(job.job_id, (state) => {
-        if (logBox) {
-          logBox.textContent = (state.logs || []).join("\n");
-          logBox.scrollTop = logBox.scrollHeight;
-        }
-        const pct = `${state.progress_pct}%`;
-        const bar = document.getElementById("job-progress-bar");
-        const bannerBar = document.getElementById("banner-progress-bar");
-        const bannerStep = document.getElementById("banner-step-text");
-        const bannerLyric = document.getElementById("banner-lyric-status");
-
-        if (bar) bar.style.width = pct;
-        if (bannerBar) bannerBar.style.width = pct;
-        if (bannerStep) {
-          bannerStep.textContent = `${state.current_step} (${state.progress_pct}%)`;
-        }
-        if (bannerLyric) {
-          bannerLyric.textContent = `Lyrics: ${state.lyric_sync_status || "Checking..."}`;
-        }
-
-        if (state.status === "completed") {
-          this.loadAlbums();
-          this.loadLibrary(document.getElementById("search-input")?.value || "");
-        }
-      });
+      this.subscribeToJobProgress(job.job_id);
     } catch (err) {
       alert(`Failed starting job: ${err.message}`);
     }
@@ -716,7 +1205,6 @@ class MusicLinkerController {
     if (listEl) listEl.innerHTML = "";
 
     try {
-      // Save any updated proxy fields first
       await this.saveSettings(true);
       const res = await api.request("/api/curation/analyze", { method: "POST" });
       this.proposedCurationActions = res.actions || [];
@@ -794,9 +1282,13 @@ class MusicLinkerController {
     }
   }
 
-  // ---- Settings & Phone Sync ----
+  // ---- Settings & APK / Phone LAN Sync ----
 
   async loadSettingsIntoUI() {
+    const originInput = document.getElementById("apk-server-url-input");
+    if (originInput) {
+      originInput.value = api.getServerOrigin();
+    }
     try {
       const cfg = await api.request("/api/settings");
       const setVal = (id, v) => {
@@ -838,14 +1330,29 @@ class MusicLinkerController {
   async openSyncModal() {
     const modal = document.getElementById("sync-modal");
     const urlBox = document.getElementById("sync-pairing-url");
+    const originInput = document.getElementById("apk-server-url-input");
     if (!modal) return;
     modal.classList.remove("hidden");
+    if (originInput) {
+      originInput.value = api.getServerOrigin();
+    }
     try {
       const info = await api.request("/api/sync/info");
       if (urlBox) urlBox.textContent = info.pairing_url;
-    } catch (err) {
-      if (urlBox) urlBox.textContent = err.message;
+    } catch (_err) {
+      if (urlBox) {
+        urlBox.textContent = "Offline / APK Standalone Mode — Paste your PC's Pairing URL below to sync.";
+      }
     }
+  }
+
+  async saveApkServerConnection() {
+    const rawUrl = document.getElementById("apk-server-url-input")?.value.trim() || "";
+    api.setServerOrigin(rawUrl);
+    document.getElementById("sync-modal")?.classList.add("hidden");
+    await this.loadAlbums();
+    await this.loadLibrary();
+    offlineStore.flushOfflineScrobbles(api).catch(() => {});
   }
 
   async toggleCarMode() {
@@ -867,15 +1374,42 @@ class MusicLinkerController {
   }
 
   bindDOMEvents() {
-    // Player controls
+    // Player controls & Randomizer
     document.getElementById("btn-play")?.addEventListener("click", () => this.togglePlay());
     document.getElementById("btn-prev")?.addEventListener("click", () => this.prevTrack());
     document.getElementById("btn-next")?.addEventListener("click", () => this.nextTrack());
+    document.getElementById("btn-shuffle")?.addEventListener("click", () => this.toggleShuffle());
+    document.getElementById("btn-randomize-now")?.addEventListener("click", () => this.randomizeAndPlayCurrentView());
     document.getElementById("car-btn-play")?.addEventListener("click", () => this.togglePlay());
     document.getElementById("car-btn-prev")?.addEventListener("click", () => this.prevTrack());
     document.getElementById("car-btn-next")?.addEventListener("click", () => this.nextTrack());
     document.getElementById("btn-car-mode")?.addEventListener("click", () => this.toggleCarMode());
     document.getElementById("btn-exit-car")?.addEventListener("click", () => this.toggleCarMode());
+
+    // Sort order selector (Track #, Alphabetical, Plays, Recent)
+    document.getElementById("sort-select")?.addEventListener("change", (e) => {
+      this.sortBy = e.target.value || "track_num";
+      this.loadLibrary(document.getElementById("search-input")?.value || "");
+    });
+
+    // View mode switcher: Standard Library vs 3-Layer Selector
+    document.getElementById("btn-view-standard")?.addEventListener("click", () => this.switchLibraryViewMode("standard"));
+    document.getElementById("btn-view-layered")?.addEventListener("click", () => this.switchLibraryViewMode("layered"));
+
+    // 3-Layer Selector action buttons
+    document.getElementById("btn-layer-play")?.addEventListener("click", () => this.playLayeredSelectionQueue());
+    document.getElementById("btn-layer-shuffle")?.addEventListener("click", () => this.randomizeAndPlayCurrentView());
+    document.getElementById("btn-layer-cache-offline")?.addEventListener("click", () => this.cacheLayeredSelectionOffline());
+    document.getElementById("btn-layer-clear-artists")?.addEventListener("click", () => {
+      this.layerSelectedArtists.clear();
+      this.layerSelectedAlbums.clear();
+      this.layerExcludedTrackIds.clear();
+      this.renderLayeredSelector();
+    });
+
+    // Play by Album & Offline Album Cache buttons
+    document.getElementById("btn-play-selected-album")?.addEventListener("click", () => this.playSelectedAlbumInOrder());
+    document.getElementById("btn-cache-selected-album")?.addEventListener("click", () => this.cacheSelectedAlbumOffline());
 
     // Styled Seek & Volume Sliders
     document.getElementById("seek-bar")?.addEventListener("input", (e) => {
@@ -887,7 +1421,7 @@ class MusicLinkerController {
       this.engine.setBaseVolume(Number(e.target.value) / 100.0);
     });
 
-    // Pause Lyric Auto-Scroll for 4.5s when user manually scrolls or touches #lyrics-container
+    // Pause Lyric Auto-Scroll on manual interaction
     const lyricsBox = document.getElementById("lyrics-container");
     if (lyricsBox) {
       const lockScroll = () => {
@@ -898,7 +1432,6 @@ class MusicLinkerController {
       lyricsBox.addEventListener("mousedown", lockScroll);
     }
 
-    // Lyric timing offset buttons
     document.getElementById("btn-lyric-earlier")?.addEventListener("click", () => this.adjustLyricOffset(-0.5));
     document.getElementById("btn-lyric-later")?.addEventListener("click", () => this.adjustLyricOffset(0.5));
 
@@ -915,11 +1448,14 @@ class MusicLinkerController {
     document.getElementById("btn-confirm-album-rename")?.addEventListener("click", () => this.submitBulkAlbumRename());
     document.getElementById("btn-save-track-edit")?.addEventListener("click", () => this.saveEditedTrackMetadata());
 
-    // Jobs, LLM Curation & Settings
+    // Jobs, Full Album Downloader, LLM Curation & APK Pairing
     document.getElementById("btn-start-extract")?.addEventListener("click", () => this.startExtractionJob());
+    document.getElementById("btn-preview-album")?.addEventListener("click", () => this.previewAlbumForDownload());
+    document.getElementById("btn-download-album")?.addEventListener("click", () => this.startAlbumDownloadJob());
     document.getElementById("btn-run-curator")?.addEventListener("click", () => this.runLLMLibraryAudit());
     document.getElementById("btn-apply-curation")?.addEventListener("click", () => this.applySelectedCurationActions());
     document.getElementById("btn-show-sync")?.addEventListener("click", () => this.openSyncModal());
+    document.getElementById("btn-save-apk-server")?.addEventListener("click", () => this.saveApkServerConnection());
     document.getElementById("btn-save-settings")?.addEventListener("click", () => this.saveSettings(false));
     document.getElementById("btn-save-llm-settings")?.addEventListener("click", () => this.saveSettings(false));
   }

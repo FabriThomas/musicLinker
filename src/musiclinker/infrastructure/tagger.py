@@ -1,4 +1,4 @@
-"""Advanced ID3v2.4 tagger supporting null-delimited multi-artist frames, original year, ReplayGain, and cover art."""
+"""Advanced ID3v2.4 tagger supporting TRCK track numbers, null-delimited multi-artist frames, ReplayGain, and cover art."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from mutagen.id3 import (
     TIT2,
     TPE1,
     TPE2,
+    TRCK,
     TXXX,
     USLT,
 )
@@ -26,7 +27,7 @@ from musiclinker.infrastructure.hasher import clean_album_name, compute_track_ha
 
 
 class AudioTagger:
-    """Reads and writes audiophile-grade ID3v2.4 metadata frames on MP3 files."""
+    """Reads and writes audiophile-grade ID3v2.4 metadata frames (`TIT2`, `TPE1`, `TPE2`, `TALB`, `TRCK`, `TDRC`, `TDOR`, `APIC`)."""
 
     def write_id3v24_tags(
         self,
@@ -36,6 +37,7 @@ class AudioTagger:
         artists: list[str],
         album_artist: str,
         album: str,
+        track_number: int = 0,
         release_year: str = "",
         original_year: str = "",
         lastfm_playcount: int = 0,
@@ -61,6 +63,10 @@ class AudioTagger:
 
             tags.delall("TALB")
             tags.add(TALB(encoding=3, text=[album or "Singles"]))
+
+            if track_number and track_number > 0:
+                tags.delall("TRCK")
+                tags.add(TRCK(encoding=3, text=[str(track_number)]))
 
             if release_year:
                 tags.delall("TDRC")
@@ -122,10 +128,10 @@ class AudioTagger:
         artists: list[str],
         album_artist: str,
         album: str,
+        track_number: int = 0,
         release_year: str = "",
         original_year: str = "",
     ) -> None:
-        """Update core text frames (`TIT2`, `TPE1`, `TPE2`, `TALB`, `TDRC`, `TDOR`) while preserving cover art and audio."""
         try:
             try:
                 tags = ID3(str(mp3_path))
@@ -143,6 +149,10 @@ class AudioTagger:
 
             tags.delall("TALB")
             tags.add(TALB(encoding=3, text=[album or "Singles"]))
+
+            if track_number and track_number > 0:
+                tags.delall("TRCK")
+                tags.add(TRCK(encoding=3, text=[str(track_number)]))
 
             if release_year:
                 tags.delall("TDRC")
@@ -178,6 +188,7 @@ class AudioTagger:
                 "artists": artists,
                 "album_artist": album_artist,
                 "album": clean_album_name(raw_album, clean_title),
+                "track_number": 0,
                 "release_year": "",
                 "original_year": "",
                 "duration": duration,
@@ -204,6 +215,13 @@ class AudioTagger:
         talb = tags.get("TALB")
         album = str(talb.text[0]).strip() if (talb and talb.text) else "Singles"
 
+        trck = tags.get("TRCK")
+        track_number = 0
+        if trck and trck.text:
+            raw_trck = str(trck.text[0]).split("/")[0].strip()
+            if raw_trck.isdigit():
+                track_number = int(raw_trck)
+
         tdrc = tags.get("TDRC")
         release_year = str(tdrc.text[0])[:4] if (tdrc and tdrc.text) else ""
 
@@ -229,6 +247,7 @@ class AudioTagger:
             "artists": artists,
             "album_artist": album_artist,
             "album": album,
+            "track_number": track_number,
             "release_year": release_year,
             "original_year": original_year,
             "duration": duration,

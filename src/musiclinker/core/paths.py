@@ -47,7 +47,6 @@ class AppPaths:
         return self.bundle_dir / filename
 
     def ensure_directories(self) -> None:
-        """Create required runtime directories if they do not exist."""
         for directory in (
             self.app_data_dir,
             self.webview_cache_dir,

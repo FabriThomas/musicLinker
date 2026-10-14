@@ -8,15 +8,9 @@ from typing import Any
 
 import requests
 
-from musiclinker.core.logging_config import logger
-
 
 class LLMClient:
-    """
-    Calls any OpenAI-compatible API endpoint or user-supplied reverse proxy URL
-    (e.g. OpenAI, OpenRouter, Gemini OpenAI-compat, Groq, Ollama, or custom proxy)
-    to deduplicate repeated tracks (e.g. Remastered vs Radio Edit) and canonicalize track/album names.
-    """
+    """Calls any OpenAI-compatible API endpoint or reverse proxy URL for track deduplication and album canonicalization."""
 
     def __init__(self, base_url: str, api_key: str = "", model: str = "gpt-4o-mini", timeout: float = 35.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -40,16 +34,6 @@ class LLMClient:
         return f"{self.base_url}/v1/chat/completions"
 
     def curate_tracks_json(self, tracks_payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """
-        Send a batch of tracks to the LLM proxy and return structured curation instructions:
-          - `track_id`: int
-          - `action_type`: `'rename' | 'duplicate_remove' | 'keep'`
-          - `proposed_title`: clean canonical song title
-          - `proposed_artist`: clean artist string
-          - `proposed_album`: proper canonical studio album name
-          - `duplicate_of_track_id`: int | null (when two versions of the same song exist)
-          - `reason`: short explanation
-        """
         system_prompt = (
             "You are an expert music discography curator and audio library deduplicator.\n"
             "Given a JSON list of tracks (each with id, title, artist, album, playcount), analyze them and return ONLY a valid JSON object with a single key \"actions\" containing an array of objects.\n"

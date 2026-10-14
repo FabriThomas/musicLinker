@@ -1,4 +1,4 @@
-"""FastAPI server delivering HTTP 206 streaming, SSE job events, Album Auto-Filter/Rename, and LLM Curation."""
+"""FastAPI server delivering HTTP 206 streaming, SSE jobs, Layered Hierarchy, Album Downloader, and LLM Curation."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from musiclinker.core.paths import PATHS
 from musiclinker.core.security import build_pairing_url, detect_lan_ip, verify_request_access
 from musiclinker.domain.models import (
     AlbumBulkRenamePayload,
+    AlbumDownloadRequest,
     BatchScrobblePayload,
     DirectDownloadRequest,
     ExtractionJobRequest,
@@ -60,7 +61,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="2.1.0",
+        version="3.0.0",
         lifespan=lifespan,
     )
 
@@ -72,12 +73,21 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ---- Library, Album Filtering & Internal Renaming Endpoints ----
+    # ---- Library, Sorting, Layered Hierarchy & Album Endpoints ----
 
     @app.get("/api/tracks", dependencies=[Depends(require_paired_client)])
-    async def list_tracks(search: str = "", artist: str = "", album: str = "") -> dict[str, Any]:
-        tracks = db_repo.list_tracks(search=search, artist=artist, album=album)
+    async def list_tracks(
+        search: str = "",
+        artist: str = "",
+        album: str = "",
+        sort_by: str = "track_num",
+    ) -> dict[str, Any]:
+        tracks = db_repo.list_tracks(search=search, artist=artist, album=album, sort_by=sort_by)
         return {"tracks": [t.to_dict() for t in tracks], "total": len(tracks)}
+
+    @app.get("/api/artists", dependencies=[Depends(require_paired_client)])
+    async def list_artists() -> dict[str, Any]:
+        return {"artists": db_repo.list_artists_summary()}
 
     @app.get("/api/albums", dependencies=[Depends(require_paired_client)])
     async def list_albums() -> dict[str, Any]:
@@ -85,6 +95,14 @@ def create_app() -> FastAPI:
             "albums": db_repo.list_albums_summary(),
             "aliases": db_repo.list_album_aliases(),
         }
+
+    @app.get("/api/albums/lookup", dependencies=[Depends(require_paired_client)])
+    async def lookup_external_album(
+        artist: str = Query(default=""),
+        album: str = Query(..., min_length=1),
+    ) -> dict[str, Any]:
+        """Resolve an album's tracklist (`1..N`) from MusicBrainz, Last.fm, or YouTube prior to downloading."""
+        return library_service.lookup_external_album_tracklist(artist=artist, album_or_url=album)
 
     @app.post("/api/albums/rename", dependencies=[Depends(require_paired_client)])
     async def rename_album_endpoint(payload: AlbumBulkRenamePayload) -> dict[str, Any]:
@@ -232,7 +250,7 @@ def create_app() -> FastAPI:
         resolved = library_service.resolve_next_transition(track_id)
         return {"transition": resolved}
 
-    # ---- YouTube Search & Background Extraction Jobs ----
+    # ---- YouTube Search, Last.fm Extraction & Full Album Download Jobs ----
 
     @app.get("/api/youtube/search", dependencies=[Depends(require_paired_client)])
     async def search_youtube(q: str = Query(..., min_length=2)) -> dict[str, Any]:
@@ -247,6 +265,11 @@ def create_app() -> FastAPI:
     @app.post("/api/jobs/download", dependencies=[Depends(require_paired_client)])
     async def start_direct_download(req: DirectDownloadRequest) -> dict[str, Any]:
         job = job_service.start_direct_download_job(req)
+        return job.to_dict()
+
+    @app.post("/api/jobs/download-album", dependencies=[Depends(require_paired_client)])
+    async def start_album_download(req: AlbumDownloadRequest) -> dict[str, Any]:
+        job = job_service.start_album_download_job(req)
         return job.to_dict()
 
     @app.get("/api/jobs", dependencies=[Depends(require_paired_client)])
@@ -282,7 +305,7 @@ def create_app() -> FastAPI:
 
         return StreamingResponse(_event_generator(), media_type="text/event-stream")
 
-    # ---- Phone LAN Pairing & Settings Endpoints ----
+    # ---- Phone / APK LAN Pairing & Settings Endpoints ----
 
     @app.get("/api/sync/info", dependencies=[Depends(require_paired_client)])
     async def get_sync_info(request: Request) -> dict[str, Any]:
@@ -293,6 +316,7 @@ def create_app() -> FastAPI:
         return {
             "lan_ip": detect_lan_ip(),
             "port": port,
+            "server_origin": f"http://{detect_lan_ip()}:{port}",
             "pairing_url": pairing_url,
             "pair_token": token,
             "pending_scrobbles": len(db_repo.get_pending_scrobbles(limit=500)),
@@ -348,7 +372,7 @@ def create_app() -> FastAPI:
         )
         return session_info
 
-    # ---- PWA Static Files & Root Entrypoint ----
+    # ---- PWA / APK Static Files & Root Entrypoint ----
 
     if (PATHS.web_dir / "js").exists():
         app.mount("/js", StaticFiles(directory=str(PATHS.web_dir / "js")), name="js")

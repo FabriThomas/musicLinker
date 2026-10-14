@@ -127,6 +127,7 @@ class DesktopAppController:
                 pystray.MenuItem("Play / Pause", lambda: self._eval_js("window.MusicLinkerApp?.togglePlay()")),
                 pystray.MenuItem("Next Track", lambda: self._eval_js("window.MusicLinkerApp?.nextTrack()")),
                 pystray.MenuItem("Previous Track", lambda: self._eval_js("window.MusicLinkerApp?.prevTrack()")),
+                pystray.MenuItem("Toggle Randomizer", lambda: self._eval_js("window.MusicLinkerApp?.toggleShuffle()")),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Open in Default Browser", lambda: webbrowser.open(self.local_url)),
                 pystray.MenuItem("Quit MusicLinker", self._quit_app),
@@ -168,11 +169,11 @@ class DesktopAppController:
             import webview
 
             self.window = webview.create_window(
-                title="MusicLinker Studio v2.1",
+                title="MusicLinker Studio v3.0",
                 url=self.local_url,
-                width=1340,
-                height=860,
-                min_size=(960, 640),
+                width=1380,
+                height=880,
+                min_size=(980, 660),
                 background_color="#09090b",
                 text_select=False,
             )

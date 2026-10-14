@@ -1,4 +1,4 @@
-"""MusicLinker: Offline-first Last.fm extractor, LLM curator, and personal music streaming ecosystem."""
+"""MusicLinker: Offline-first Last.fm extractor, album downloader, LLM curator, and Windows/Android APK ecosystem."""
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"
 __all__ = ["__version__"]

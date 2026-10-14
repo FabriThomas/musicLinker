@@ -26,6 +26,7 @@ def render_dashboard() -> None:
             tracks,
             column_order=[
                 "id",
+                "track_number",
                 "artist_display",
                 "title",
                 "album",

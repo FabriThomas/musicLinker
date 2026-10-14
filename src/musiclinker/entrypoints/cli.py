@@ -1,4 +1,4 @@
-"""Interactive CLI Wizard and scriptable headless runner for Last.fm extraction and LLM curation."""
+"""Interactive CLI Wizard and scriptable headless runner for Last.fm extraction and Full Album downloading."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ import argparse
 import sys
 import time
 
-from musiclinker.domain.models import ExtractionJobRequest, JobStatus
+from musiclinker.domain.models import AlbumDownloadRequest, ExtractionJobRequest, JobStatus
 from musiclinker.infrastructure.db import db_repo
 from musiclinker.services.job_service import job_service
 
 
 def run_interactive_wizard() -> ExtractionJobRequest:
     cfg = db_repo.get_settings()
-    print("=== MusicLinker v2.1 Interactive CLI Wizard ===")
+    print("=== MusicLinker v3.0 Interactive CLI Wizard ===")
     default_user = cfg.get("lastfm_username") or ""
     username = input(f"Last.fm Username [{default_user}]: ").strip() or default_user
     if not username:
@@ -55,19 +55,30 @@ def run_interactive_wizard() -> ExtractionJobRequest:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="MusicLinker Headless CLI & Interactive Wizard")
+    parser = argparse.ArgumentParser(description="MusicLinker Headless CLI & Album Downloader")
     parser.add_argument("--username", type=str, help="Last.fm username")
     parser.add_argument("--period", type=str, default="12month", help="Last.fm period or 'custom_year'")
     parser.add_argument("--year", type=int, default=None, help="Calendar year when --period custom_year")
     parser.add_argument("--min-plays", type=int, default=10, help="Minimum play count filter (default: 10)")
     parser.add_argument("--cap", type=int, default=25, help="Maximum tracks to download (default: 25)")
     parser.add_argument("--bitrate", type=int, default=320, choices=[192, 320], help="Target MP3 bitrate")
-    parser.add_argument("--llm-filter", action="store_true", help="Enable LLM deduplication & album fixing before download")
+    parser.add_argument("--llm-filter", action="store_true", help="Enable LLM deduplication & album fixing")
     parser.add_argument("--download", action="store_true", help="Enable MP3 downloading in non-interactive mode")
+    parser.add_argument("--artist", type=str, help="Artist name for full album download mode")
+    parser.add_argument("--album", type=str, help="Album title or playlist URL for full album download mode")
     args = parser.parse_args()
 
-    if not args.username:
+    if args.album:
+        job = job_service.start_album_download_job(
+            AlbumDownloadRequest(
+                artist=args.artist or "Unknown Artist",
+                album=args.album,
+                bitrate_kbps=args.bitrate,
+            )
+        )
+    elif not args.username:
         req = run_interactive_wizard()
+        job = job_service.start_lastfm_extraction_job(req)
     else:
         req = ExtractionJobRequest(
             username=args.username,
@@ -79,8 +90,8 @@ def main() -> None:
             download_enabled=args.download,
             use_llm_filter=args.llm_filter,
         )
+        job = job_service.start_lastfm_extraction_job(req)
 
-    job = job_service.start_lastfm_extraction_job(req)
     seen_logs = 0
     while job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
         current_logs = job.logs
@@ -94,8 +105,6 @@ def main() -> None:
 
     if job.status == JobStatus.COMPLETED:
         print(f"\nSuccess! Downloaded {job.downloaded_count} track(s).")
-        if job.excess_saved_path:
-            print(f"Excess track list saved to: {job.excess_saved_path}")
     else:
         print(f"\nJob finished with status: {job.status.value}")
         sys.exit(1)

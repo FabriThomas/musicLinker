@@ -4,15 +4,18 @@ __pycache__/
 *$py.class
 .pytest_cache/
 
-# Virtual environments
+# Virtual environments & Node
 .venv/
 venv/
 env/
+node_modules/
 
 # Build & distribution
 build/
 dist/
 *.egg-info/
+android/.gradle/
+android/app/build/
 
 # Runtime & user data (never commit secrets or media)
 .env

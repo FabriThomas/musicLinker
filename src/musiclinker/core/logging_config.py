@@ -24,7 +24,6 @@ class NullStream(io.TextIOBase):
 
 
 def configure_logging(level: int = logging.INFO) -> logging.Logger:
-    """Configure root and application loggers with UTF-8 encoding and file rotation."""
     if sys.stdout is None:
         sys.stdout = NullStream()
     if sys.stderr is None:

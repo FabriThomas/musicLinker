@@ -25,7 +25,7 @@ class LyricsClient:
 
     def __init__(self) -> None:
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "MusicLinker/2.1 (https://github.com/FabriThomas/musicLink)"})
+        self.session.headers.update({"User-Agent": "MusicLinker/3.0 (https://github.com/FabriThomas/musicLink)"})
 
     def fetch_and_save_lrc(
         self,
@@ -36,9 +36,6 @@ class LyricsClient:
         target_lrc_path: Path,
         youtube_lrc_fallback: str = "",
     ) -> tuple[str, str, str]:
-        """
-        Fetch lyrics, write `.lrc` file with embedded sync-mode header, and return `(lrc_text, sync_mode, summary_msg)`.
-        """
         synced_text, plain_text = self.fetch_lyrics(artist, title, album, duration)
         sync_mode = "none"
         final_body = ""
@@ -72,7 +69,6 @@ class LyricsClient:
 
     @staticmethod
     def interpolate_plain_lyrics_to_lrc(plain_text: str, duration: int) -> str:
-        """Assign rough proportional `[mm:ss.xx]` timestamps to plain lyrics across 8%..92% of song duration."""
         raw_lines = [l.strip() for l in plain_text.splitlines() if l.strip()]
         if not raw_lines:
             return ""
@@ -119,10 +115,6 @@ class LyricsClient:
 
     @classmethod
     def parse_lrc_content(cls, raw_lrc: str, fallback_duration: int = 200) -> dict[str, Any]:
-        """
-        Parse `.lrc` content into structured lines with `sync_mode` (`exact_lrc`, `youtube_captions`, `rough_interpolated`).
-        If a file contains plain lines without timestamps, automatically interpolates rough timestamps.
-        """
         if not raw_lrc.strip():
             return {"synced": False, "sync_mode": "none", "lines": []}
 

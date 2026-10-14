@@ -1,4 +1,4 @@
-"""Library synchronizer, internal album/track renamer (SQLite + ID3v2.4 + disk move), and 3-tier lyrics loader."""
+"""Library synchronizer, external album tracklist resolver, internal album/track renamer, and 3-tier lyrics loader."""
 
 from __future__ import annotations
 
@@ -13,8 +13,11 @@ from musiclinker.core.paths import PATHS
 from musiclinker.domain.models import AlbumBulkRenamePayload, TrackEntity, TrackMetadataUpdatePayload
 from musiclinker.infrastructure.db import DatabaseRepository, db_repo
 from musiclinker.infrastructure.hasher import compute_track_hash, split_artists
+from musiclinker.infrastructure.lastfm_client import LastFMClient
 from musiclinker.infrastructure.lyrics_client import lyrics_client
+from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
 from musiclinker.infrastructure.tagger import audio_tagger
+from musiclinker.infrastructure.youtube_client import youtube_client
 
 _SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -25,13 +28,12 @@ def sanitize_filename(name: str, fallback: str = "Unknown") -> str:
 
 
 class LibraryService:
-    """Manages local music library indexing, internal album/track renaming, and probabilistic song transitions."""
+    """Manages local music library indexing, external album lookups, internal renaming, and song transitions."""
 
     def __init__(self, repo: DatabaseRepository = db_repo) -> None:
         self.repo = repo
 
     def scan_and_sync_downloads(self) -> dict[str, int]:
-        """Scan `downloads/` for MP3 files, apply album alias filters, and index tracks into `library.db`."""
         pruned = self.repo.remove_missing_files()
         indexed = 0
 
@@ -60,6 +62,7 @@ class LibraryService:
                     artists=meta["artists"],
                     album_artist=meta["album_artist"],
                     album=canonical_album,
+                    track_number=int(meta.get("track_number") or 0),
                     release_year=meta["release_year"],
                     original_year=meta["original_year"],
                     duration=meta["duration"],
@@ -78,10 +81,61 @@ class LibraryService:
         logger.info("Library sync complete: %d track(s) indexed, %d missing entry(s) pruned", indexed, pruned)
         return {"indexed": indexed, "pruned": pruned}
 
+    def lookup_external_album_tracklist(self, artist: str, album_or_url: str) -> dict[str, Any]:
+        """
+        Resolve the full tracklist (`1..N`) for an album so the user can preview and download the entire album:
+          1. If `album_or_url` is a YouTube playlist/album URL, expand via `yt-dlp`.
+          2. Otherwise query MusicBrainz for the official release tracklist.
+          3. Fallback to Last.fm `album.getInfo` if MusicBrainz has no match.
+        """
+        if album_or_url.strip().startswith(("http://", "https://")):
+            yt_tracks = youtube_client.expand_playlist_or_album_url(album_or_url.strip(), default_artist=artist)
+            return {
+                "artist": artist.strip() or (yt_tracks[0]["artist"] if yt_tracks else "Unknown Artist"),
+                "album": "Downloaded Album",
+                "release_year": "",
+                "source": "youtube_playlist",
+                "tracks": yt_tracks,
+            }
+
+        mb_data = musicbrainz_client.fetch_album_tracklist(artist, album_or_url)
+        if mb_data.get("tracks"):
+            mb_data["source"] = "musicbrainz"
+            return mb_data
+
+        cfg = self.repo.get_settings()
+        lfm = LastFMClient(api_key=str(cfg.get("lastfm_api_key", "")))
+        lfm_tracks = lfm.fetch_album_tracklist(artist, album_or_url)
+        if lfm_tracks:
+            return {
+                "artist": artist.strip(),
+                "album": album_or_url.strip(),
+                "release_year": "",
+                "source": "lastfm",
+                "tracks": lfm_tracks,
+            }
+
+        # Final fallback: search YouTube for tracks matching "<Artist> <Album>"
+        yt_matches = youtube_client.search_videos(f"{artist} {album_or_url} audio", max_results=10)
+        fallback_tracks = [
+            {
+                "track_number": idx,
+                "title": m["title"],
+                "artist": artist.strip(),
+                "duration": int(m.get("duration") or 0),
+                "youtube_url": m["url"],
+            }
+            for idx, m in enumerate(yt_matches, start=1)
+        ]
+        return {
+            "artist": artist.strip(),
+            "album": album_or_url.strip(),
+            "release_year": "",
+            "source": "youtube_search",
+            "tracks": fallback_tracks,
+        }
+
     def update_track_metadata(self, track_id: int, payload: TrackMetadataUpdatePayload) -> TrackEntity:
-        """
-        Rename a track's title, artist, or album internally in SQLite AND rewrite its MP3 ID3v2.4 frames + folder path.
-        """
         track = self.repo.get_track(track_id)
         if not track:
             raise ValueError(f"Track ID {track_id} not found.")
@@ -90,6 +144,7 @@ class LibraryService:
         album_artist, artists_list, clean_title = split_artists(payload.artist_display, payload.title)
         artist_display = ", ".join(artists_list)
         new_album = payload.album.strip() or "Singles"
+        new_track_num = payload.track_number if payload.track_number > 0 else track.track_number
         new_hash = compute_track_hash(album_artist, clean_title)
 
         if payload.remember_album_alias and old_album.lower() != new_album.lower():
@@ -106,6 +161,7 @@ class LibraryService:
                 artists=artists_list,
                 album_artist=album_artist,
                 album=new_album,
+                track_number=new_track_num,
                 release_year=payload.release_year or track.release_year,
                 original_year=payload.original_year or track.original_year,
             )
@@ -115,7 +171,8 @@ class LibraryService:
                 / sanitize_filename(new_album, "Singles")
             )
             dest_dir.mkdir(parents=True, exist_ok=True)
-            base_name = f"{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
+            prefix = f"{new_track_num:02d} - " if new_track_num > 0 else ""
+            base_name = f"{prefix}{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
             target_mp3 = dest_dir / f"{base_name}.mp3"
 
             if target_mp3.resolve() != old_mp3.resolve():
@@ -135,6 +192,7 @@ class LibraryService:
             artists=artists_list,
             album_artist=album_artist,
             album=new_album,
+            track_number=new_track_num,
             release_year=payload.release_year or track.release_year,
             original_year=payload.original_year or track.original_year,
             file_path=str(new_mp3.resolve()),
@@ -143,7 +201,6 @@ class LibraryService:
         return updated or track
 
     def bulk_rename_album(self, payload: AlbumBulkRenamePayload) -> dict[str, Any]:
-        """Bulk-rename an album across all matching tracks, update their MP3 ID3 `TALB` frames, and save the alias rule."""
         tracks = self.repo.list_tracks(album=payload.old_album)
         if payload.album_artist.strip():
             tracks = [
@@ -161,6 +218,7 @@ class LibraryService:
                     title=tr.title,
                     artist_display=tr.artist_display,
                     album=payload.new_album,
+                    track_number=tr.track_number,
                     release_year=tr.release_year,
                     original_year=tr.original_year,
                     remember_album_alias=payload.remember_alias,
@@ -175,7 +233,6 @@ class LibraryService:
         }
 
     def get_track_lyrics(self, track: TrackEntity) -> dict[str, Any]:
-        """Return parsed synced or rough-interpolated lyrics for a track, fetching from LRCLIB on demand if missing."""
         if track.lrc_path and Path(track.lrc_path).exists():
             raw = Path(track.lrc_path).read_text(encoding="utf-8", errors="replace")
             return lyrics_client.parse_lrc_content(raw, fallback_duration=track.duration)
@@ -201,6 +258,7 @@ class LibraryService:
                 artists=track.artists,
                 album_artist=track.album_artist,
                 album=track.album,
+                track_number=track.track_number,
                 release_year=track.release_year,
                 original_year=track.original_year,
                 duration=track.duration,
