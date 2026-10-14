@@ -1300,6 +1300,9 @@ class MusicLinkerController {
       setVal("ext-username", cfg.lastfm_username || "");
       setVal("llm-base-url", cfg.llm_base_url || "https://api.openai.com/v1");
       setVal("llm-model", cfg.llm_model || "gpt-4o-mini");
+      setVal("proxy-name", cfg.proxy_name || "default");
+      setVal("proxy-server-url", cfg.proxy_server_url || "");
+      setVal("proxy-password", cfg.proxy_password || "");
     } catch (_err) {}
   }
 
@@ -1310,6 +1313,9 @@ class MusicLinkerController {
     const llmBaseUrl = document.getElementById("llm-base-url")?.value.trim();
     const llmApiKey = document.getElementById("llm-api-key")?.value.trim();
     const llmModel = document.getElementById("llm-model")?.value.trim();
+    const proxyName = document.getElementById("proxy-name")?.value.trim();
+    const proxyServerUrl = document.getElementById("proxy-server-url")?.value.trim();
+    const proxyPassword = document.getElementById("proxy-password")?.value.trim();
 
     await api.request("/api/settings", {
       method: "PUT",
@@ -1320,6 +1326,9 @@ class MusicLinkerController {
         llm_base_url: llmBaseUrl || undefined,
         llm_api_key: llmApiKey || undefined,
         llm_model: llmModel || undefined,
+        proxy_name: proxyName || undefined,
+        proxy_server_url: proxyServerUrl !== undefined ? proxyServerUrl : undefined,
+        proxy_password: proxyPassword !== undefined ? proxyPassword : undefined,
       }),
     });
     if (!silent) {
@@ -1458,6 +1467,7 @@ class MusicLinkerController {
     document.getElementById("btn-save-apk-server")?.addEventListener("click", () => this.saveApkServerConnection());
     document.getElementById("btn-save-settings")?.addEventListener("click", () => this.saveSettings(false));
     document.getElementById("btn-save-llm-settings")?.addEventListener("click", () => this.saveSettings(false));
+    document.getElementById("btn-save-proxy-settings")?.addEventListener("click", () => this.saveSettings(false));
   }
 
   formatTime(sec) {

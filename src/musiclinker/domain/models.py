@@ -247,3 +247,6 @@ class SettingsUpdatePayload(BaseModel):
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
+    proxy_name: str | None = None
+    proxy_server_url: str | None = None
+    proxy_password: str | None = None

@@ -31,6 +31,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "llm_base_url": os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1"),
     "llm_api_key": os.environ.get("LLM_API_KEY", ""),
     "llm_model": os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+    "proxy_name": os.environ.get("PROXY_NAME", "default"),
+    "proxy_server_url": os.environ.get("PROXY_SERVER_URL", ""),
+    "proxy_password": os.environ.get("PROXY_PASSWORD", ""),
     "lan_pair_token": generate_pair_token(),
 }
 

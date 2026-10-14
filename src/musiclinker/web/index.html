@@ -295,15 +295,43 @@
         </button>
       </div>
 
-      <!-- Tab Panel 4: Last.fm Credentials -->
-      <div id="tab-panel-settings" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-3 min-h-0 overflow-y-auto ml-scroll">
-        <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm API Credentials</h2>
-        <input id="set-api-key" type="text" placeholder="Last.fm API Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-        <input id="set-api-secret" type="password" placeholder="Last.fm API Secret" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-        <input id="set-username" type="text" placeholder="Default Last.fm Username" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-        <button id="btn-save-settings" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs">
-          Save Credentials
-        </button>
+      <!-- Tab Panel 4: Settings & Reverse Proxy -->
+      <div id="tab-panel-settings" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-4 min-h-0 overflow-y-auto ml-scroll">
+        <div class="space-y-3">
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">🔀 Built-in Reverse Proxy (`/v1`)</h2>
+          <p class="text-xs text-zinc-400">
+            Forwards local calls (<code class="text-emerald-400">http://localhost:&lt;port&gt;/v1/...</code>) to an external target server URL with proxy password authentication.
+          </p>
+          <div class="space-y-2 bg-zinc-950/70 border border-zinc-800/90 rounded-xl p-3 text-xs">
+            <div>
+              <label class="block text-[10px] text-zinc-400 mb-1">Target Server URL (Destination)</label>
+              <input id="proxy-server-url" type="text" placeholder="https://api.openai.com/v1 or custom host URL" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 font-mono text-xs" />
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[10px] text-zinc-400 mb-1">Proxy Name</label>
+                <input id="proxy-name" type="text" placeholder="default" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 font-mono text-xs" />
+              </div>
+              <div>
+                <label class="block text-[10px] text-zinc-400 mb-1">Proxy Password (Caller Auth)</label>
+                <input id="proxy-password" type="password" placeholder="Password required to call proxy" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs" />
+              </div>
+            </div>
+            <button id="btn-save-proxy-settings" class="w-full py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs">
+              Save Reverse Proxy
+            </button>
+          </div>
+        </div>
+
+        <div class="space-y-3 border-t border-zinc-800/80 pt-3">
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm API Credentials</h2>
+          <input id="set-api-key" type="text" placeholder="Last.fm API Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+          <input id="set-api-secret" type="password" placeholder="Last.fm API Secret" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+          <input id="set-username" type="text" placeholder="Default Last.fm Username" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
+          <button id="btn-save-settings" class="w-full py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold text-xs">
+            Save Credentials
+          </button>
+        </div>
       </div>
     </section>
   </main>

@@ -99,6 +99,25 @@ py start_player.py --host 127.0.0.1 --port 8101
 
 ---
 
+## 🔀 Built-in Reverse Proxy (`/v1`)
+
+MusicLinker includes a built-in reverse proxy that lets you route requests from `http://localhost:<port>/v1` to an external server URL (such as an LLM endpoint, API bridge, or remote server) with optional password protection:
+
+- **Configure in Settings UI**: Open the web app -> **⚙ Settings** -> **Built-in Reverse Proxy (`/v1`)**.
+- **Settings fields**:
+  - **Target Server URL**: e.g. `https://api.openai.com/v1` or custom remote server.
+  - **Proxy Name**: Custom identifier tagged in `X-Proxy-Name` header.
+  - **Proxy Password**: Password callers must provide via Bearer token (`Authorization: Bearer <password>`), `X-Proxy-Password` header, or `?password=<password>` query parameter.
+- **Calling the proxy**:
+  ```bash
+  curl http://localhost:8101/v1/chat/completions \
+    -H "Authorization: Bearer <your-proxy-password>" \
+    -H "Content-Type: application/json" \
+    -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hello!"}]}'
+  ```
+
+---
+
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).

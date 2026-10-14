@@ -130,3 +130,32 @@ def test_v21_cleaners_and_llm():
     llm_local = LLMClient(base_url="http://localhost:11434/v1")
     assert llm_local.is_configured() is True
 
+
+def test_reverse_proxy_endpoints():
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.infrastructure.db import db_repo
+
+    client = TestClient(app)
+
+    # 1. When proxy_server_url is not configured, should return 502
+    db_repo.update_settings({"proxy_server_url": "", "proxy_password": ""})
+    res = client.get("/v1/models")
+    assert res.status_code == 502
+    assert "not configured" in res.json()["detail"]
+
+    # 2. When proxy_password is set, wrong password returns 401
+    db_repo.update_settings({
+        "proxy_server_url": "https://api.openai.com/v1",
+        "proxy_password": "supersecretpassword",
+        "proxy_name": "custom-proxy"
+    })
+    res_unauth = client.get("/v1/models")
+    assert res_unauth.status_code == 401
+
+    res_wrong = client.get("/v1/models", headers={"Authorization": "Bearer wrongpass"})
+    assert res_wrong.status_code == 401
+
+    # Cleanup settings
+    db_repo.update_settings({"proxy_server_url": "", "proxy_password": ""})
+

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+import requests
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -129,6 +130,72 @@ def create_app() -> FastAPI:
     @app.post("/api/curation/apply", dependencies=[Depends(require_paired_client)])
     async def apply_llm_curation(payload: LLMCurationApplyPayload) -> dict[str, int]:
         return curation_service.apply_curation_actions(payload.actions)
+
+    # ---- Reverse Proxy Endpoints ----
+
+    @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
+    @app.api_route("/v1", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
+    async def reverse_proxy_v1(request: Request, path: str = "") -> Response:
+        """Reverse proxy forwarding requests to the configured target server URL with authentication."""
+        cfg = db_repo.get_settings()
+        target_server_url = str(cfg.get("proxy_server_url", "")).strip().rstrip("/")
+        if not target_server_url:
+            raise HTTPException(status_code=502, detail="Reverse proxy server URL is not configured.")
+
+        # Authenticate incoming caller via Bearer token, X-Proxy-Password, or query param
+        auth_header = request.headers.get("Authorization", "")
+        provided_password = ""
+        if auth_header.startswith("Bearer "):
+            provided_password = auth_header[7:].strip()
+        elif "X-Proxy-Password" in request.headers:
+            provided_password = request.headers["X-Proxy-Password"].strip()
+        elif "password" in request.query_params:
+            provided_password = request.query_params["password"].strip()
+
+        configured_password = str(cfg.get("proxy_password", "")).strip()
+        if configured_password and provided_password != configured_password:
+            raise HTTPException(status_code=401, detail="Invalid proxy password.")
+
+        # Construct target URL
+        suffix = f"/{path}" if path else ""
+        if target_server_url.endswith("/v1"):
+            target_url = f"{target_server_url}{suffix}"
+        else:
+            target_url = f"{target_server_url}/v1{suffix}"
+
+        if request.url.query:
+            target_url = f"{target_url}?{request.url.query}"
+
+        # Forward body and headers
+        body = await request.body()
+        req_headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
+        proxy_name = str(cfg.get("proxy_name", "default"))
+        req_headers["X-Forwarded-For"] = request.client.host if request.client else "127.0.0.1"
+        req_headers["X-Proxy-Name"] = proxy_name
+
+        try:
+            target_resp = requests.request(
+                method=request.method,
+                url=target_url,
+                headers=req_headers,
+                data=body,
+                timeout=60.0,
+                allow_redirects=False,
+            )
+            # Filter hop-by-hop headers
+            excluded = {"content-encoding", "transfer-encoding", "connection"}
+            resp_headers = {k: v for k, v in target_resp.headers.items() if k.lower() not in excluded}
+            resp_headers["X-Proxy-By"] = "MusicLinker"
+            resp_headers["X-Proxy-Name"] = proxy_name
+            return Response(
+                content=target_resp.content,
+                status_code=target_resp.status_code,
+                headers=resp_headers,
+                media_type=target_resp.headers.get("content-type"),
+            )
+        except requests.RequestException as exc:
+            logger.error("Reverse proxy error forwarding to %s: %s", target_url, exc)
+            raise HTTPException(status_code=502, detail=f"Proxy error: {exc}") from exc
 
     # ---- HTTP 206 Audio Streaming, Cover Art & 3-Tier Lyrics ----
 
@@ -339,6 +406,10 @@ def create_app() -> FastAPI:
             "llm_base_url": cfg.get("llm_base_url", "https://api.openai.com/v1"),
             "llm_api_key_configured": bool(cfg.get("llm_api_key")),
             "llm_model": cfg.get("llm_model", "gpt-4o-mini"),
+            "proxy_name": cfg.get("proxy_name", "default"),
+            "proxy_server_url": cfg.get("proxy_server_url", ""),
+            "proxy_password_configured": bool(cfg.get("proxy_password")),
+            "proxy_password": cfg.get("proxy_password", ""),
         }
 
     @app.put("/api/settings", dependencies=[Depends(require_paired_client)])
