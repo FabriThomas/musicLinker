@@ -103,7 +103,16 @@ class MusicBrainzClient:
         except Exception as exc:
             logger.warning("MusicBrainz album tracklist lookup failed for %s - %s: %s", artist, album, exc)
 
-        return result
+    def fetch_album_cover(self, artist: str, album: str) -> tuple[bytes | None, str]:
+        """Fetch canonical album artwork bytes and mime type for an artist and album release group."""
+        try:
+            tracklist_info = self.fetch_album_tracklist(artist, album)
+            cover_url = tracklist_info.get("cover_url")
+            if cover_url:
+                return self._download_cover_art(cover_url)
+        except Exception as exc:
+            logger.debug("Failed fetching album cover for %s - %s: %s", artist, album, exc)
+        return None, "image/jpeg"
 
     def resolve_release_metadata(
         self,
@@ -144,9 +153,13 @@ class MusicBrainzClient:
 
                     releases = best.get("releases", [])
                     if releases:
-                        chosen = self._pick_canonical_release(releases)
+                        chosen = self._pick_canonical_release(releases, target_album=fallback_album)
                         raw_mb_album = str(chosen.get("title") or meta.album)
-                        meta.album = clean_album_name(raw_mb_album, title)
+                        if fallback_album and fallback_album.strip().lower() != "singles":
+                            # Keep explicit album hint if provided, unless MusicBrainz exact match is found
+                            meta.album = clean_album_name(fallback_album, title)
+                        else:
+                            meta.album = clean_album_name(raw_mb_album, title)
                         meta.release_mbid = str(chosen.get("id") or "")
                         rel_date = str(chosen.get("date") or "")
                         if len(rel_date) >= 4:
@@ -182,7 +195,13 @@ class MusicBrainzClient:
         return meta
 
     @staticmethod
-    def _pick_canonical_release(releases: list[dict[str, Any]]) -> dict[str, Any]:
+    def _pick_canonical_release(releases: list[dict[str, Any]], target_album: str = "") -> dict[str, Any]:
+        norm_target = target_album.strip().lower() if target_album else ""
+        if norm_target and norm_target != "singles":
+            for rel in releases:
+                title = str(rel.get("title") or "").strip().lower()
+                if title == norm_target:
+                    return rel
         for rel in releases:
             status = str(rel.get("status", "")).lower()
             rg = rel.get("release-group", {})

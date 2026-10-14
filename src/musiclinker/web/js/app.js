@@ -1221,33 +1221,104 @@ class MusicLinkerController {
     }
   }
 
+  async sendAgentInstruction(instructionText = null) {
+    const inputEl = document.getElementById("agent-user-prompt");
+    const prompt = (instructionText || inputEl?.value || "").trim();
+    if (!prompt) return;
+
+    const btn = document.getElementById("btn-send-agent-prompt");
+    const statusEl = document.getElementById("curator-status");
+    const convoBox = document.getElementById("agent-conversation-box");
+    const replyEl = document.getElementById("agent-reply-text");
+    const applyBtn = document.getElementById("btn-apply-curation");
+
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<span>Thinking...</span>`;
+    }
+    if (statusEl) statusEl.textContent = "AI Agent is reasoning over library tracks...";
+
+    try {
+      await this.saveSettings(true);
+      if (!this.agentChatHistory) this.agentChatHistory = [];
+
+      const res = await api.request("/api/curation/agent", {
+        method: "POST",
+        body: JSON.stringify({
+          instruction: prompt,
+          history: this.agentChatHistory,
+        }),
+      });
+
+      this.agentChatHistory.push({ role: "user", content: prompt });
+      this.agentChatHistory.push({ role: "assistant", content: res.reply || "" });
+
+      if (convoBox && replyEl) {
+        convoBox.classList.remove("hidden");
+        replyEl.textContent = res.reply || "Processed library instruction.";
+      }
+
+      this.proposedCurationActions = res.actions || [];
+      if (statusEl) {
+        statusEl.textContent = `Agent generated ${this.proposedCurationActions.length} actionable fix(es).`;
+      }
+      if (applyBtn) {
+        applyBtn.classList.toggle("hidden", !this.proposedCurationActions.length);
+      }
+      if (inputEl) inputEl.value = "";
+      this.renderCurationActions();
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `Agent error: ${err.message}`;
+      alert(`AI Agent error: ${err.message}`);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<span>Execute</span> <span>⚡</span>`;
+      }
+    }
+  }
+
   renderCurationActions() {
     const listEl = document.getElementById("curator-actions-list");
     if (!listEl) return;
     if (!this.proposedCurationActions.length) {
-      listEl.innerHTML = `<div class="p-4 text-xs text-zinc-400 text-center">✓ No duplicate tracks or misnamed albums detected!</div>`;
+      listEl.innerHTML = `<div class="p-4 text-xs text-zinc-400 text-center">✓ No pending actions. Type an instruction above for the AI agent!</div>`;
       return;
     }
 
     listEl.innerHTML = this.proposedCurationActions
       .map((act, idx) => {
         const isDup = act.action_type === "duplicate_remove";
+        const isBulk = act.action_type === "bulk_album_rename";
+        const badgeColor = isDup ? "text-rose-400" : isBulk ? "text-cyan-400" : "text-emerald-400";
+        const badgeLabel = isDup
+          ? "🗑 Remove Duplicate Version"
+          : isBulk
+          ? "💿 Bulk Album Rename"
+          : "✨ Rename Track / Canonicalize Album";
+
         return `
           <label class="flex items-start gap-2.5 p-2.5 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs cursor-pointer hover:border-zinc-700">
             <input type="checkbox" data-curate-idx="${idx}" checked class="mt-0.5 accent-emerald-500" />
             <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-1.5 font-semibold ${isDup ? "text-rose-400" : "text-emerald-400"}">
-                <span>${isDup ? "🗑 Remove Duplicate Version" : "✨ Rename Track / Canonicalize Album"}</span>
-              </div>
-              <div class="text-zinc-300 truncate mt-0.5">
-                <b>Before:</b> ${this.escape(act.current_artist)} — ${this.escape(act.current_title)} <span class="text-zinc-500">[${this.escape(act.current_album)}]</span>
+              <div class="flex items-center gap-1.5 font-semibold ${badgeColor}">
+                <span>${badgeLabel}</span>
               </div>
               ${
-                !isDup
-                  ? `<div class="text-emerald-300 truncate">
-                      <b>After:</b> ${this.escape(act.proposed_artist)} — ${this.escape(act.proposed_title)} <span class="text-emerald-400">[${this.escape(act.proposed_album)}]</span>
-                    </div>`
-                  : ""
+                isBulk
+                  ? `<div class="text-zinc-300 truncate mt-0.5">
+                      <b>Old Album:</b> ${this.escape(act.old_album)} → <b class="text-cyan-300">New Album:</b> ${this.escape(act.new_album)}
+                     </div>`
+                  : `<div class="text-zinc-300 truncate mt-0.5">
+                      <b>Before:</b> ${this.escape(act.current_artist)} — ${this.escape(act.current_title)} <span class="text-zinc-500">[${this.escape(act.current_album)}]</span>
+                    </div>
+                    ${
+                      !isDup
+                        ? `<div class="text-emerald-300 truncate">
+                            <b>After:</b> ${this.escape(act.proposed_artist)} — ${this.escape(act.proposed_title)} <span class="text-emerald-400">[${this.escape(act.proposed_album)}]</span>
+                          </div>`
+                        : ""
+                    }`
               }
               <div class="text-[11px] text-zinc-500 mt-0.5">${this.escape(act.reason || "")}</div>
             </div>
@@ -1457,11 +1528,29 @@ class MusicLinkerController {
     document.getElementById("btn-confirm-album-rename")?.addEventListener("click", () => this.submitBulkAlbumRename());
     document.getElementById("btn-save-track-edit")?.addEventListener("click", () => this.saveEditedTrackMetadata());
 
-    // Jobs, Full Album Downloader, LLM Curation & APK Pairing
+    // Jobs, Full Album Downloader, LLM Agent Curation & APK Pairing
     document.getElementById("btn-start-extract")?.addEventListener("click", () => this.startExtractionJob());
     document.getElementById("btn-preview-album")?.addEventListener("click", () => this.previewAlbumForDownload());
     document.getElementById("btn-download-album")?.addEventListener("click", () => this.startAlbumDownloadJob());
     document.getElementById("btn-run-curator")?.addEventListener("click", () => this.runLLMLibraryAudit());
+    document.getElementById("btn-send-agent-prompt")?.addEventListener("click", () => this.sendAgentInstruction());
+    document.getElementById("agent-user-prompt")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.sendAgentInstruction();
+      }
+    });
+    document.querySelectorAll(".agent-chip").forEach((chip) => {
+      chip.addEventListener("click", (e) => {
+        const prompt = e.currentTarget.getAttribute("data-prompt");
+        const inputEl = document.getElementById("agent-user-prompt");
+        if (inputEl) inputEl.value = prompt;
+        this.sendAgentInstruction(prompt);
+      });
+    });
+    document.getElementById("btn-toggle-agent-config")?.addEventListener("click", () => {
+      document.getElementById("agent-config-card")?.classList.toggle("hidden");
+    });
     document.getElementById("btn-apply-curation")?.addEventListener("click", () => this.applySelectedCurationActions());
     document.getElementById("btn-show-sync")?.addEventListener("click", () => this.openSyncModal());
     document.getElementById("btn-save-apk-server")?.addEventListener("click", () => this.saveApkServerConnection());

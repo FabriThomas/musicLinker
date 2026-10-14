@@ -68,6 +68,82 @@ class LLMClient:
             return parsed
         return []
 
+    def agent_command(
+        self,
+        instruction: str,
+        tracks_summary: list[dict[str, Any]],
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Interactive AI Music Agent: accepts user prompt/instruction, reasons over library context,
+        and produces both conversational reasoning/reply and structured tool actions.
+        Supported action types:
+          - 'rename': {"track_id": int, "proposed_title": str, "proposed_artist": str, "proposed_album": str, "reason": str}
+          - 'duplicate_remove': {"track_id": int, "duplicate_of_track_id": int, "reason": str}
+          - 'bulk_album_rename': {"old_album": str, "new_album": str, "artist": str, "reason": str}
+        """
+        system_prompt = (
+            "You are MusicLinker AI Agent, an autonomous music library curator, discographer, and audio organizer.\n"
+            "You have direct awareness of the user's music library tracks.\n"
+            "When the user speaks to you or gives an instruction (e.g., 'group live tracks', 'fix missing albums', 'deduplicate songs', 'analyze my collection'):\n"
+            "1. Reason carefully about the instruction and the provided tracks.\n"
+            "2. Produce a clear, friendly, expert reply summarizing what you did or recommend.\n"
+            "3. If any track renames, album fixes, or duplicate removals are warranted, emit structured 'actions'.\n"
+            "Return ONLY a valid JSON object matching this schema:\n"
+            "{\n"
+            '  "reply": "Your explanation, insights, and summary of planned actions for the user",\n'
+            '  "actions": [\n'
+            '    {\n'
+            '      "track_id": int (required for rename/duplicate_remove, or 0 if bulk),\n'
+            '      "action_type": "rename" | "duplicate_remove" | "bulk_album_rename",\n'
+            '      "proposed_title": str (optional),\n'
+            '      "proposed_artist": str (optional),\n'
+            '      "proposed_album": str (optional),\n'
+            '      "duplicate_of_track_id": int or null,\n'
+            '      "old_album": str (optional for bulk_album_rename),\n'
+            '      "new_album": str (optional for bulk_album_rename),\n'
+            '      "reason": str\n'
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            for msg in history[-6:]:
+                messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+        user_content = json.dumps(
+            {
+                "user_instruction": instruction,
+                "library_sample": tracks_summary[:120],
+            },
+            ensure_ascii=False,
+        )
+        messages.append({"role": "user", "content": user_content})
+
+        body = {
+            "model": self.model,
+            "temperature": 0.2,
+            "messages": messages,
+        }
+
+        resp = requests.post(self._endpoint_url(), headers=headers, json=body, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        parsed = self._extract_json(content)
+        if isinstance(parsed, dict):
+            return {
+                "reply": str(parsed.get("reply") or "Processed library instruction."),
+                "actions": parsed.get("actions") or [],
+            }
+        return {"reply": content, "actions": []}
+
     @staticmethod
     def _extract_json(raw_text: str) -> Any:
         text = raw_text.strip()

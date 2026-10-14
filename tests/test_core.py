@@ -159,3 +159,27 @@ def test_reverse_proxy_endpoints():
     # Cleanup settings
     db_repo.update_settings({"proxy_server_url": "", "proxy_password": ""})
 
+
+def test_ai_curation_agent():
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.infrastructure.db import db_repo
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    # Test agent fallback when LLM not configured
+    db_repo.update_settings({"llm_base_url": "https://api.openai.com/v1", "llm_api_key": ""})
+    res = client.post("/api/curation/agent", json={"instruction": "Deduplicate all tracks in my library"})
+    assert res.status_code == 200
+    data = res.json()
+    assert "reply" in data
+    assert "actions" in data
+    assert data["used_llm"] is False
+
+    # Test agent with title cleaning prompt
+    res2 = client.post("/api/curation/agent", json={"instruction": "Clean messy track titles"})
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert "reply" in data2
+    assert isinstance(data2["actions"], list)
+

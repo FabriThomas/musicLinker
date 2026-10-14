@@ -18,6 +18,7 @@ from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
 from musiclinker.core.security import build_pairing_url, detect_lan_ip, verify_request_access
 from musiclinker.domain.models import (
+    AgentCommandRequest,
     AlbumBulkRenamePayload,
     AlbumDownloadRequest,
     BatchScrobblePayload,
@@ -126,6 +127,11 @@ def create_app() -> FastAPI:
     @app.post("/api/curation/analyze", dependencies=[Depends(require_paired_client)])
     async def analyze_library_with_llm() -> dict[str, Any]:
         return curation_service.analyze_library()
+
+    @app.post("/api/curation/agent", dependencies=[Depends(require_paired_client)])
+    async def run_curation_agent(req: AgentCommandRequest) -> dict[str, Any]:
+        """Interactive AI Curator Agent: executes natural language instructions, answers queries, and proposes fixes."""
+        return curation_service.run_agent_command(req.instruction, history=req.history)
 
     @app.post("/api/curation/apply", dependencies=[Depends(require_paired_client)])
     async def apply_llm_curation(payload: LLMCurationApplyPayload) -> dict[str, int]:

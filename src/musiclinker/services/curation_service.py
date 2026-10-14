@@ -212,11 +212,106 @@ class CurationService:
             "actions": [a.model_dump() for a in actions],
         }
 
+    def run_agent_command(
+        self,
+        instruction: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Execute an autonomous curation instruction via LLM reasoning with library tool actions."""
+        tracks = self.repo.list_tracks()
+        sample = [
+            {
+                "id": t.id,
+                "title": t.title,
+                "artist": t.artist_display,
+                "album": t.album,
+                "track_number": t.track_number,
+                "year": t.original_year or t.release_year,
+                "playcount": t.lastfm_playcount + t.local_playcount,
+            }
+            for t in tracks[:150]
+        ]
+
+        llm = self._build_llm()
+        if llm.is_configured():
+            try:
+                res = llm.agent_command(instruction, sample, history=history)
+                parsed_actions: list[LLMCurationAction] = []
+                for act in res.get("actions") or []:
+                    act_type = str(act.get("action_type") or "rename")
+                    parsed_actions.append(
+                        LLMCurationAction(
+                            track_id=int(act.get("track_id") or 0),
+                            action_type=act_type,
+                            current_title=str(act.get("current_title") or ""),
+                            proposed_title=str(act.get("proposed_title") or ""),
+                            current_artist=str(act.get("current_artist") or ""),
+                            proposed_artist=str(act.get("proposed_artist") or ""),
+                            current_album=str(act.get("current_album") or ""),
+                            proposed_album=str(act.get("proposed_album") or ""),
+                            duplicate_of_track_id=act.get("duplicate_of_track_id"),
+                            old_album=str(act.get("old_album") or ""),
+                            new_album=str(act.get("new_album") or ""),
+                            reason=str(act.get("reason") or ""),
+                        )
+                    )
+                return {
+                    "reply": res.get("reply", "Understood and processed library request."),
+                    "actions": [a.model_dump() for a in parsed_actions],
+                    "used_llm": True,
+                }
+            except Exception as exc:
+                logger.warning("LLM Agent call failed (%s); using fallback heuristic reasoning", exc)
+
+        # Fallback heuristic agent if LLM is not configured or fails
+        lower_ins = instruction.lower()
+        fallback_actions: list[LLMCurationAction] = []
+        reply_msg = f"Audited library against '{instruction}' using built-in curation heuristics."
+
+        if "dedup" in lower_ins or "repeat" in lower_ins or "duplicate" in lower_ins:
+            audit = self.analyze_library()
+            fallback_actions = [
+                LLMCurationAction(**a) for a in audit.get("actions", [])
+                if a.get("action_type") == "duplicate_remove"
+            ]
+            reply_msg = f"Detected {len(fallback_actions)} duplicate track version(s) in your library."
+        elif "clean" in lower_ins or "rename" in lower_ins or "album" in lower_ins or "title" in lower_ins:
+            audit = self.analyze_library()
+            fallback_actions = [
+                LLMCurationAction(**a) for a in audit.get("actions", [])
+                if a.get("action_type") == "rename"
+            ]
+            reply_msg = f"Found {len(fallback_actions)} track(s) with messy titles or non-standard album names."
+        else:
+            reply_msg = (
+                f"I reviewed your library of {len(tracks)} track(s). To perform specific agent actions, "
+                "connect an LLM API key / proxy or ask me to 'deduplicate songs', 'clean messy titles', or 'group albums'."
+            )
+
+        return {
+            "reply": reply_msg,
+            "actions": [a.model_dump() for a in fallback_actions],
+            "used_llm": False,
+        }
+
     def apply_curation_actions(self, actions: list[LLMCurationAction]) -> dict[str, int]:
         renamed = 0
         removed_duplicates = 0
 
         for act in actions:
+            if act.action_type == "bulk_album_rename" and act.old_album and act.new_album:
+                from musiclinker.domain.models import AlbumBulkRenamePayload
+                self.lib_service.bulk_rename_album(
+                    AlbumBulkRenamePayload(
+                        old_album=act.old_album,
+                        new_album=act.new_album,
+                        album_artist="",
+                        remember_alias=True,
+                    )
+                )
+                renamed += 1
+                continue
+
             track = self.repo.get_track(act.track_id)
             if not track:
                 continue
@@ -234,9 +329,9 @@ class CurationService:
                 self.lib_service.update_track_metadata(
                     track.id,
                     TrackMetadataUpdatePayload(
-                        title=act.proposed_title,
-                        artist_display=act.proposed_artist,
-                        album=act.proposed_album,
+                        title=act.proposed_title or track.title,
+                        artist_display=act.proposed_artist or track.artist_display,
+                        album=act.proposed_album or track.album,
                         track_number=track.track_number,
                         release_year=track.release_year,
                         original_year=track.original_year,

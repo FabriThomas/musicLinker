@@ -504,6 +504,11 @@ class DatabaseRepository:
         row = conn.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
         return self._row_to_track(row) if row else None
 
+    def get_track_by_hash(self, track_hash: str) -> TrackEntity | None:
+        conn = self._get_conn()
+        row = conn.execute("SELECT * FROM tracks WHERE track_hash = ?", (track_hash,)).fetchone()
+        return self._row_to_track(row) if row else None
+
     def increment_local_playcount(self, track_id: int) -> None:
         with self._write_lock:
             conn = self._get_conn()

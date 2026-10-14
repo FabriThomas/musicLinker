@@ -161,6 +161,10 @@ class JobService:
             job.total_candidates = len(tracks_to_dl)
             job.append_log(f"Album '{canonical_album}' resolved: {len(tracks_to_dl)} track(s) queued.")
 
+            album_cover_bytes, album_cover_mime = musicbrainz_client.fetch_album_cover(req.artist, canonical_album)
+            if album_cover_bytes:
+                job.append_log(f"Cached verified album artwork for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
+
             total = len(tracks_to_dl)
             for idx, item in enumerate(tracks_to_dl, start=1):
                 if job.cancel_requested:
@@ -182,6 +186,8 @@ class JobService:
                         title_raw=item.title,
                         album_hint=canonical_album,
                         track_number_hint=item.track_number,
+                        album_cover_override=album_cover_bytes,
+                        album_cover_mime=album_cover_mime,
                         query_or_url=item.youtube_url,
                         playcount=0,
                         bitrate_kbps=req.bitrate_kbps,
@@ -371,6 +377,8 @@ class JobService:
         title_raw: str,
         album_hint: str,
         track_number_hint: int = 0,
+        album_cover_override: bytes | None = None,
+        album_cover_mime: str = "image/jpeg",
         query_or_url: str,
         playcount: int,
         bitrate_kbps: int,
@@ -425,6 +433,14 @@ class JobService:
         final_album = self.repo.resolve_album_alias(album_artist, raw_album, clean_title)
         final_track_num = track_number_hint if track_number_hint > 0 else mb_meta.track_number
 
+        # If album cover was explicitly provided (e.g. from canonical album release), use it
+        if album_cover_override:
+            cover_bytes_to_use = album_cover_override
+            cover_mime_to_use = album_cover_mime
+        else:
+            cover_bytes_to_use = mb_meta.cover_bytes
+            cover_mime_to_use = mb_meta.cover_mime
+
         dest_dir = (
             PATHS.downloads_dir
             / sanitize_filename(album_artist, "Unknown Artist")
@@ -435,6 +451,21 @@ class JobService:
         base_filename = f"{num_prefix}{sanitize_filename(artist_display)} - {sanitize_filename(clean_title)}"
         final_mp3_path = dest_dir / f"{base_filename}.mp3"
         final_lrc_path = dest_dir / f"{base_filename}.lrc"
+
+        # Check if previous version of this track exists under a different filename or directory;
+        # if so, clean up the obsolete files to avoid orphaned / mixed up tracks on disk
+        existing_track = self.repo.get_track_by_hash(track_hash)
+        if existing_track and existing_track.file_path:
+            old_p = Path(existing_track.file_path)
+            if old_p.resolve() != final_mp3_path.resolve():
+                try:
+                    if old_p.exists():
+                        old_p.unlink(missing_ok=True)
+                    old_lrc = Path(existing_track.lrc_path) if existing_track.lrc_path else old_p.with_suffix(".lrc")
+                    if old_lrc.exists():
+                        old_lrc.unlink(missing_ok=True)
+                except Exception as clean_err:
+                    logger.debug("Failed cleaning old track file %s: %s", old_p, clean_err)
 
         job.current_stage = "lyrics_sync"
         approx_duration = int(yt_info.get("duration") or 0)
@@ -462,8 +493,8 @@ class JobService:
             lastfm_playcount=playcount,
             replaygain_db=-1.5,
             lyrics_text=lyrics_text,
-            cover_bytes=mb_meta.cover_bytes,
-            cover_mime=mb_meta.cover_mime,
+            cover_bytes=cover_bytes_to_use,
+            cover_mime=cover_mime_to_use,
         )
 
         os.replace(str(staged_mp3), str(final_mp3_path))
@@ -482,8 +513,8 @@ class JobService:
             file_path=str(final_mp3_path.resolve()),
             lrc_path=str(final_lrc_path.resolve()) if final_lrc_path.exists() else "",
             lyric_sync_mode=sync_mode,
-            cover_mime=mb_meta.cover_mime if mb_meta.cover_bytes else "",
-            has_cover=bool(mb_meta.cover_bytes),
+            cover_mime=cover_mime_to_use if cover_bytes_to_use else "",
+            has_cover=bool(cover_bytes_to_use),
             lastfm_playcount=playcount,
             replaygain_db=-1.5,
             bitrate_kbps=actual_bitrate,

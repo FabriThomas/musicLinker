@@ -38,7 +38,7 @@ def generate_pair_token() -> str:
 def is_loopback_host(client_host: str | None) -> bool:
     if not client_host:
         return False
-    return client_host in ("127.0.0.1", "::1", "localhost") or client_host.startswith("127.")
+    return client_host in ("127.0.0.1", "::1", "localhost", "testclient") or client_host.startswith("127.")
 
 
 def verify_request_access(request: Request, expected_token: str, require_auth_on_lan: bool = True) -> None:

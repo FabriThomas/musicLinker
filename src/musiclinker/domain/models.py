@@ -187,15 +187,17 @@ class AlbumBulkRenamePayload(BaseModel):
 class LLMCurationAction(BaseModel):
     """A single proposed track rename, album fix, or duplicate merge action produced by the AI Curator."""
 
-    track_id: int
-    action_type: str = Field(description="'rename' or 'duplicate_remove'")
-    current_title: str
-    proposed_title: str
-    current_artist: str
-    proposed_artist: str
-    current_album: str
-    proposed_album: str
+    track_id: int = 0
+    action_type: str = Field(description="'rename', 'duplicate_remove', or 'bulk_album_rename'")
+    current_title: str = ""
+    proposed_title: str = ""
+    current_artist: str = ""
+    proposed_artist: str = ""
+    current_album: str = ""
+    proposed_album: str = ""
     duplicate_of_track_id: int | None = None
+    old_album: str = ""
+    new_album: str = ""
     reason: str = ""
 
 
@@ -203,6 +205,22 @@ class LLMCurationApplyPayload(BaseModel):
     """List of approved LLM curation actions to apply to SQLite and MP3 files."""
 
     actions: list[LLMCurationAction]
+
+
+class AgentCommandRequest(BaseModel):
+    """Natural language prompt sent to the autonomous AI Music Curator Agent."""
+
+    instruction: str = Field(..., min_length=1)
+    history: list[dict[str, str]] = Field(default_factory=list)
+
+
+class AgentCommandResponse(BaseModel):
+    """Interactive response containing the agent's reasoning, reply, and proposed actionable steps."""
+
+    reply: str
+    actions: list[LLMCurationAction] = Field(default_factory=list)
+    applied_count: int = 0
+    used_llm: bool = True
 
 
 class ScrobblePayload(BaseModel):
