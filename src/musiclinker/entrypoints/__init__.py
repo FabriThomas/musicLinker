@@ -1,0 +1,1 @@
+"""Runtime entrypoints for Windows Desktop (WebView2 + pystray), CLI Wizard, and Streamlit Dashboard."""

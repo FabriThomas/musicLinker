@@ -1,0 +1,29 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build & distribution
+build/
+dist/
+*.egg-info/
+
+# Runtime & user data (never commit secrets or media)
+.env
+config.json
+config.json.bak
+seen_hashes.json
+seen_hashes.json.bak
+library.db
+library.db-shm
+library.db-wal
+downloads/
+.webview_cache/
+.app_data/
+logs/

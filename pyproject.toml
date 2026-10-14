@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "musiclinker"
+version = "2.0.0"
+description = "Offline-first Last.fm extractor, ID3v2.4 multi-artist tagger, and Windows/Android personal music server"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "FabriThomas" }]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.9.0",
+    "yt-dlp>=2024.10.0",
+    "imageio-ffmpeg>=0.5.1",
+    "mutagen>=1.47.0",
+    "pywebview>=5.2",
+    "pystray>=0.19.5",
+    "Pillow>=10.4.0",
+    "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+dashboard = ["streamlit>=1.39.0", "pandas>=2.2.0"]
+dev = ["pytest>=8.3.0", "pyinstaller>=6.10.0"]
+
+[project.scripts]
+musiclinker = "musiclinker.entrypoints.desktop:main"
+musiclinker-cli = "musiclinker.entrypoints.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"musiclinker.web" = ["*.*", "js/*.*"]

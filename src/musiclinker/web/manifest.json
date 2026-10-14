@@ -1,0 +1,18 @@
+{
+  "name": "MusicLinker Personal Player",
+  "short_name": "MusicLinker",
+  "description": "Offline-first personal music player with synced karaoke lyrics, Car Mode, and Last.fm scrobbling.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#10b981",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

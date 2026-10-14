@@ -1,0 +1,492 @@
+"""Thread-safe SQLite WAL repository with automated schema migrations and legacy file import."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sqlite3
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+from musiclinker.core.logging_config import logger
+from musiclinker.core.paths import PATHS
+from musiclinker.core.security import generate_pair_token
+from musiclinker.domain.models import TrackEntity
+from musiclinker.infrastructure.hasher import compute_track_hash
+
+DEFAULT_SETTINGS: dict[str, Any] = {
+    "lastfm_api_key": os.environ.get("LASTFM_API_KEY", ""),
+    "lastfm_api_secret": os.environ.get("LASTFM_API_SECRET", ""),
+    "lastfm_username": os.environ.get("LASTFM_USERNAME", ""),
+    "lastfm_session_key": os.environ.get("LASTFM_SESSION_KEY", ""),
+    "default_bitrate_kbps": 320,
+    "default_min_plays": 10,
+    "default_download_cap": 25,
+    "require_lan_token": True,
+    "normalize_audio": True,
+    "lan_pair_token": generate_pair_token(),
+}
+
+
+class DatabaseRepository:
+    """Thread-local SQLite WAL repository managing tracks, seen hashes, scrobbles, transitions, and settings."""
+
+    def __init__(self, db_path: Path = PATHS.db_path) -> None:
+        self.db_path = db_path
+        self._local = threading.local()
+        self._write_lock = threading.RLock()
+        self._initialize_schema()
+        self._migrate_legacy_files()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        conn: sqlite3.Connection | None = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self.db_path), timeout=10.0, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+            self._local.conn = conn
+        return conn
+
+    def _initialize_schema(self) -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS tracks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    track_hash TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL,
+                    artist_display TEXT NOT NULL,
+                    artists_json TEXT NOT NULL DEFAULT '[]',
+                    album_artist TEXT NOT NULL DEFAULT '',
+                    album TEXT NOT NULL DEFAULT '',
+                    release_year TEXT NOT NULL DEFAULT '',
+                    original_year TEXT NOT NULL DEFAULT '',
+                    duration INTEGER NOT NULL DEFAULT 0,
+                    file_path TEXT NOT NULL UNIQUE,
+                    lrc_path TEXT NOT NULL DEFAULT '',
+                    cover_mime TEXT NOT NULL DEFAULT '',
+                    has_cover INTEGER NOT NULL DEFAULT 0,
+                    lastfm_playcount INTEGER NOT NULL DEFAULT 0,
+                    local_playcount INTEGER NOT NULL DEFAULT 0,
+                    replaygain_db REAL NOT NULL DEFAULT 0.0,
+                    bitrate_kbps INTEGER NOT NULL DEFAULT 320,
+                    added_at INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
+                CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
+
+                CREATE TABLE IF NOT EXISTS seen_hashes (
+                    track_hash TEXT PRIMARY KEY,
+                    artist TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT 'download',
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS scrobble_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    artist TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    album TEXT NOT NULL DEFAULT '',
+                    duration INTEGER NOT NULL DEFAULT 0,
+                    timestamp INTEGER NOT NULL,
+                    synced INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    UNIQUE(artist, title, timestamp)
+                );
+
+                CREATE TABLE IF NOT EXISTS transitions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    from_track_id INTEGER NOT NULL,
+                    to_track_id INTEGER NOT NULL,
+                    probability REAL NOT NULL DEFAULT 1.0,
+                    crossfade_seconds REAL NOT NULL DEFAULT 3.0,
+                    UNIQUE(from_track_id, to_track_id),
+                    FOREIGN KEY(from_track_id) REFERENCES tracks(id) ON DELETE CASCADE,
+                    FOREIGN KEY(to_track_id) REFERENCES tracks(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL
+                );
+                """
+            )
+            # Seed default settings without overwriting existing keys
+            for key, default_val in DEFAULT_SETTINGS.items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO settings (key, value_json) VALUES (?, ?)",
+                    (key, json.dumps(default_val)),
+                )
+            conn.commit()
+
+    def _migrate_legacy_files(self) -> None:
+        """One-time migration from v1.0 config.json and seen_hashes.json into SQLite."""
+        with self._write_lock:
+            conn = self._get_conn()
+            if PATHS.legacy_config_path.exists():
+                try:
+                    raw_cfg = json.loads(PATHS.legacy_config_path.read_text(encoding="utf-8"))
+                    if isinstance(raw_cfg, dict):
+                        for k, v in raw_cfg.items():
+                            if v not in (None, ""):
+                                conn.execute(
+                                    "INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)",
+                                    (k, json.dumps(v)),
+                                )
+                        conn.commit()
+                    backup = PATHS.legacy_config_path.with_suffix(".json.bak")
+                    shutil.move(str(PATHS.legacy_config_path), str(backup))
+                    logger.info("Migrated legacy config.json into SQLite settings (backed up to %s)", backup.name)
+                except Exception as exc:
+                    logger.warning("Failed to migrate legacy config.json: %s", exc)
+
+            if PATHS.legacy_hashes_path.exists():
+                try:
+                    raw_hashes = json.loads(PATHS.legacy_hashes_path.read_text(encoding="utf-8"))
+                    now_ts = int(time.time())
+                    if isinstance(raw_hashes, list):
+                        for h in raw_hashes:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO seen_hashes (track_hash, source, created_at) VALUES (?, 'legacy', ?)",
+                                (str(h), now_ts),
+                            )
+                    elif isinstance(raw_hashes, dict):
+                        for h, meta in raw_hashes.items():
+                            artist = meta.get("artist", "") if isinstance(meta, dict) else ""
+                            title = meta.get("title", "") if isinstance(meta, dict) else str(meta)
+                            conn.execute(
+                                "INSERT OR IGNORE INTO seen_hashes (track_hash, artist, title, source, created_at) VALUES (?, ?, ?, 'legacy', ?)",
+                                (str(h), artist, title, now_ts),
+                            )
+                    conn.commit()
+                    backup = PATHS.legacy_hashes_path.with_suffix(".json.bak")
+                    shutil.move(str(PATHS.legacy_hashes_path), str(backup))
+                    logger.info("Migrated legacy seen_hashes.json into SQLite (backed up to %s)", backup.name)
+                except Exception as exc:
+                    logger.warning("Failed to migrate legacy seen_hashes.json: %s", exc)
+
+    # ---- Settings Operations ----
+
+    def get_settings(self) -> dict[str, Any]:
+        conn = self._get_conn()
+        rows = conn.execute("SELECT key, value_json FROM settings").fetchall()
+        result = dict(DEFAULT_SETTINGS)
+        for row in rows:
+            try:
+                result[row["key"]] = json.loads(row["value_json"])
+            except Exception:
+                result[row["key"]] = row["value_json"]
+        return result
+
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        conn = self._get_conn()
+        row = conn.execute("SELECT value_json FROM settings WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return DEFAULT_SETTINGS.get(key, default)
+        try:
+            return json.loads(row["value_json"])
+        except Exception:
+            return row["value_json"]
+
+    def update_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
+        with self._write_lock:
+            conn = self._get_conn()
+            for key, value in updates.items():
+                if value is not None:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)",
+                        (key, json.dumps(value)),
+                    )
+            conn.commit()
+        return self.get_settings()
+
+    # ---- Deduplication Hash Operations ----
+
+    def is_hash_seen(self, track_hash: str) -> bool:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT 1 FROM seen_hashes WHERE track_hash = ? UNION SELECT 1 FROM tracks WHERE track_hash = ? LIMIT 1",
+            (track_hash, track_hash),
+        ).fetchone()
+        return row is not None
+
+    def mark_hash_seen(self, track_hash: str, artist: str = "", title: str = "", source: str = "download") -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO seen_hashes (track_hash, artist, title, source, created_at) VALUES (?, ?, ?, ?, ?)",
+                (track_hash, artist, title, source, int(time.time())),
+            )
+            conn.commit()
+
+    def import_playlist_lines(self, lines: list[str]) -> int:
+        """Import 'Artist - Title' text lines into seen_hashes so past playlists are not re-downloaded."""
+        imported = 0
+        now_ts = int(time.time())
+        with self._write_lock:
+            conn = self._get_conn()
+            for raw_line in lines:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or " - " not in line:
+                    continue
+                artist, title = line.split(" - ", 1)
+                thash = compute_track_hash(artist, title)
+                conn.execute(
+                    "INSERT OR IGNORE INTO seen_hashes (track_hash, artist, title, source, created_at) VALUES (?, ?, ?, 'imported_list', ?)",
+                    (thash, artist.strip(), title.strip(), now_ts),
+                )
+                imported += 1
+            conn.commit()
+        return imported
+
+    # ---- Track Library Operations ----
+
+    def upsert_track(
+        self,
+        *,
+        track_hash: str,
+        title: str,
+        artist_display: str,
+        artists: list[str],
+        album_artist: str,
+        album: str,
+        release_year: str,
+        original_year: str,
+        duration: int,
+        file_path: str,
+        lrc_path: str = "",
+        cover_mime: str = "",
+        has_cover: bool = False,
+        lastfm_playcount: int = 0,
+        replaygain_db: float = 0.0,
+        bitrate_kbps: int = 320,
+    ) -> TrackEntity:
+        now_ts = int(time.time())
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                """
+                INSERT INTO tracks (
+                    track_hash, title, artist_display, artists_json, album_artist,
+                    album, release_year, original_year, duration, file_path,
+                    lrc_path, cover_mime, has_cover, lastfm_playcount,
+                    replaygain_db, bitrate_kbps, added_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(track_hash) DO UPDATE SET
+                    title = excluded.title,
+                    artist_display = excluded.artist_display,
+                    artists_json = excluded.artists_json,
+                    album_artist = excluded.album_artist,
+                    album = excluded.album,
+                    release_year = CASE WHEN excluded.release_year != '' THEN excluded.release_year ELSE tracks.release_year END,
+                    original_year = CASE WHEN excluded.original_year != '' THEN excluded.original_year ELSE tracks.original_year END,
+                    duration = CASE WHEN excluded.duration > 0 THEN excluded.duration ELSE tracks.duration END,
+                    file_path = excluded.file_path,
+                    lrc_path = CASE WHEN excluded.lrc_path != '' THEN excluded.lrc_path ELSE tracks.lrc_path END,
+                    cover_mime = CASE WHEN excluded.cover_mime != '' THEN excluded.cover_mime ELSE tracks.cover_mime END,
+                    has_cover = CASE WHEN excluded.has_cover = 1 THEN 1 ELSE tracks.has_cover END,
+                    lastfm_playcount = MAX(tracks.lastfm_playcount, excluded.lastfm_playcount),
+                    replaygain_db = excluded.replaygain_db,
+                    bitrate_kbps = excluded.bitrate_kbps
+                """,
+                (
+                    track_hash,
+                    title,
+                    artist_display,
+                    json.dumps(artists, ensure_ascii=False),
+                    album_artist,
+                    album,
+                    release_year,
+                    original_year,
+                    duration,
+                    file_path,
+                    lrc_path,
+                    cover_mime,
+                    1 if has_cover else 0,
+                    lastfm_playcount,
+                    replaygain_db,
+                    bitrate_kbps,
+                    now_ts,
+                ),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO seen_hashes (track_hash, artist, title, source, created_at) VALUES (?, ?, ?, 'library', ?)",
+                (track_hash, artist_display, title, now_ts),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM tracks WHERE track_hash = ?", (track_hash,)).fetchone()
+            return self._row_to_track(row)
+
+    def list_tracks(self, search: str = "", artist: str = "") -> list[TrackEntity]:
+        conn = self._get_conn()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if search.strip():
+            q = f"%{search.strip().lower()}%"
+            clauses.append("(LOWER(title) LIKE ? OR LOWER(artist_display) LIKE ? OR LOWER(album) LIKE ?)")
+            params.extend([q, q, q])
+        if artist.strip():
+            a = f"%{artist.strip().lower()}%"
+            clauses.append("(LOWER(artist_display) LIKE ? OR LOWER(album_artist) LIKE ?)")
+            params.extend([a, a])
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(
+            f"SELECT * FROM tracks {where_sql} ORDER BY added_at DESC, title ASC",
+            params,
+        ).fetchall()
+        return [self._row_to_track(r) for r in rows]
+
+    def get_track(self, track_id: int) -> TrackEntity | None:
+        conn = self._get_conn()
+        row = conn.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        return self._row_to_track(row) if row else None
+
+    def increment_local_playcount(self, track_id: int) -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("UPDATE tracks SET local_playcount = local_playcount + 1 WHERE id = ?", (track_id,))
+            conn.commit()
+
+    def remove_missing_files(self) -> int:
+        """Prune database rows whose underlying MP3 files were deleted from disk."""
+        removed = 0
+        with self._write_lock:
+            conn = self._get_conn()
+            rows = conn.execute("SELECT id, file_path FROM tracks").fetchall()
+            for r in rows:
+                if not Path(r["file_path"]).exists():
+                    conn.execute("DELETE FROM tracks WHERE id = ?", (r["id"],))
+                    removed += 1
+            if removed:
+                conn.commit()
+        return removed
+
+    # ---- Scrobble Queue Operations ----
+
+    def enqueue_scrobble(self, artist: str, title: str, album: str, duration: int, timestamp: int, error: str = "") -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO scrobble_queue (artist, title, album, duration, timestamp, synced, last_error)
+                VALUES (?, ?, ?, ?, ?, 0, ?)
+                """,
+                (artist, title, album, duration, timestamp, error),
+            )
+            conn.commit()
+
+    def get_pending_scrobbles(self, limit: int = 50) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM scrobble_queue WHERE synced = 0 ORDER BY timestamp ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_scrobbles_synced(self, ids: list[int]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(f"UPDATE scrobble_queue SET synced = 1 WHERE id IN ({placeholders})", ids)
+            conn.commit()
+
+    # ---- Custom Song Transitions ----
+
+    def upsert_transition(self, from_track_id: int, to_track_id: int, probability: float, crossfade_seconds: float) -> dict[str, Any]:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                """
+                INSERT INTO transitions (from_track_id, to_track_id, probability, crossfade_seconds)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(from_track_id, to_track_id) DO UPDATE SET
+                    probability = excluded.probability,
+                    crossfade_seconds = excluded.crossfade_seconds
+                """,
+                (from_track_id, to_track_id, probability, crossfade_seconds),
+            )
+            conn.commit()
+        return {
+            "from_track_id": from_track_id,
+            "to_track_id": to_track_id,
+            "probability": probability,
+            "crossfade_seconds": crossfade_seconds,
+        }
+
+    def get_transitions_for_track(self, from_track_id: int) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT tr.id, tr.from_track_id, tr.to_track_id, tr.probability, tr.crossfade_seconds,
+                   t.title AS to_title, t.artist_display AS to_artist
+            FROM transitions tr
+            JOIN tracks t ON t.id = tr.to_track_id
+            WHERE tr.from_track_id = ?
+            """,
+            (from_track_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_all_transitions(self) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT tr.id, tr.from_track_id, tr.to_track_id, tr.probability, tr.crossfade_seconds,
+                   t1.title AS from_title, t1.artist_display AS from_artist,
+                   t2.title AS to_title, t2.artist_display AS to_artist
+            FROM transitions tr
+            JOIN tracks t1 ON t1.id = tr.from_track_id
+            JOIN tracks t2 ON t2.id = tr.to_track_id
+            ORDER BY tr.id DESC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_transition(self, transition_id: int) -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM transitions WHERE id = ?", (transition_id,))
+            conn.commit()
+
+    @staticmethod
+    def _row_to_track(row: sqlite3.Row) -> TrackEntity:
+        try:
+            artists = json.loads(row["artists_json"])
+        except Exception:
+            artists = [row["artist_display"]]
+        return TrackEntity(
+            id=int(row["id"]),
+            track_hash=str(row["track_hash"]),
+            title=str(row["title"]),
+            artist_display=str(row["artist_display"]),
+            artists=artists if isinstance(artists, list) else [ str(row["artist_display"]) ],
+            album_artist=str(row["album_artist"]),
+            album=str(row["album"]),
+            release_year=str(row["release_year"]),
+            original_year=str(row["original_year"]),
+            duration=int(row["duration"]),
+            file_path=str(row["file_path"]),
+            lrc_path=str(row["lrc_path"]),
+            cover_mime=str(row["cover_mime"]),
+            has_cover=bool(row["has_cover"]),
+            lastfm_playcount=int(row["lastfm_playcount"]),
+            local_playcount=int(row["local_playcount"]),
+            replaygain_db=float(row["replaygain_db"]),
+            bitrate_kbps=int(row["bitrate_kbps"]),
+            added_at=int(row["added_at"]),
+        )
+
+
+db_repo = DatabaseRepository()

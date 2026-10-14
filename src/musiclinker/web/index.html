@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>MusicLinker — Personal Player & Last.fm Sync</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <meta name="theme-color" content="#10b981" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col select-none">
+  <!-- Top Header -->
+  <header class="border-b border-zinc-800/80 bg-zinc-900/60 backdrop-blur px-5 py-3.5 flex items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <img src="/icon.svg" alt="MusicLinker" class="w-8 h-8" />
+      <div>
+        <h1 class="font-bold text-lg tracking-tight leading-none">MusicLinker <span class="text-xs text-emerald-400 font-mono">v2.0</span></h1>
+        <p class="text-xs text-zinc-400">Offline-First Personal Music Server & Scrobbler</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <input
+        id="search-input"
+        type="search"
+        placeholder="Search songs, artists, albums..."
+        class="bg-zinc-900 border border-zinc-700 rounded-xl px-3.5 py-1.5 text-sm focus:outline-none focus:border-emerald-500 w-44 sm:w-64"
+      />
+      <button id="btn-car-mode" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium">
+        🚗 Car Mode
+      </button>
+      <button id="btn-show-sync" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold text-xs">
+        📱 Phone Sync
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workspace Grid -->
+  <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 p-5 overflow-hidden">
+    <!-- Left Column: Track Library (7 cols) -->
+    <section class="lg:col-span-7 bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-4 flex flex-col overflow-hidden">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-sm uppercase tracking-wider text-zinc-400">Local Library</h2>
+      </div>
+      <div id="track-list" class="flex-1 overflow-y-auto space-y-1.5 pr-1 max-h-[60vh]"></div>
+    </section>
+
+    <!-- Right Column: Synced Karaoke Lyrics + Extractor & Settings (5 cols) -->
+    <section class="lg:col-span-5 flex flex-col gap-5 overflow-y-auto max-h-[65vh]">
+      <!-- Karaoke Synced Lyrics Card -->
+      <div class="bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-4">
+        <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400 mb-2">Synced Lyrics (LRCLIB)</h2>
+        <div id="lyrics-container" class="h-44 overflow-y-auto space-y-1 px-2 text-center">
+          <p class="text-zinc-500 text-sm">Select a song to view timestamped karaoke lyrics.</p>
+        </div>
+      </div>
+
+      <!-- Last.fm Extraction Studio -->
+      <div class="bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-4 space-y-3">
+        <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm Extractor & Downloader</h2>
+        <div class="grid grid-cols-2 gap-2.5 text-sm">
+          <input id="ext-username" type="text" placeholder="Last.fm Username" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2" />
+          <select id="ext-period" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2">
+            <option value="12month">Last 12 Months</option>
+            <option value="6month">Last 6 Months</option>
+            <option value="3month">Last 3 Months</option>
+            <option value="1month">Last 1 Month</option>
+            <option value="overall">Overall All-Time</option>
+          </select>
+          <input id="ext-min-plays" type="number" value="10" min="1" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2" title="Minimum Plays" />
+          <input id="ext-cap" type="number" value="25" min="1" max="500" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2" title="Download Cap" />
+          <select id="ext-bitrate" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 col-span-2">
+            <option value="320">320 kbps MP3 (Audiophile)</option>
+            <option value="192">192 kbps MP3 (Compact Mobile)</option>
+          </select>
+        </div>
+        <button id="btn-start-extract" class="w-full py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-sm">
+          Extract & Download Qualifying Tracks
+        </button>
+        <div class="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
+          <div id="job-progress-bar" class="bg-emerald-500 h-full w-0 transition-all"></div>
+        </div>
+        <pre id="job-logs" class="bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-400 h-28 overflow-y-auto font-mono">Idle.</pre>
+      </div>
+
+      <!-- API Key Settings Card -->
+      <div class="bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-4 space-y-2.5">
+        <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm Credentials</h2>
+        <input id="set-api-key" type="text" placeholder="Last.fm API Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm" />
+        <input id="set-api-secret" type="password" placeholder="Last.fm API Secret" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm" />
+        <input id="set-username" type="text" placeholder="Default Last.fm Username" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm" />
+        <button id="btn-save-settings" class="w-full py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold">
+          Save Credentials
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Bottom Persistent Player Bar -->
+  <footer class="border-t border-zinc-800 bg-zinc-900/95 backdrop-blur px-5 py-3 flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="min-w-0 text-center sm:text-left">
+      <div id="np-title" class="font-semibold text-sm truncate">Not Playing</div>
+      <div id="np-artist" class="text-xs text-zinc-400 truncate">Select a track from your library</div>
+    </div>
+    <div class="flex flex-col items-center gap-1.5 flex-1 max-w-xl w-full">
+      <div class="flex items-center gap-3">
+        <button id="btn-prev" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs">⏮ Prev</button>
+        <button id="btn-play" class="px-5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-sm">▶ Play</button>
+        <button id="btn-next" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs">Next ⏭</button>
+      </div>
+      <div class="flex items-center gap-3 w-full">
+        <input id="seek-bar" type="range" min="0" max="1000" value="0" class="flex-1 accent-emerald-500" />
+        <span id="time-display" class="text-xs font-mono text-zinc-400">0:00 / 0:00</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- High-Contrast Car Driving Mode Overlay (Wake-Lock Enabled) -->
+  <div id="car-mode-overlay" class="hidden fixed inset-0 bg-black z-50 flex flex-col justify-between p-8">
+    <div class="flex justify-between items-center">
+      <span class="text-emerald-400 font-bold uppercase tracking-widest text-sm">🚗 Car Driving Mode (Wake-Lock Active)</span>
+      <button id="btn-exit-car" class="px-5 py-2.5 rounded-2xl bg-zinc-800 text-white font-bold text-lg">Exit</button>
+    </div>
+    <div class="text-center my-auto space-y-3">
+      <div id="car-title" class="text-4xl sm:text-6xl font-extrabold text-white">Not Playing</div>
+      <div id="car-artist" class="text-2xl sm:text-3xl text-emerald-400 font-semibold">—</div>
+    </div>
+    <div class="grid grid-cols-3 gap-6 h-36">
+      <button id="car-btn-prev" class="rounded-3xl bg-zinc-900 border-2 border-zinc-700 text-3xl font-bold">⏮ PREV</button>
+      <button id="car-btn-play" class="rounded-3xl bg-emerald-500 text-zinc-950 text-4xl font-extrabold">▶ PLAY</button>
+      <button id="car-btn-next" class="rounded-3xl bg-zinc-900 border-2 border-zinc-700 text-3xl font-bold">NEXT ⏭</button>
+    </div>
+  </div>
+
+  <!-- Phone LAN Pairing Modal -->
+  <div id="sync-modal" class="hidden fixed inset-0 bg-black/75 z-40 flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-4">
+      <h3 class="font-bold text-lg">📱 Android Wi-Fi Sync & Pairing</h3>
+      <p class="text-xs text-zinc-400">
+        Open this URL on your Android phone connected to the same Wi-Fi network to install the PWA and cache tracks for offline playback:
+      </p>
+      <div id="sync-pairing-url" class="p-3 rounded-xl bg-zinc-950 border border-zinc-800 font-mono text-xs text-emerald-400 break-all"></div>
+      <button onclick="document.getElementById('sync-modal').classList.add('hidden')" class="w-full py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm font-semibold">
+        Close
+      </button>
+    </div>
+  </div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

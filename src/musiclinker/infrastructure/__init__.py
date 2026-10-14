@@ -1,0 +1,1 @@
+"""External infrastructure adapters: SQLite WAL, Last.fm, yt-dlp, MusicBrainz, LRCLIB, ID3v2.4."""
