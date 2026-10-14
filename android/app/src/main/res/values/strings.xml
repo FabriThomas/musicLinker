@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MusicLinker</string>
+    <string name="title_activity_main">MusicLinker</string>
+    <string name="package_name">com.fabrithomas.musiclinker</string>
+    <string name="custom_url_scheme">com.fabrithomas.musiclinker</string>
+</resources>

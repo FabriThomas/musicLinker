@@ -1259,8 +1259,9 @@ class MusicLinkerController {
       }
 
       this.proposedCurationActions = res.actions || [];
+      const engineLabel = res.engine || (res.used_llm ? "External LLM" : "Built-in Heuristics");
       if (statusEl) {
-        statusEl.textContent = `Agent generated ${this.proposedCurationActions.length} actionable fix(es).`;
+        statusEl.textContent = `Completed via ${engineLabel}: ${this.proposedCurationActions.length} actionable fix(es).`;
       }
       if (applyBtn) {
         applyBtn.classList.toggle("hidden", !this.proposedCurationActions.length);

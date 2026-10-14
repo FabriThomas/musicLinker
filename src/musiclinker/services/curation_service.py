@@ -233,6 +233,7 @@ class CurationService:
         ]
 
         llm = self._build_llm()
+        last_error = ""
         if llm.is_configured():
             try:
                 res = llm.agent_command(instruction, sample, history=history)
@@ -259,39 +260,51 @@ class CurationService:
                     "reply": res.get("reply", "Understood and processed library request."),
                     "actions": [a.model_dump() for a in parsed_actions],
                     "used_llm": True,
+                    "engine": f"LLM ({llm.model}) via {llm.base_url}",
                 }
             except Exception as exc:
+                last_error = str(exc)
                 logger.warning("LLM Agent call failed (%s); using fallback heuristic reasoning", exc)
 
         # Fallback heuristic agent if LLM is not configured or fails
         lower_ins = instruction.lower()
         fallback_actions: list[LLMCurationAction] = []
-        reply_msg = f"Audited library against '{instruction}' using built-in curation heuristics."
+        status_note = f" (Note: LLM error - {last_error})" if last_error else " (LLM not configured: using built-in heuristics)"
 
-        if "dedup" in lower_ins or "repeat" in lower_ins or "duplicate" in lower_ins:
+        if not tracks:
+            reply_msg = (
+                "Your library currently has 0 tracks indexed. Download some songs or an album first "
+                "(via the Full Album Downloader or Last.fm Extractor), then ask me to curate or reorganize them!"
+            )
+            if last_error:
+                reply_msg += f"\n\n[LLM Connection Notice: {last_error}]"
+        elif "dedup" in lower_ins or "repeat" in lower_ins or "duplicate" in lower_ins:
             audit = self.analyze_library()
             fallback_actions = [
                 LLMCurationAction(**a) for a in audit.get("actions", [])
                 if a.get("action_type") == "duplicate_remove"
             ]
-            reply_msg = f"Detected {len(fallback_actions)} duplicate track version(s) in your library."
+            reply_msg = f"Audited {len(tracks)} track(s){status_note}.\nDetected {len(fallback_actions)} duplicate track version(s)."
         elif "clean" in lower_ins or "rename" in lower_ins or "album" in lower_ins or "title" in lower_ins:
             audit = self.analyze_library()
             fallback_actions = [
                 LLMCurationAction(**a) for a in audit.get("actions", [])
                 if a.get("action_type") == "rename"
             ]
-            reply_msg = f"Found {len(fallback_actions)} track(s) with messy titles or non-standard album names."
+            reply_msg = f"Audited {len(tracks)} track(s){status_note}.\nFound {len(fallback_actions)} track(s) with messy titles or non-standard album names."
         else:
             reply_msg = (
-                f"I reviewed your library of {len(tracks)} track(s). To perform specific agent actions, "
-                "connect an LLM API key / proxy or ask me to 'deduplicate songs', 'clean messy titles', or 'group albums'."
+                f"I reviewed your library of {len(tracks)} track(s){status_note}.\n"
+                "To run specific curation tasks, click one of the quick prompt chips above or configure your "
+                "OpenAI/Proxy API key in '⚙ LLM / Proxy Setup'."
             )
 
         return {
             "reply": reply_msg,
             "actions": [a.model_dump() for a in fallback_actions],
             "used_llm": False,
+            "engine": "Built-in Heuristics",
+            "error": last_error,
         }
 
     def apply_curation_actions(self, actions: list[LLMCurationAction]) -> dict[str, int]:
