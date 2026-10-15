@@ -389,10 +389,27 @@ class JobService:
                 try:
                     job.append_log(f"Extracting Spotify metadata from: {req.query_or_url}")
                     sp_meta = spotify_client.fetch_spotify_metadata(req.query_or_url)
+                    sp_tracks = sp_meta.get("tracks") or []
+                    if len(sp_tracks) > 1 and not title_override:
+                        job.append_log(
+                            f"Detected multi-track Spotify {sp_meta.get('entity_type', 'playlist/album')} ({len(sp_tracks)} tracks) — switching to full collection pipeline..."
+                        )
+                        album_req = AlbumDownloadRequest(
+                            artist=artist_override or str(sp_meta.get("artist") or "Various Artists"),
+                            album=album_override or str(sp_meta.get("album") or req.query_or_url),
+                            bitrate_kbps=req.bitrate_kbps,
+                            download_method=req.download_method,
+                            skip_existing=True,
+                        )
+                        self._run_album_download_pipeline(job, album_req)
+                        return
                     artist_override = artist_override or sp_meta.get("artist", "")
-                    if sp_meta.get("tracks"):
-                        first_tr = sp_meta["tracks"][0]
+                    if sp_tracks:
+                        first_tr = sp_tracks[0]
                         title_override = title_override or first_tr.get("title", "")
+                        artist_override = artist_override or first_tr.get("artist", "")
+                        if not track_num_override and first_tr.get("track_number"):
+                            track_num_override = int(first_tr["track_number"])
                     album_override = album_override or sp_meta.get("album", "")
                     if sp_meta.get("cover_url"):
                         cover_override_bytes, cover_override_mime = spotify_client.fetch_cover_bytes(sp_meta["cover_url"])
@@ -546,6 +563,12 @@ class JobService:
         job.append_log(f"Lyric Sync: {sync_summary}")
 
         job.current_stage = "id3_tagging"
+        raw_loudness = yt_info.get("loudness_db") if isinstance(yt_info, dict) else None
+        try:
+            replaygain_val = round(-float(raw_loudness), 2) if raw_loudness is not None else -1.5
+        except (TypeError, ValueError):
+            replaygain_val = -1.5
+
         duration, actual_bitrate = audio_tagger.write_id3v24_tags(
             staged_mp3,
             title=clean_title,
@@ -556,7 +579,7 @@ class JobService:
             release_year=mb_meta.release_year,
             original_year=mb_meta.original_year,
             lastfm_playcount=playcount,
-            replaygain_db=-1.5,
+            replaygain_db=replaygain_val,
             lyrics_text=lyrics_text,
             cover_bytes=cover_bytes_to_use,
             cover_mime=cover_mime_to_use,
@@ -581,7 +604,7 @@ class JobService:
             cover_mime=cover_mime_to_use if cover_bytes_to_use else "",
             has_cover=bool(cover_bytes_to_use),
             lastfm_playcount=playcount,
-            replaygain_db=-1.5,
+            replaygain_db=replaygain_val,
             bitrate_kbps=actual_bitrate,
         )
         self.repo.mark_hash_seen(track_hash, artist_display, clean_title, source="download")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import hmac
 import json
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -64,7 +65,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="3.0.5",
+        version="3.0.6",
         lifespan=lifespan,
     )
 
@@ -101,11 +102,11 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/albums/lookup", dependencies=[Depends(require_paired_client)])
-    async def lookup_external_album(
+    def lookup_external_album(
         artist: str = Query(default=""),
         album: str = Query(..., min_length=1),
     ) -> dict[str, Any]:
-        """Resolve an album's tracklist (`1..N`) from MusicBrainz, Last.fm, or YouTube prior to downloading."""
+        """Resolve an album or playlist's tracklist (`1..N`) from Spotify, YouTube, MusicBrainz, or Last.fm prior to downloading."""
         try:
             return library_service.lookup_external_album_tracklist(artist=artist, album_or_url=album)
         except Exception as exc:
@@ -114,11 +115,11 @@ def create_app() -> FastAPI:
 
 
     @app.post("/api/albums/rename", dependencies=[Depends(require_paired_client)])
-    async def rename_album_endpoint(payload: AlbumBulkRenamePayload) -> dict[str, Any]:
+    def rename_album_endpoint(payload: AlbumBulkRenamePayload) -> dict[str, Any]:
         return library_service.bulk_rename_album(payload)
 
     @app.put("/api/tracks/{track_id}/metadata", dependencies=[Depends(require_paired_client)])
-    async def update_track_metadata_endpoint(track_id: int, payload: TrackMetadataUpdatePayload) -> dict[str, Any]:
+    def update_track_metadata_endpoint(track_id: int, payload: TrackMetadataUpdatePayload) -> dict[str, Any]:
         try:
             updated = library_service.update_track_metadata(track_id, payload)
             return {"track": updated.to_dict()}
@@ -126,7 +127,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.delete("/api/tracks/{track_id}", dependencies=[Depends(require_paired_client)])
-    async def delete_single_track(
+    def delete_single_track(
         track_id: int,
         delete_file: bool = Query(default=True),
         unmark_hash: bool = Query(default=False),
@@ -138,7 +139,7 @@ def create_app() -> FastAPI:
         return {"status": "deleted", "track_id": track_id}
 
     @app.post("/api/tracks/batch-delete", dependencies=[Depends(require_paired_client)])
-    async def batch_delete_tracks(payload: BatchTrackDeletePayload) -> dict[str, Any]:
+    def batch_delete_tracks(payload: BatchTrackDeletePayload) -> dict[str, Any]:
         """Batch delete multiple tracks from SQLite and optionally remove files from disk."""
         deleted = library_service.delete_tracks_batch(
             payload.track_ids,
@@ -148,7 +149,7 @@ def create_app() -> FastAPI:
         return {"status": "deleted", "count": deleted}
 
     @app.delete("/api/albums/{album_name:path}", dependencies=[Depends(require_paired_client)])
-    async def delete_entire_album(
+    def delete_entire_album(
         album_name: str,
         artist: str = Query(default=""),
         delete_files: bool = Query(default=True),
@@ -164,22 +165,22 @@ def create_app() -> FastAPI:
         return {"status": "deleted", "alias_id": str(alias_id)}
 
     @app.post("/api/library/rescan", dependencies=[Depends(require_paired_client)])
-    async def rescan_library() -> dict[str, int]:
+    def rescan_library() -> dict[str, int]:
         return library_service.scan_and_sync_downloads()
 
     # ---- LLM Smart Curator & Deduplication Endpoints ----
 
     @app.post("/api/curation/analyze", dependencies=[Depends(require_paired_client)])
-    async def analyze_library_with_llm() -> dict[str, Any]:
+    def analyze_library_with_llm() -> dict[str, Any]:
         return curation_service.analyze_library()
 
     @app.post("/api/curation/agent", dependencies=[Depends(require_paired_client)])
-    async def run_curation_agent(req: AgentCommandRequest) -> dict[str, Any]:
+    def run_curation_agent(req: AgentCommandRequest) -> dict[str, Any]:
         """Interactive AI Curator Agent: executes natural language instructions, answers queries, and proposes fixes."""
         return curation_service.run_agent_command(req.instruction, history=req.history)
 
     @app.post("/api/curation/apply", dependencies=[Depends(require_paired_client)])
-    async def apply_llm_curation(payload: LLMCurationApplyPayload) -> dict[str, int]:
+    def apply_llm_curation(payload: LLMCurationApplyPayload) -> dict[str, int]:
         return curation_service.apply_curation_actions(payload.actions)
 
     # ---- Reverse Proxy Endpoints ----
@@ -204,7 +205,7 @@ def create_app() -> FastAPI:
             provided_password = request.query_params["password"].strip()
 
         configured_password = str(cfg.get("proxy_password", "")).strip()
-        if configured_password and provided_password != configured_password:
+        if configured_password and not hmac.compare_digest(provided_password, configured_password):
             raise HTTPException(status_code=401, detail="Invalid proxy password.")
 
         # Construct target URL
@@ -225,7 +226,8 @@ def create_app() -> FastAPI:
         req_headers["X-Proxy-Name"] = proxy_name
 
         try:
-            target_resp = requests.request(
+            target_resp = await asyncio.to_thread(
+                requests.request,
                 method=request.method,
                 url=target_url,
                 headers=req_headers,
@@ -325,7 +327,7 @@ def create_app() -> FastAPI:
         return Response(content=cover_bytes, media_type=mime, headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/api/tracks/{track_id}/lyrics", dependencies=[Depends(require_paired_client)])
-    async def get_track_lyrics(track_id: int) -> dict[str, Any]:
+    def get_track_lyrics(track_id: int) -> dict[str, Any]:
         track = db_repo.get_track(track_id)
         if not track:
             raise HTTPException(status_code=404, detail="Track not found.")
@@ -334,15 +336,15 @@ def create_app() -> FastAPI:
     # ---- Player, Scrobbling & Custom Transitions ----
 
     @app.post("/api/player/now-playing", dependencies=[Depends(require_paired_client)])
-    async def player_now_playing(payload: ScrobblePayload) -> dict[str, Any]:
+    def player_now_playing(payload: ScrobblePayload) -> dict[str, Any]:
         return scrobble_service.notify_now_playing(payload)
 
     @app.post("/api/player/scrobble", dependencies=[Depends(require_paired_client)])
-    async def player_scrobble(payload: ScrobblePayload) -> dict[str, Any]:
+    def player_scrobble(payload: ScrobblePayload) -> dict[str, Any]:
         return scrobble_service.record_scrobble(payload)
 
     @app.post("/api/player/scrobble/batch", dependencies=[Depends(require_paired_client)])
-    async def player_scrobble_batch(payload: BatchScrobblePayload) -> dict[str, Any]:
+    def player_scrobble_batch(payload: BatchScrobblePayload) -> dict[str, Any]:
         return scrobble_service.record_batch_scrobbles(payload.scrobbles)
 
     @app.get("/api/transitions", dependencies=[Depends(require_paired_client)])
@@ -368,11 +370,11 @@ def create_app() -> FastAPI:
         resolved = library_service.resolve_next_transition(track_id)
         return {"transition": resolved}
 
-    # ---- YouTube Search, Last.fm Extraction & Full Album Download Jobs ----
+    # ---- YouTube / Spotify / Direct Link Search, Last.fm Extraction & Full Album Download Jobs ----
 
     @app.get("/api/youtube/search", dependencies=[Depends(require_paired_client)])
-    async def search_youtube(q: str = Query(..., min_length=2)) -> dict[str, Any]:
-        results = youtube_client.search_videos(q, max_results=6)
+    def search_youtube(q: str = Query(..., min_length=2)) -> dict[str, Any]:
+        results = library_service.preview_single_track_or_link(q)
         return {"results": results}
 
     @app.post("/api/jobs/extract", dependencies=[Depends(require_paired_client)])
@@ -480,7 +482,7 @@ def create_app() -> FastAPI:
         return await read_settings()
 
     @app.post("/api/lastfm/auth/start", dependencies=[Depends(require_paired_client)])
-    async def start_lastfm_web_auth() -> dict[str, str]:
+    def start_lastfm_web_auth() -> dict[str, str]:
         cfg = db_repo.get_settings()
         client = LastFMClient(
             api_key=str(cfg.get("lastfm_api_key", "")),
@@ -489,7 +491,7 @@ def create_app() -> FastAPI:
         return client.get_auth_token()
 
     @app.post("/api/lastfm/auth/complete", dependencies=[Depends(require_paired_client)])
-    async def complete_lastfm_web_auth(token: str = Query(...)) -> dict[str, str]:
+    def complete_lastfm_web_auth(token: str = Query(...)) -> dict[str, str]:
         cfg = db_repo.get_settings()
         client = LastFMClient(
             api_key=str(cfg.get("lastfm_api_key", "")),

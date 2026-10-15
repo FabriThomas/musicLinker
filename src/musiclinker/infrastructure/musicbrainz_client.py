@@ -102,12 +102,13 @@ class MusicBrainzClient:
                 result["tracks"] = tracks_out
         except Exception as exc:
             logger.warning("MusicBrainz album tracklist lookup failed for %s - %s: %s", artist, album, exc)
+        return result
 
     def fetch_album_cover(self, artist: str, album: str) -> tuple[bytes | None, str]:
         """Fetch canonical album artwork bytes and mime type for an artist and album release group."""
         try:
             tracklist_info = self.fetch_album_tracklist(artist, album)
-            cover_url = tracklist_info.get("cover_url")
+            cover_url = tracklist_info.get("cover_url") if isinstance(tracklist_info, dict) else ""
             if cover_url:
                 return self._download_cover_art(cover_url)
         except Exception as exc:

@@ -126,8 +126,9 @@ class LibraryService:
         # 3. MusicBrainz release lookup
         try:
             mb_data = musicbrainz_client.fetch_album_tracklist(artist, album_or_url)
-            if mb_data.get("tracks"):
+            if mb_data and mb_data.get("tracks"):
                 mb_data["source"] = "musicbrainz"
+                mb_data["entity_type"] = "album"
                 return mb_data
         except Exception as exc:
             logger.warning("MusicBrainz lookup failed: %s", exc)
@@ -143,6 +144,7 @@ class LibraryService:
                     "album": album_or_url.strip(),
                     "release_year": "",
                     "source": "lastfm",
+                    "entity_type": "album",
                     "tracks": lfm_tracks,
                 }
         except Exception as exc:
@@ -166,6 +168,7 @@ class LibraryService:
                 "album": album_or_url.strip(),
                 "release_year": "",
                 "source": "youtube_search",
+                "entity_type": "album",
                 "tracks": fallback_tracks,
             }
         except Exception as exc:
@@ -175,8 +178,51 @@ class LibraryService:
                 "album": album_or_url.strip(),
                 "release_year": "",
                 "source": "none",
+                "entity_type": "album",
                 "tracks": [],
             }
+
+    def preview_single_track_or_link(self, query_or_url: str) -> list[dict[str, Any]]:
+        """
+        Preview a single track or search query before downloading:
+          - Supports Spotify Track/Album URLs
+          - Supports direct YouTube / YouTube Music video URLs
+          - Supports plain text search queries
+        """
+        cleaned = query_or_url.strip()
+        if not cleaned:
+            return []
+
+        if spotify_client.is_spotify_url(cleaned):
+            try:
+                sp_meta = spotify_client.fetch_spotify_metadata(cleaned)
+                tracks = sp_meta.get("tracks") or []
+                if tracks:
+                    results: list[dict[str, Any]] = []
+                    for tr in tracks[:12]:
+                        t_artist = str(tr.get("artist") or sp_meta.get("artist") or "Unknown Artist")
+                        t_title = str(tr.get("title") or "Unknown Track")
+                        results.append(
+                            {
+                                "id": f"sp_{tr.get('track_number', 1)}",
+                                "title": f"{t_artist} - {t_title}",
+                                "track_title": t_title,
+                                "artist": t_artist,
+                                "album": str(sp_meta.get("album") or ""),
+                                "track_number": int(tr.get("track_number") or 0),
+                                "uploader": f"Spotify • {sp_meta.get('album') or 'Single'}",
+                                "duration": int(tr.get("duration") or 0),
+                                "url": cleaned if len(tracks) == 1 else "",
+                                "thumbnail": str(sp_meta.get("cover_url") or ""),
+                                "source": "spotify",
+                            }
+                        )
+                    return results
+            except Exception as exc:
+                logger.warning("Spotify track preview failed for '%s': %s", cleaned, exc)
+
+        return youtube_client.preview_track_or_link(cleaned, max_results=6)
+
 
 
     def update_track_metadata(self, track_id: int, payload: TrackMetadataUpdatePayload) -> TrackEntity:

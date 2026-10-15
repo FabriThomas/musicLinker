@@ -404,5 +404,57 @@ def test_crud_endpoints_and_library_service(tmp_path):
     assert res_album_del.json()["status"] == "deleted"
 
 
+def test_musicbrainz_tracklist_return_and_timestamp_slicing():
+    from unittest.mock import MagicMock, patch
+    from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
+    from musiclinker.infrastructure.youtube_client import youtube_client
+    from musiclinker.services.library_service import library_service
 
+    # 1. Verify _parse_timestamp_slice parses &t= and &end= cleanly
+    clean_url, start_s, end_s = youtube_client._parse_timestamp_slice(
+        "https://www.youtube.com/watch?v=mock123&t=320s&end=530s"
+    )
+    assert clean_url == "https://www.youtube.com/watch?v=mock123"
+    assert start_s == 320.0
+    assert end_s == 530.0
 
+    # 2. Verify MusicBrainz fetch_album_tracklist returns result dictionary (not None)
+    mock_search_resp = MagicMock()
+    mock_search_resp.json.return_value = {
+        "releases": [
+            {
+                "id": "rel-123",
+                "title": "Random Access Memories",
+                "date": "2013-05-17",
+                "artist-credit": [{"name": "Daft Punk"}],
+            }
+        ]
+    }
+    mock_rel_resp = MagicMock()
+    mock_rel_resp.json.return_value = {
+        "media": [
+            {
+                "tracks": [
+                    {"number": "1", "title": "Give Life Back to Music", "length": 275000},
+                    {"number": "2", "title": "The Game of Love", "length": 322000},
+                ]
+            }
+        ]
+    }
+    with patch.object(musicbrainz_client.session, "get", side_effect=[mock_search_resp, mock_rel_resp]), patch.object(
+        musicbrainz_client, "_throttle"
+    ):
+        mb_res = musicbrainz_client.fetch_album_tracklist("Daft Punk", "Random Access Memories")
+        assert mb_res is not None
+        assert mb_res["album"] == "Random Access Memories"
+        assert mb_res["artist"] == "Daft Punk"
+        assert len(mb_res["tracks"]) == 2
+        assert mb_res["tracks"][0]["title"] == "Give Life Back to Music"
+
+    # 3. Verify Single Track / Link preview for Spotify track URL
+    sp_preview = library_service.preview_single_track_or_link(
+        "https://open.spotify.com/track/6OmhkSOpvYBokMKQxpIGx2"
+    )
+    assert len(sp_preview) == 1
+    assert sp_preview[0]["source"] == "spotify"
+    assert sp_preview[0]["url"] == "https://open.spotify.com/track/6OmhkSOpvYBokMKQxpIGx2"

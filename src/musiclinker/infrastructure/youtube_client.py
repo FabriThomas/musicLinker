@@ -178,13 +178,14 @@ class YouTubeClient:
                     ch_start = int(ch.get("start_time") or 0)
                     ch_end = int(ch.get("end_time") or ch_start)
                     ch_dur = max(0, ch_end - ch_start)
+                    range_suffix = f"&t={ch_start}s" + (f"&end={ch_end}s" if ch_end > ch_start else "")
                     tracks.append(
                         {
                             "track_number": c_idx,
                             "title": ch_title,
                             "artist": album_artist,
                             "duration": ch_dur,
-                            "youtube_url": f"{vid_url}&t={ch_start}s" if vid_id else vid_url,
+                            "youtube_url": f"{vid_url}{range_suffix}" if vid_id else vid_url,
                         }
                     )
             # 2. Timestamp lines in description (e.g. "01. Song 03:45" or "0:00 Song")
@@ -206,13 +207,14 @@ class YouTubeClient:
                     for s_idx, (start_sec, tr_name) in enumerate(parsed_stamps, start=1):
                         next_sec = parsed_stamps[s_idx][0] if s_idx < len(parsed_stamps) else total_dur
                         dur = max(0, next_sec - start_sec)
+                        range_suffix = f"&t={start_sec}s" + (f"&end={next_sec}s" if next_sec > start_sec else "")
                         tracks.append(
                             {
                                 "track_number": s_idx,
                                 "title": tr_name,
                                 "artist": album_artist,
                                 "duration": dur,
-                                "youtube_url": f"{vid_url}&t={start_sec}s" if vid_id else vid_url,
+                                "youtube_url": f"{vid_url}{range_suffix}" if vid_id else vid_url,
                             }
                         )
 
@@ -240,16 +242,46 @@ class YouTubeClient:
                     }
                 )
 
+        is_official_album = "OLAK5uy_" in clean_url or str(info.get("title") or "").lower().startswith("album - ")
+        distinct_artists = {tr["artist"].lower() for tr in tracks if tr.get("artist")}
+        entity_type = "album" if is_official_album or len(distinct_artists) <= 1 else "playlist"
+        if entity_type == "playlist" and not default_artist and len(distinct_artists) > 2:
+            album_artist = "Various Artists"
+
         return {
             "artist": album_artist,
             "album": album_title,
+            "entity_type": entity_type,
             "release_year": str(info.get("release_year") or info.get("upload_date", "")[:4]),
             "cover_url": cover_url,
             "source": "youtube_playlist",
             "tracks": tracks,
         }
 
-
+    def preview_track_or_link(self, query_or_url: str, max_results: int = 6) -> list[dict[str, Any]]:
+        """Resolve either a direct YouTube/YouTube Music track URL or a search query into previewable track items."""
+        clean = query_or_url.strip()
+        if not clean:
+            return []
+        raw_results = self.search_videos(clean, max_results=1 if clean.startswith(("http://", "https://")) else max_results)
+        from musiclinker.infrastructure.hasher import clean_track_title
+        enriched: list[dict[str, Any]] = []
+        for item in raw_results:
+            raw_title = str(item.get("title") or "Unknown Title").strip()
+            uploader = str(item.get("uploader") or "YouTube").replace(" - Topic", "").strip()
+            if " - " in raw_title:
+                inf_artist, inf_title = raw_title.split(" - ", 1)
+            else:
+                inf_artist, inf_title = uploader, raw_title
+            enriched.append(
+                {
+                    **item,
+                    "inferred_artist": inf_artist.strip(),
+                    "inferred_title": clean_track_title(inf_title.strip()),
+                    "is_topic": "topic" in str(item.get("uploader") or "").lower(),
+                }
+            )
+        return enriched
 
     def resolve_best_audio_match(
         self,
@@ -320,8 +352,11 @@ class YouTubeClient:
                     exc,
                 )
 
-        # 2. Fallback: Search YouTube with Topic & Official Audio priority
-        query = f"{artist} - {title} Topic"
+        # 2. Search YouTube with mode-appropriate query & scoring
+        if preferred_method == "youtube_video":
+            query = f"{artist} - {title} official video"
+        else:
+            query = f"{artist} - {title} Topic"
         matches = self.search_videos(query, max_results=5)
         if not matches:
             matches = self.search_videos(f"{artist} - {title} official audio", max_results=5)
@@ -329,23 +364,29 @@ class YouTubeClient:
         if not matches:
             raise YouTubeResolutionError(f"No YouTube audio match found for '{artist} - {title}'")
 
-        # Score candidates to prefer Topic channels and official audio
         def score_candidate(cand: dict[str, Any]) -> int:
             score = 0
             uploader = str(cand.get("uploader") or "").lower()
             cand_title = str(cand.get("title") or "").lower()
             dur = cand.get("duration", 0)
 
-            if "topic" in uploader:
-                score += 50
-            if "vevo" in uploader or "official" in uploader:
-                score += 20
-            if "official audio" in cand_title:
-                score += 30
-            elif "audio" in cand_title:
-                score += 15
+            if preferred_method == "youtube_video":
+                if "official music video" in cand_title or "official video" in cand_title:
+                    score += 45
+                if "vevo" in uploader or "official" in uploader:
+                    score += 30
+                if "topic" in uploader:
+                    score += 15
+            else:
+                if "topic" in uploader:
+                    score += 65 if preferred_method == "youtube_music" else 50
+                if "vevo" in uploader or "official" in uploader:
+                    score += 20
+                if "official audio" in cand_title:
+                    score += 35
+                elif "audio" in cand_title:
+                    score += 15
 
-            # Penalize likely live recordings or fan edits
             if "live" in cand_title and "live" not in title.lower():
                 score -= 30
             if "remix" in cand_title and "remix" not in title.lower():
@@ -359,6 +400,81 @@ class YouTubeClient:
         best = max(matches, key=score_candidate)
         return best
 
+    @staticmethod
+    def _parse_timestamp_slice(url_or_query: str) -> tuple[str, float | None, float | None]:
+        """Extract &t=<start>s and &end=<end>s from a URL and return (clean_url, start_sec, end_sec)."""
+        clean_expr = url_or_query.replace("music.youtube.com", "www.youtube.com")
+        start_sec: float | None = None
+        end_sec: float | None = None
+
+        if clean_expr.startswith(("http://", "https://")):
+            t_match = re.search(r"[?&]t=(\d+(?:\.\d+)?)s?", clean_expr)
+            end_match = re.search(r"[?&]end=(\d+(?:\.\d+)?)s?", clean_expr)
+            if t_match:
+                start_sec = float(t_match.group(1))
+                clean_expr = re.sub(r"([?&])t=\d+(?:\.\d+)?s?&?", r"\1", clean_expr).rstrip("?&")
+            if end_match:
+                end_sec = float(end_match.group(1))
+                clean_expr = re.sub(r"([?&])end=\d+(?:\.\d+)?s?&?", r"\1", clean_expr).rstrip("?&")
+            clean_expr = clean_expr.replace("?&", "?")
+        return clean_expr, start_sec, end_sec
+
+    def preview_track_or_link(self, query_or_url: str, max_results: int = 6) -> list[dict[str, Any]]:
+        """Preview a single YouTube/YTM video link or a search query for the Single Track / Link Downloader."""
+        cleaned = query_or_url.strip()
+        if not cleaned:
+            return []
+
+        if cleaned.startswith(("http://", "https://")):
+            clean_url, start_s, end_s = self._parse_timestamp_slice(cleaned)
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": True,
+                "skip_download": True,
+                "noplaylist": True,
+                **self._get_base_ydl_opts(),
+            }
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(clean_url, download=False)
+                if isinstance(info, dict):
+                    entries = info.get("entries", [info]) if "entries" in info else [info]
+                    results: list[dict[str, Any]] = []
+                    for entry in entries[:max_results]:
+                        if not entry:
+                            continue
+                        vid_id = entry.get("id", "")
+                        url = entry.get("webpage_url") or entry.get("url") or cleaned
+                        if vid_id and not str(url).startswith("http"):
+                            url = f"https://www.youtube.com/watch?v={vid_id}"
+                        thumbnails = entry.get("thumbnails") or []
+                        thumb_url = thumbnails[-1].get("url", "") if thumbnails else entry.get("thumbnail", "")
+                        dur = int(entry.get("duration") or 0)
+                        if start_s is not None and end_s is not None and end_s > start_s:
+                            dur = int(end_s - start_s)
+                        raw_title = str(entry.get("title") or "YouTube Audio")
+                        uploader = str(entry.get("uploader") or entry.get("channel") or "YouTube").replace(" - Topic", "")
+                        results.append(
+                            {
+                                "id": vid_id or "yt_direct",
+                                "title": raw_title,
+                                "uploader": uploader,
+                                "duration": dur,
+                                "url": cleaned,
+                                "thumbnail": thumb_url,
+                                "source": "youtube_music" if "music.youtube.com" in cleaned else "youtube",
+                            }
+                        )
+                    if results:
+                        return results
+            except Exception as exc:
+                logger.warning("Direct YouTube link preview failed for '%s': %s", cleaned, exc)
+
+        matches = self.search_videos(cleaned, max_results=max_results)
+        for m in matches:
+            m.setdefault("source", "youtube")
+        return matches
 
     def download_mp3_to_staging(
         self,
@@ -370,7 +486,12 @@ class YouTubeClient:
     ) -> tuple[Path, dict[str, Any], str]:
         staging_dir.mkdir(parents=True, exist_ok=True)
         outtmpl = str(staging_dir / f"{stem_name}.%(ext)s")
-        valid_bitrate = "320" if bitrate_kbps >= 256 else "192"
+        if bitrate_kbps >= 300:
+            valid_bitrate = "320"
+        elif bitrate_kbps >= 224:
+            valid_bitrate = "256"
+        else:
+            valid_bitrate = "192"
 
         def _hook(status_dict: dict[str, Any]) -> None:
             if progress_cb and status_dict.get("status") == "downloading":
@@ -378,6 +499,8 @@ class YouTubeClient:
                 downloaded = status_dict.get("downloaded_bytes") or 0
                 if total > 0:
                     progress_cb(min(100.0, round((downloaded / total) * 100.0, 1)))
+
+        clean_expr, start_sec, end_sec = self._parse_timestamp_slice(url_or_query)
 
         ydl_opts: dict[str, Any] = {
             "format": "bestaudio/best",
@@ -401,7 +524,16 @@ class YouTubeClient:
             ],
         }
 
-        clean_expr = url_or_query.replace("music.youtube.com", "www.youtube.com")
+        if start_sec is not None:
+            ff_args = ["-ss", str(start_sec)]
+            if end_sec is not None and end_sec > start_sec:
+                ff_args.extend(["-to", str(end_sec)])
+            ydl_opts["postprocessor_args"] = {"FFmpegExtractAudio": ff_args}
+            if hasattr(yt_dlp.utils, "download_range_func"):
+                ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func(
+                    None, [(start_sec, end_sec if (end_sec and end_sec > start_sec) else float("inf"))]
+                )
+
         target_expr = clean_expr if clean_expr.startswith(("http://", "https://")) else f"ytsearch1:{clean_expr}"
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

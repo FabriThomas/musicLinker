@@ -1,11 +1,12 @@
 /**
- * Main UI controller for MusicLinker Studio & Android APK v3.0:
+ * Main UI controller for MusicLinker Studio & Android APK v3.0.6:
+ *  - Single Track / Direct Link Downloader (Search query, YouTube/YTM URL, or Spotify Track URL)
+ *  - Full Album & Playlist Downloader (Spotify Album/Playlist, YouTube Playlist/Chapters, MusicBrainz, Last.fm)
  *  - Play by Album (1..N track_number order), Randomizer (Shuffle), and Sort by Track # / Alphabetical / Plays
  *  - 3-Layer Selection Mode:
  *      Layer 1 (Artists): starts 100% unselected
  *      Layer 2 (Albums, optional): starts 100% unselected (if 0 selected, all albums for selected artists pass through)
  *      Layer 3 (Tracks): starts 100% SELECTED for all matching tracks
- *  - Full Album Downloader (MusicBrainz / Last.fm / YouTube playlist lookup + batch download) & Offline Album Caching
  *  - Isolated #lyrics-container scroll math + 3-Tier Synced/Rough Lyrics
  */
 import { api } from "./api.js";
@@ -23,17 +24,17 @@ class MusicLinkerController {
     this.shuffleEnabled = false;
     this.offlineIds = new Set();
     this.currentIndex = -1;
+    this.searchDebounceTimer = null;
+    this.activeJobId = null;
 
     // 3-Layer Selection Mode State
-    // Layer 1 (Artists): starts 100% UNSELECTED
-    // Layer 2 (Albums): starts 100% UNSELECTED
-    // Layer 3 (Tracks): starts 100% SELECTED (we track only explicitly unchecked track IDs)
     this.viewMode = "standard"; // 'standard' | 'layered'
     this.layerSelectedArtists = new Set();
     this.layerSelectedAlbums = new Set();
     this.layerExcludedTrackIds = new Set();
 
-    // External Album Downloader Preview State
+    // Downloader Preview States
+    this.previewedSingleTracks = [];
     this.previewedAlbumTracks = [];
 
     // Lyrics & Non-Hijacking Scroll State
@@ -72,8 +73,36 @@ class MusicLinkerController {
     await this.refreshOfflineState();
     await this.loadSettingsIntoUI();
     await this.loadAlbums();
-    await this.loadLibrary();
+    await this.loadLibrary("", true);
     offlineStore.flushOfflineScrobbles(api).catch(() => {});
+  }
+
+  // ---- Toast Notification Helper ----
+
+  showToast(message, type = "info") {
+    const container = document.getElementById("toast-container");
+    if (!container) return;
+
+    const colorClasses =
+      type === "error"
+        ? "bg-red-950/95 border-red-500/50 text-red-200"
+        : type === "warning"
+        ? "bg-amber-950/95 border-amber-500/50 text-amber-200"
+        : "bg-zinc-900/95 border-emerald-500/50 text-emerald-200";
+
+    const icon = type === "error" ? "⚠" : type === "warning" ? "⚡" : "✓";
+
+    const toast = document.createElement("div");
+    toast.className = `ml-toast pointer-events-auto flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-xl backdrop-blur-md text-xs font-medium ${colorClasses}`;
+    toast.innerHTML = `<span class="font-bold text-sm">${icon}</span><span class="leading-snug">${this.escape(message)}</span>`;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+      toast.style.opacity = "0";
+      toast.style.transform = "translateY(8px) scale(0.95)";
+      toast.style.transition = "opacity 0.2s ease, transform 0.2s ease";
+      setTimeout(() => toast.remove(), 220);
+    }, 3200);
   }
 
   // ---- Custom Slider Fill Helper ----
@@ -99,6 +128,21 @@ class MusicLinkerController {
   async refreshOfflineState() {
     const cached = await offlineStore.getOfflineTracks();
     this.offlineIds = new Set(cached.map((t) => t.id));
+  }
+
+  async rescanLibraryOnDisk() {
+    const btn = document.getElementById("btn-rescan-library");
+    if (btn) btn.disabled = true;
+    try {
+      const res = await api.request("/api/library/rescan", { method: "POST" });
+      await this.loadAlbums();
+      await this.loadLibrary(document.getElementById("search-input")?.value || "", true);
+      this.showToast(`Library synced: ${res.indexed} track(s) indexed, ${res.pruned} missing pruned.`);
+    } catch (err) {
+      this.showToast(`Rescan failed: ${err.message}`, "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   async loadAlbums() {
@@ -132,7 +176,7 @@ class MusicLinkerController {
     let html = `
       <button
         data-album-filter=""
-        class="px-3 py-1 rounded-full text-xs font-semibold shrink-0 transition border ${
+        class="ml-btn px-3 py-1 rounded-full text-xs font-semibold shrink-0 border ${
           allActive
             ? "bg-emerald-500 text-zinc-950 border-emerald-400 shadow-sm"
             : "bg-zinc-900/90 text-zinc-300 border-zinc-800 hover:border-zinc-600"
@@ -148,7 +192,7 @@ class MusicLinkerController {
           <button
             data-album-filter="${this.escapeAttr(a.album)}"
             title="${this.escapeAttr(a.album_artist)} — ${this.escapeAttr(a.album)}"
-            class="px-3 py-1 rounded-full text-xs font-medium shrink-0 transition border flex items-center gap-1.5 ${
+            class="ml-btn px-3 py-1 rounded-full text-xs font-medium shrink-0 border flex items-center gap-1.5 ${
               active
                 ? "bg-emerald-500 text-zinc-950 border-emerald-400 font-semibold"
                 : "bg-zinc-900/80 text-zinc-300 border-zinc-800 hover:border-zinc-600"
@@ -166,7 +210,7 @@ class MusicLinkerController {
         this.selectedAlbum = btn.dataset.albumFilter || "";
         this.renderAlbumFilterBar();
         const searchVal = document.getElementById("search-input")?.value || "";
-        this.loadLibrary(searchVal);
+        this.loadLibrary(searchVal, false);
       });
     });
   }
@@ -194,17 +238,23 @@ class MusicLinkerController {
     return copy;
   }
 
-  async loadLibrary(search = "") {
+  async loadLibrary(search = "", reloadAll = true) {
     try {
-      const allRes = await api.request(`/api/tracks?sort_by=${encodeURIComponent(this.sortBy)}`);
-      this.allTracks = allRes.tracks || [];
-      const qs = new URLSearchParams({
-        search,
-        album: this.selectedAlbum,
-        sort_by: this.sortBy,
-      });
-      const data = await api.request(`/api/tracks?${qs.toString()}`);
-      this.tracks = data.tracks || [];
+      if (reloadAll || !this.allTracks.length) {
+        const allRes = await api.request(`/api/tracks?sort_by=${encodeURIComponent(this.sortBy)}`);
+        this.allTracks = allRes.tracks || [];
+      }
+      if (!search.trim() && !this.selectedAlbum) {
+        this.tracks = [...this.allTracks];
+      } else {
+        const qs = new URLSearchParams({
+          search,
+          album: this.selectedAlbum,
+          sort_by: this.sortBy,
+        });
+        const data = await api.request(`/api/tracks?${qs.toString()}`);
+        this.tracks = data.tracks || [];
+      }
     } catch (_err) {
       const cached = await offlineStore.getOfflineTracks();
       this.allTracks = this.sortTracksClientSide(cached, this.sortBy);
@@ -239,10 +289,10 @@ class MusicLinkerController {
     if (!container) return;
     if (!this.tracks.length) {
       container.innerHTML = `
-        <div class="p-10 text-center text-zinc-400 space-y-2">
-          <div class="text-2xl">🎵</div>
-          <div class="text-sm">No tracks match the current filter.</div>
-          <div class="text-xs text-zinc-500">Use the <b>Extractor & Album Downloader</b> tab to pull tracks or full studio albums.</div>
+        <div class="p-10 text-center text-zinc-400 space-y-2.5">
+          <div class="text-3xl">🎵</div>
+          <div class="text-sm font-medium text-zinc-300">No tracks match the current filter.</div>
+          <div class="text-xs text-zinc-500">Open the <b>⬇ Downloader</b> tab to grab any single song, Spotify/YouTube link, playlist, or full studio album.</div>
         </div>`;
       return;
     }
@@ -256,21 +306,24 @@ class MusicLinkerController {
         const yearBadge = t.original_year || t.release_year || "";
         const numBadge = t.track_number > 0 ? `#${String(t.track_number).padStart(2, "0")}` : "";
         const coverSrc = t.cover_url ? api.resolveUrl(t.cover_url) : "";
+        const eqIndicator = isCurrent
+          ? `<span class="ml-eq-bars shrink-0" title="Now Playing"><span class="ml-eq-bar"></span><span class="ml-eq-bar"></span><span class="ml-eq-bar"></span></span>`
+          : "";
         const syncIcon =
           t.lyric_sync_mode === "exact_lrc"
-            ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30" title="Exact LRCLIB Synced Lyrics">LRC</span>`
+            ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0" title="Exact LRCLIB Synced Lyrics">LRC</span>`
             : t.lyric_sync_mode === "youtube_captions" || t.lyric_sync_mode === "rough_interpolated"
-            ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30" title="Rough Synced Lyrics">≈Sync</span>`
+            ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0" title="Rough Synced Lyrics">≈Sync</span>`
             : "";
 
         return `
-          <div class="group flex items-center justify-between p-2.5 rounded-xl transition border ${
+          <div class="ml-track-row group flex items-center justify-between p-2.5 rounded-xl border ${
             isCurrent
-              ? "bg-emerald-950/50 border-emerald-500/40 shadow-sm"
-              : "border-transparent hover:bg-zinc-800/60 hover:border-zinc-800"
+              ? "bg-emerald-950/50 border-emerald-500/45 shadow-sm"
+              : "bg-zinc-900/30 border-zinc-800/40 hover:bg-zinc-800/65 hover:border-zinc-700/80"
           }">
             <div class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer" data-play-idx="${idx}">
-              <div class="w-11 h-11 rounded-lg bg-zinc-800 flex items-center justify-center overflow-hidden shrink-0 border border-zinc-700/50">
+              <div class="w-11 h-11 rounded-lg bg-zinc-800 flex items-center justify-center overflow-hidden shrink-0 border border-zinc-700/60 relative">
                 ${
                   coverSrc
                     ? `<img src="${coverSrc}" class="w-full h-full object-cover" alt="cover"/>`
@@ -279,11 +332,12 @@ class MusicLinkerController {
               </div>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
-                  ${numBadge ? `<span class="text-[11px] font-mono text-emerald-400 font-semibold">${numBadge}</span>` : ""}
-                  <span class="font-semibold text-sm text-zinc-100 truncate">${this.escape(t.title)}</span>
+                  ${eqIndicator}
+                  ${numBadge ? `<span class="text-[11px] font-mono text-emerald-400 font-semibold shrink-0">${numBadge}</span>` : ""}
+                  <span class="font-semibold text-sm ${isCurrent ? "text-emerald-300" : "text-zinc-100"} truncate">${this.escape(t.title)}</span>
                   ${syncIcon}
                 </div>
-                <div class="text-xs text-zinc-400 truncate">
+                <div class="text-xs text-zinc-400 truncate mt-0.5">
                   <span class="text-zinc-300">${this.escape(t.artist_display)}</span>
                   <span class="mx-1 text-zinc-600">•</span>
                   <span class="text-emerald-400/90 hover:underline" data-filter-album="${this.escapeAttr(t.album)}">${this.escape(t.album)}</span>
@@ -292,26 +346,26 @@ class MusicLinkerController {
               </div>
             </div>
             <div class="flex items-center gap-1.5 shrink-0 ml-2">
-              <span class="text-[11px] text-zinc-500 hidden md:inline font-mono">${t.lastfm_playcount || 0}p</span>
+              <span class="text-[11px] text-zinc-500 hidden md:inline font-mono mr-1">${this.formatDuration(t.duration)}</span>
               <button
                 data-edit-idx="${idx}"
-                title="Rename Track, Track #, or Album Internally"
-                class="px-2 py-1 rounded-lg text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700/60 border border-transparent hover:border-zinc-600 transition">
+                title="Edit Track, Track #, or Album Metadata"
+                class="ml-btn-icon w-7 h-7 text-xs">
                 ✎
               </button>
               <button
                 data-delete-idx="${idx}"
                 title="Delete Track from Library & Disk"
-                class="px-2 py-1 rounded-lg text-xs text-red-400 hover:text-red-200 hover:bg-red-950/60 border border-transparent hover:border-red-500/30 transition">
+                class="ml-btn-icon w-7 h-7 text-xs hover:!text-red-300 hover:!border-red-500/50 hover:!bg-red-950/70">
                 🗑
               </button>
               <button
                 data-offline-idx="${idx}"
-                title="${isOffline ? "Saved for Offline (tap to remove)" : "Save for Offline"}"
-                class="px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                title="${isOffline ? "Saved for Offline (tap to remove)" : "Save for Offline (APK)"}"
+                class="ml-btn px-2.5 py-1 rounded-lg text-xs font-medium border ${
                   isOffline
                     ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300"
-                    : "border-zinc-700/80 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
+                    : "bg-zinc-800/80 border-zinc-700/80 text-zinc-300 hover:border-emerald-500/50 hover:text-emerald-300"
                 }">
                 ${isOffline ? "✓ Offline" : "↓"}
               </button>
@@ -328,7 +382,7 @@ class MusicLinkerController {
           e.stopPropagation();
           this.selectedAlbum = albumSpan.dataset.filterAlbum || "";
           this.renderAlbumFilterBar();
-          this.loadLibrary(document.getElementById("search-input")?.value || "");
+          this.loadLibrary(document.getElementById("search-input")?.value || "", false);
           return;
         }
         this.playQueue = [...this.tracks];
@@ -377,6 +431,7 @@ class MusicLinkerController {
     this.updateShuffleButtonUI();
     this.playQueue = albumTracks;
     await this.playByIndex(0);
+    this.showToast(`Playing album "${this.selectedAlbum}" (${albumTracks.length} tracks)`);
   }
 
   async cacheSelectedAlbumOffline() {
@@ -397,9 +452,10 @@ class MusicLinkerController {
       await this.refreshOfflineState();
       this.renderTrackList();
       if (btn) btn.textContent = "✓ Album Cached Offline";
+      this.showToast(`Cached ${albumTracks.length} track(s) for offline playback.`);
     } catch (err) {
-      alert(`Failed caching album offline: ${err.message}`);
-      if (btn) btn.textContent = "↓ Cache Album Offline";
+      this.showToast(`Failed caching album offline: ${err.message}`, "error");
+      if (btn) btn.textContent = "↓ Cache Offline (APK)";
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -408,11 +464,15 @@ class MusicLinkerController {
   toggleShuffle() {
     this.shuffleEnabled = !this.shuffleEnabled;
     this.updateShuffleButtonUI();
+    this.showToast(this.shuffleEnabled ? "Shuffle enabled" : "Shuffle disabled");
   }
 
   randomizeAndPlayCurrentView() {
     const pool = this.viewMode === "layered" ? this.getLayerSelectedTracks() : this.tracks;
-    if (!pool.length) return;
+    if (!pool.length) {
+      this.showToast("No tracks available to shuffle.", "warning");
+      return;
+    }
     const shuffled = [...pool];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -422,17 +482,18 @@ class MusicLinkerController {
     this.updateShuffleButtonUI();
     this.playQueue = shuffled;
     this.playByIndex(0);
+    this.showToast(`Shuffling ${shuffled.length} track(s)`);
   }
 
   updateShuffleButtonUI() {
     const btn = document.getElementById("btn-shuffle");
     if (!btn) return;
     btn.className = this.shuffleEnabled
-      ? "px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 text-xs font-semibold transition"
-      : "px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs font-medium transition";
+      ? "ml-btn px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 text-xs font-semibold"
+      : "ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-zinc-400";
   }
 
-  // ---- 3-Layer Hierarchical Selection Mode (Artists [Unselected] -> Albums [Unselected] -> Tracks [Selected]) ----
+  // ---- 3-Layer Hierarchical Selection Mode ----
 
   switchLibraryViewMode(mode) {
     this.viewMode = mode;
@@ -447,27 +508,19 @@ class MusicLinkerController {
 
     if (btnStd) {
       btnStd.className = !isLayered
-        ? "px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950"
-        : "px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200";
+        ? "ml-btn px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950"
+        : "ml-btn px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200";
     }
     if (btnLayer) {
       btnLayer.className = isLayered
-        ? "px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950"
-        : "px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200";
+        ? "ml-btn px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950"
+        : "ml-btn px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200";
     }
     if (isLayered) {
       this.renderLayeredSelector();
     }
   }
 
-  /**
-   * Computes candidate tracks for Layer 3 based on:
-   *  - Layer 1 (`this.layerSelectedArtists`): starts empty (unselected).
-   *  - Layer 2 (`this.layerSelectedAlbums`): starts empty (unselected).
-   *    If 0 albums are selected in Layer 2, ALL albums by the selected artists pass through!
-   *    If >=1 albums are selected in Layer 2, only those albums pass through.
-   *  - Layer 3 (`tracks`): ALL matching tracks are SELECTED by default unless in `this.layerExcludedTrackIds`.
-   */
   getLayerCandidateTracks() {
     if (this.layerSelectedArtists.size === 0) {
       return [];
@@ -492,7 +545,6 @@ class MusicLinkerController {
     const summaryEl = document.getElementById("layer-selection-summary");
     if (!artistsBox || !albumsBox || !tracksBox) return;
 
-    // Group distinct artists from allTracks
     const artistMap = new Map();
     this.allTracks.forEach((t) => {
       const name = t.album_artist || t.artist_display || "Unknown Artist";
@@ -503,7 +555,6 @@ class MusicLinkerController {
     });
     const artists = Array.from(artistMap.values()).sort((a, b) => a.name.localeCompare(b.name));
 
-    // Render Layer 1: Artists (Default: ALL UNSELECTED)
     artistsBox.innerHTML = artists.length
       ? artists
           .map((art) => {
@@ -525,7 +576,6 @@ class MusicLinkerController {
           .join("")
       : `<div class="text-xs text-zinc-500 p-3">No artists in library.</div>`;
 
-    // Group albums belonging to selected artists in Layer 1
     const albumMap = new Map();
     this.allTracks.forEach((t) => {
       const artKey = (t.album_artist || t.artist_display || "Unknown Artist").toLowerCase();
@@ -543,7 +593,6 @@ class MusicLinkerController {
     });
     const candidateAlbums = Array.from(albumMap.values()).sort((a, b) => a.name.localeCompare(b.name));
 
-    // Render Layer 2: Albums (Optional Filter — Default: ALL UNSELECTED)
     if (this.layerSelectedArtists.size === 0) {
       albumsBox.innerHTML = `<div class="text-xs text-zinc-500 p-3 italic">Select 1 or more artists in Layer 1 first.</div>`;
     } else {
@@ -570,7 +619,6 @@ class MusicLinkerController {
         .join("");
     }
 
-    // Render Layer 3: Tracks (Default: 100% SELECTED for all matching tracks)
     const candidateTracks = this.getLayerCandidateTracks();
     const selectedTracks = candidateTracks.filter((t) => !this.layerExcludedTrackIds.has(t.id));
 
@@ -607,7 +655,6 @@ class MusicLinkerController {
       } • ${selectedTracks.length}/${candidateTracks.length} track(s) selected`;
     }
 
-    // Bind Layer 1, 2, 3 checkbox events
     artistsBox.querySelectorAll("[data-layer-artist]").forEach((cb) => {
       cb.addEventListener("change", () => {
         const key = cb.dataset.layerArtist;
@@ -616,7 +663,6 @@ class MusicLinkerController {
         } else {
           this.layerSelectedArtists.delete(key);
         }
-        // Keep Layer 3 tracks 100% selected when changing artist filters
         this.layerExcludedTrackIds.clear();
         this.renderLayeredSelector();
       });
@@ -651,17 +697,18 @@ class MusicLinkerController {
   playLayeredSelectionQueue() {
     const selected = this.getLayerSelectedTracks();
     if (!selected.length) {
-      alert("Select at least one artist in Layer 1 first.");
+      this.showToast("Select at least one artist in Layer 1 first.", "warning");
       return;
     }
     this.playQueue = selected;
     this.playByIndex(0);
+    this.showToast(`Playing ${selected.length} selected track(s)`);
   }
 
   async cacheLayeredSelectionOffline() {
     const selected = this.getLayerSelectedTracks();
     if (!selected.length) {
-      alert("Select at least one artist in Layer 1 first.");
+      this.showToast("Select at least one artist in Layer 1 first.", "warning");
       return;
     }
     const btn = document.getElementById("btn-layer-cache-offline");
@@ -675,15 +722,172 @@ class MusicLinkerController {
       });
       await this.refreshOfflineState();
       this.renderTrackList();
-      if (btn) btn.textContent = `✓ Cached ${selected.length} Tracks`;
+      if (btn) btn.textContent = `✓ Cached ${selected.length}`;
+      this.showToast(`Cached ${selected.length} track(s) offline.`);
     } catch (err) {
-      alert(`Offline cache error: ${err.message}`);
+      this.showToast(`Offline cache error: ${err.message}`, "error");
     } finally {
       if (btn) btn.disabled = false;
     }
   }
 
-  // ---- Full Album Downloader (Preview & Batch Download) ----
+  // ---- Single Track & Direct Link Downloader ----
+
+  async previewSingleTrackOrLink() {
+    const queryInput = document.getElementById("dl-single-query");
+    const box = document.getElementById("dl-single-results");
+    const query = queryInput?.value.trim() || "";
+    if (!query) {
+      this.showToast("Enter a song title, YouTube link, or Spotify link first.", "warning");
+      return;
+    }
+
+    const btn = document.getElementById("btn-search-single");
+    if (btn) btn.disabled = true;
+    if (box) {
+      box.innerHTML = `<div class="text-xs text-zinc-400 p-2.5 bg-zinc-900/60 rounded-xl border border-zinc-800 animate-pulse">Searching streams & resolving metadata...</div>`;
+    }
+
+    try {
+      const res = await api.request(`/api/youtube/search?q=${encodeURIComponent(query)}`);
+      this.previewedSingleTracks = res.results || [];
+      if (!this.previewedSingleTracks.length) {
+        if (box) {
+          box.innerHTML = `<div class="text-xs text-amber-400 p-2.5 bg-zinc-900/60 rounded-xl border border-amber-500/30">No matching tracks found. Try a different query or paste a direct URL.</div>`;
+        }
+        return;
+      }
+
+      if (box) {
+        box.innerHTML = this.previewedSingleTracks
+          .map((item, idx) => {
+            const thumb = item.thumbnail
+              ? `<img src="${this.escapeAttr(item.thumbnail)}" class="w-10 h-10 rounded-lg object-cover border border-zinc-700 shrink-0" alt="thumb" />`
+              : `<div class="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center text-emerald-400 font-bold shrink-0">♪</div>`;
+            const durBadge = item.duration ? this.formatDuration(item.duration) : "";
+            const srcBadge = (item.source || "youtube").toUpperCase();
+            return `
+              <div class="flex items-center justify-between gap-2.5 p-2 rounded-xl bg-zinc-900/90 border border-zinc-800 hover:border-zinc-700 transition text-xs">
+                <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                  ${thumb}
+                  <div class="min-w-0 flex-1">
+                    <div class="font-semibold text-zinc-100 truncate">${this.escape(item.title)}</div>
+                    <div class="text-[11px] text-zinc-400 truncate flex items-center gap-1.5 mt-0.5">
+                      <span class="px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-300 font-mono text-[9px]">${this.escape(srcBadge)}</span>
+                      <span class="truncate">${this.escape(item.uploader || item.artist || "")}</span>
+                      ${durBadge ? `<span class="text-zinc-500 font-mono">• ${durBadge}</span>` : ""}
+                    </div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <button
+                    data-fill-single-idx="${idx}"
+                    class="ml-btn-icon w-7 h-7 text-xs"
+                    title="Copy metadata into override fields">
+                    ✎
+                  </button>
+                  <button
+                    data-dl-single-idx="${idx}"
+                    class="ml-btn ml-btn-primary px-2.5 py-1.5 text-xs">
+                    ⬇ Download
+                  </button>
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+
+        box.querySelectorAll("[data-fill-single-idx]").forEach((b) => {
+          b.addEventListener("click", () => {
+            const item = this.previewedSingleTracks[Number(b.dataset.fillSingleIdx)];
+            if (!item) return;
+            const detailsEl = document.getElementById("dl-single-overrides-details");
+            if (detailsEl) detailsEl.open = true;
+            let artistGuess = item.artist || "";
+            let titleGuess = item.track_title || item.title || "";
+            if (!artistGuess && titleGuess.includes(" - ")) {
+              const parts = titleGuess.split(" - ");
+              artistGuess = parts[0].trim();
+              titleGuess = parts.slice(1).join(" - ").trim();
+            }
+            const artEl = document.getElementById("dl-single-artist");
+            const titEl = document.getElementById("dl-single-title");
+            const albEl = document.getElementById("dl-single-album");
+            const numEl = document.getElementById("dl-single-track-num");
+            if (artEl) artEl.value = artistGuess;
+            if (titEl) titEl.value = titleGuess;
+            if (albEl && item.album) albEl.value = item.album;
+            if (numEl && item.track_number) numEl.value = String(item.track_number);
+            this.showToast("Populated metadata overrides from preview.");
+          });
+        });
+
+        box.querySelectorAll("[data-dl-single-idx]").forEach((b) => {
+          b.addEventListener("click", () => {
+            const item = this.previewedSingleTracks[Number(b.dataset.dlSingleIdx)];
+            if (item) this.startDirectTrackDownload(item);
+          });
+        });
+      }
+    } catch (err) {
+      if (box) {
+        box.innerHTML = `<div class="text-xs text-rose-400 p-2">Search failed: ${this.escape(err.message)}</div>`;
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async startDirectTrackDownload(previewItem = null) {
+    const rawQuery = document.getElementById("dl-single-query")?.value.trim() || "";
+    const queryOrUrl = previewItem ? (previewItem.url || previewItem.title || rawQuery) : rawQuery;
+    if (!queryOrUrl) {
+      this.showToast("Enter a song query, YouTube URL, or Spotify link to download.", "warning");
+      return;
+    }
+
+    let artistOverride = document.getElementById("dl-single-artist")?.value.trim() || "";
+    let titleOverride = document.getElementById("dl-single-title")?.value.trim() || "";
+    let albumOverride = document.getElementById("dl-single-album")?.value.trim() || "";
+    let trackNumOverride = Number(document.getElementById("dl-single-track-num")?.value || 0);
+
+    if (previewItem && !artistOverride && !titleOverride && previewItem.artist && previewItem.track_title) {
+      artistOverride = previewItem.artist;
+      titleOverride = previewItem.track_title;
+      albumOverride = albumOverride || previewItem.album || "";
+      trackNumOverride = trackNumOverride || Number(previewItem.track_number || 0);
+    }
+
+    const bitrate = Number(document.getElementById("dl-single-bitrate")?.value || 320);
+    const method = document.getElementById("dl-single-method")?.value || "auto";
+
+    const logBox = document.getElementById("job-logs");
+    const banner = document.getElementById("live-job-banner");
+    if (logBox) logBox.textContent = `Starting track download for '${queryOrUrl}'...`;
+    if (banner) banner.classList.remove("hidden");
+
+    try {
+      const job = await api.request("/api/jobs/download", {
+        method: "POST",
+        body: JSON.stringify({
+          query_or_url: queryOrUrl,
+          artist_override: artistOverride,
+          title_override: titleOverride,
+          album_override: albumOverride,
+          track_number_override: trackNumOverride,
+          bitrate_kbps: bitrate,
+          download_method: method,
+        }),
+      });
+      this.activeJobId = job.job_id;
+      this.showToast(`Queued download: ${previewItem?.title || queryOrUrl}`);
+      this.subscribeToJobProgress(job.job_id);
+    } catch (err) {
+      this.showToast(`Download failed to start: ${err.message}`, "error");
+    }
+  }
+
+  // ---- Full Album & Playlist Downloader (Preview & Batch Download) ----
 
   async previewAlbumForDownload() {
     const artistInput = document.getElementById("dl-album-artist");
@@ -691,7 +895,6 @@ class MusicLinkerController {
     let artist = artistInput?.value.trim() || "";
     let album = albumInput?.value.trim() || "";
 
-    // Auto-swap if user pasted URL into Artist input
     if ((artist.startsWith("http://") || artist.startsWith("https://") || artist.startsWith("spotify:")) && !album) {
       album = artist;
       artist = "";
@@ -701,21 +904,26 @@ class MusicLinkerController {
 
     const box = document.getElementById("dl-album-preview-list");
     if (!album && !artist) {
-      alert("Enter an Album name, Spotify URL, or YouTube Album/Playlist URL.");
+      this.showToast("Enter an Album/Playlist name, Spotify link, or YouTube URL.", "warning");
       return;
     }
-    if (box) box.innerHTML = `<div class="text-xs text-zinc-400 p-2">Looking up tracklist from Spotify / MusicBrainz / YouTube Music...</div>`;
+    const btn = document.getElementById("btn-preview-album");
+    if (btn) btn.disabled = true;
+    if (box) {
+      box.innerHTML = `<div class="text-xs text-zinc-400 p-2.5 bg-zinc-900/60 rounded-xl border border-zinc-800 animate-pulse">Resolving tracklist from Spotify / YouTube / MusicBrainz...</div>`;
+    }
 
     try {
       const qs = new URLSearchParams({ artist, album });
       const res = await api.request(`/api/albums/lookup?${qs.toString()}`);
       this.previewedAlbumTracks = res.tracks || [];
       if (!this.previewedAlbumTracks.length) {
-        if (box) box.innerHTML = `<div class="text-xs text-amber-400 p-2">No tracks found. Try entering Artist and Album name or a direct Spotify/YouTube link.</div>`;
+        if (box) {
+          box.innerHTML = `<div class="text-xs text-amber-400 p-2.5 bg-zinc-900/60 rounded-xl border border-amber-500/30">No tracks found. Try entering Artist and Album name or a direct Spotify/YouTube link.</div>`;
+        }
         return;
       }
 
-      // Auto-fill artist and album inputs with resolved metadata
       if (res.artist && artistInput && (!artistInput.value.trim() || artistInput.value.startsWith("http"))) {
         artistInput.value = res.artist;
       }
@@ -724,51 +932,73 @@ class MusicLinkerController {
       }
 
       if (box) {
-        const coverBadge = res.cover_url
-          ? `<div class="flex items-center gap-2 pb-1.5 border-b border-zinc-800 text-[11px] text-zinc-400">
-               <img src="${this.escape(res.cover_url)}" class="w-8 h-8 rounded object-cover border border-zinc-700" alt="Cover" />
-               <div class="truncate">
-                 <div class="font-semibold text-zinc-200 truncate">${this.escape(res.album || "Album")}</div>
-                 <div class="text-emerald-400 text-[10px] uppercase font-mono">${this.escape(res.source || "online")} • ${res.tracks.length} tracks</div>
-               </div>
-             </div>`
-          : "";
-
-        box.innerHTML = coverBadge + this.previewedAlbumTracks
-          .map(
-            (tr, idx) => `
-            <label class="flex items-center justify-between p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs hover:border-zinc-700 cursor-pointer transition">
-              <div class="flex items-center gap-2 truncate">
-                <input type="checkbox" data-dl-album-track="${idx}" checked class="accent-emerald-500" />
-                <span class="font-mono text-emerald-400 text-[11px]">#${String(tr.track_number || idx + 1).padStart(2, "0")}</span>
-                <span class="truncate font-medium">${this.escape(tr.title)}</span>
-                ${tr.artist && tr.artist !== res.artist ? `<span class="text-zinc-500 text-[10px] truncate">— ${this.escape(tr.artist)}</span>` : ""}
+        const entityType = (res.entity_type || "album").toUpperCase();
+        const sourceLabel = (res.source || "online").toUpperCase();
+        const headerHtml = `
+          <div class="flex items-center justify-between gap-2 p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-[11px]">
+            <div class="flex items-center gap-2 min-w-0">
+              ${
+                res.cover_url
+                  ? `<img src="${this.escapeAttr(res.cover_url)}" class="w-9 h-9 rounded-lg object-cover border border-zinc-700 shrink-0" alt="Cover" />`
+                  : `<div class="w-9 h-9 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-300 font-bold shrink-0">💿</div>`
+              }
+              <div class="min-w-0">
+                <div class="font-semibold text-zinc-100 truncate">${this.escape(res.album || "Collection")}</div>
+                <div class="text-indigo-400 text-[10px] font-mono truncate">${this.escape(sourceLabel)} • ${this.escape(entityType)} • ${res.tracks.length} tracks</div>
               </div>
-              ${tr.duration ? `<span class="font-mono text-[10px] text-zinc-500 ml-2">${this.formatDuration(tr.duration)}</span>` : ""}
-            </label>
-          `
-          )
-          .join("");
+            </div>
+            <button id="btn-toggle-all-album-tracks" type="button" class="ml-btn ml-btn-secondary px-2 py-1 text-[10px] shrink-0">
+              ☑ Toggle All
+            </button>
+          </div>
+        `;
+
+        box.innerHTML =
+          headerHtml +
+          this.previewedAlbumTracks
+            .map(
+              (tr, idx) => `
+              <label class="flex items-center justify-between p-1.5 rounded-lg bg-zinc-950 border border-zinc-800/90 text-xs hover:border-zinc-700 cursor-pointer transition">
+                <div class="flex items-center gap-2 truncate">
+                  <input type="checkbox" data-dl-album-track="${idx}" checked class="accent-emerald-500" />
+                  <span class="font-mono text-emerald-400 text-[11px]">#${String(tr.track_number || idx + 1).padStart(2, "0")}</span>
+                  <span class="truncate font-medium text-zinc-200">${this.escape(tr.title)}</span>
+                  ${tr.artist && tr.artist !== res.artist ? `<span class="text-zinc-400 text-[10px] truncate">— ${this.escape(tr.artist)}</span>` : ""}
+                </div>
+                ${tr.duration ? `<span class="font-mono text-[10px] text-zinc-500 ml-2 shrink-0">${this.formatDuration(tr.duration)}</span>` : ""}
+              </label>
+            `
+            )
+            .join("");
+
+        document.getElementById("btn-toggle-all-album-tracks")?.addEventListener("click", () => {
+          const cbs = Array.from(box.querySelectorAll("[data-dl-album-track]"));
+          const allChecked = cbs.every((c) => c.checked);
+          cbs.forEach((c) => {
+            c.checked = !allChecked;
+          });
+        });
       }
+      this.showToast(`Loaded ${this.previewedAlbumTracks.length} track(s) from ${res.album || "collection"}`);
     } catch (err) {
       if (box) box.innerHTML = `<div class="text-xs text-rose-400 p-2">Lookup failed: ${this.escape(err.message)}</div>`;
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
-
 
   async startAlbumDownloadJob() {
     let artist = document.getElementById("dl-album-artist")?.value.trim() || "";
     let album = document.getElementById("dl-album-title")?.value.trim() || "";
     const bitrate = Number(document.getElementById("ext-bitrate")?.value || 320);
 
-    // If user pasted URL into artist field instead of album field, auto-swap
     if ((artist.startsWith("http://") || artist.startsWith("https://") || artist.startsWith("spotify:")) && !album) {
       album = artist;
       artist = "";
     }
 
     if (!album) {
-      alert("Please enter an Album Title, Spotify URL, or YouTube Album/Playlist URL to download.");
+      this.showToast("Please enter an Album/Playlist Title, Spotify URL, or YouTube URL.", "warning");
       return;
     }
 
@@ -780,12 +1010,11 @@ class MusicLinkerController {
       );
     }
 
-
     const method = document.getElementById("dl-album-method")?.value || "auto";
 
     const logBox = document.getElementById("job-logs");
     const banner = document.getElementById("live-job-banner");
-    if (logBox) logBox.textContent = `Starting full album download for '${artist} — ${album}'...`;
+    if (logBox) logBox.textContent = `Starting collection download for '${artist || "Collection"} — ${album}'...`;
     if (banner) banner.classList.remove("hidden");
 
     try {
@@ -800,13 +1029,26 @@ class MusicLinkerController {
           download_method: method,
         }),
       });
+      this.activeJobId = job.job_id;
+      this.showToast(`Started downloading "${album}"`);
       this.subscribeToJobProgress(job.job_id);
     } catch (err) {
-      alert(`Album download failed to start: ${err.message}`);
+      this.showToast(`Album download failed to start: ${err.message}`, "error");
+    }
+  }
+
+  async cancelActiveJob() {
+    if (!this.activeJobId) return;
+    try {
+      await api.request(`/api/jobs/${this.activeJobId}/cancel`, { method: "POST" });
+      this.showToast("Cancellation requested for active job.", "warning");
+    } catch (err) {
+      this.showToast(`Cancel error: ${err.message}`, "error");
     }
   }
 
   subscribeToJobProgress(jobId) {
+    this.activeJobId = jobId;
     const logBox = document.getElementById("job-logs");
     api.subscribeJobEvents(jobId, (state) => {
       if (logBox) {
@@ -829,8 +1071,13 @@ class MusicLinkerController {
       }
 
       if (state.status === "completed") {
+        this.showToast(`Download job complete (${state.downloaded_count} track(s) added)!`);
         this.loadAlbums();
-        this.loadLibrary(document.getElementById("search-input")?.value || "");
+        this.loadLibrary(document.getElementById("search-input")?.value || "", true);
+      } else if (state.status === "failed") {
+        this.showToast(`Job failed: ${state.current_step}`, "error");
+      } else if (state.status === "cancelled") {
+        this.showToast("Download job cancelled.", "warning");
       }
     });
   }
@@ -859,7 +1106,7 @@ class MusicLinkerController {
     const rememberAlias = document.getElementById("edit-remember-alias")?.checked ?? true;
 
     if (!trackId || !title || !artist || !album) {
-      alert("Title, Artist, and Album are required.");
+      this.showToast("Title, Artist, and Album are required.", "warning");
       return;
     }
 
@@ -878,9 +1125,10 @@ class MusicLinkerController {
       });
       document.getElementById("edit-track-modal")?.classList.add("hidden");
       await this.loadAlbums();
-      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      await this.loadLibrary(document.getElementById("search-input")?.value || "", true);
+      this.showToast(`Updated ID3v2.4 metadata for "${title}"`);
     } catch (err) {
-      alert(`Failed saving metadata: ${err.message}`);
+      this.showToast(`Failed saving metadata: ${err.message}`, "error");
     }
   }
 
@@ -911,9 +1159,10 @@ class MusicLinkerController {
       document.getElementById("rename-album-modal")?.classList.add("hidden");
       this.selectedAlbum = newAlbum;
       await this.loadAlbums();
-      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      await this.loadLibrary(document.getElementById("search-input")?.value || "", true);
+      this.showToast(`Renamed album "${oldAlbum}" → "${newAlbum}"`);
     } catch (err) {
-      alert(`Album rename failed: ${err.message}`);
+      this.showToast(`Album rename failed: ${err.message}`, "error");
     }
   }
 
@@ -925,20 +1174,30 @@ class MusicLinkerController {
       const currentTrack = this.playQueue[this.currentIndex];
       if (currentTrack && currentTrack.id === trackId) {
         if (this.playQueue.length > 1) {
-          await this.nextTrack();
+          this.playQueue = this.playQueue.filter((t) => t.id !== trackId);
+          if (this.currentIndex >= this.playQueue.length) {
+            this.currentIndex = 0;
+          }
+          await this.playByIndex(this.currentIndex);
         } else {
-          this.audio.pause();
+          this.engine.audio.pause();
+          this.engine.audio.removeAttribute("src");
           this.currentIndex = -1;
-          this.updateNowPlayingUI(null);
+          this.playQueue = [];
+          this.updateNowPlayingBar(null);
+          this.updatePlayButtonUI(false);
         }
+      } else {
+        this.playQueue = this.playQueue.filter((t) => t.id !== trackId);
       }
       await this.loadAlbums();
-      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      await this.loadLibrary(document.getElementById("search-input")?.value || "", true);
       if (this.viewMode === "layered") {
         this.renderLayeredSelector();
       }
+      this.showToast("Track deleted from library.");
     } catch (err) {
-      alert(`Failed to delete track: ${err.message}`);
+      this.showToast(`Failed to delete track: ${err.message}`, "error");
     }
   }
 
@@ -954,19 +1213,20 @@ class MusicLinkerController {
       });
       this.selectedAlbum = "";
       await this.loadAlbums();
-      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      await this.loadLibrary(document.getElementById("search-input")?.value || "", true);
       if (this.viewMode === "layered") {
         this.renderLayeredSelector();
       }
+      this.showToast(`Deleted album "${albumName}"`);
     } catch (err) {
-      alert(`Failed to delete album: ${err.message}`);
+      this.showToast(`Failed to delete album: ${err.message}`, "error");
     }
   }
 
   async deleteLayerSelectedTracks() {
     const selected = this.getLayerSelectedTracks();
     if (!selected.length) {
-      alert("No tracks currently selected in Layer 3.");
+      this.showToast("No tracks currently selected in Layer 3.", "warning");
       return;
     }
     if (!confirm(`Permanently delete ${selected.length} selected track(s) from your library and disk?`)) {
@@ -981,13 +1241,13 @@ class MusicLinkerController {
           unmark_hashes: false,
         }),
       });
-      alert(`Deleted ${res.count || selected.length} track(s).`);
+      this.showToast(`Deleted ${res.count || selected.length} track(s).`);
       this.layerExcludedTrackIds.clear();
       await this.loadAlbums();
-      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      await this.loadLibrary(document.getElementById("search-input")?.value || "", true);
       this.renderLayeredSelector();
     } catch (err) {
-      alert(`Batch delete failed: ${err.message}`);
+      this.showToast(`Batch delete failed: ${err.message}`, "error");
     }
   }
 
@@ -998,8 +1258,9 @@ class MusicLinkerController {
         method: "DELETE",
       });
       await this.loadAlbumAliases();
+      this.showToast("Removed album alias rule.");
     } catch (err) {
-      alert(`Failed deleting alias: ${err.message}`);
+      this.showToast(`Failed deleting alias: ${err.message}`, "error");
     }
   }
 
@@ -1025,7 +1286,7 @@ class MusicLinkerController {
             </div>
             <button
               data-delete-alias="${a.id}"
-              class="px-2 py-1 rounded bg-zinc-800 hover:bg-red-950/80 hover:text-red-300 text-zinc-400 text-xs transition"
+              class="ml-btn-icon w-6 h-6 text-xs hover:!bg-red-950/80 hover:!text-red-300"
               title="Delete alias rule">
               ✕
             </button>
@@ -1057,13 +1318,17 @@ class MusicLinkerController {
       });
       const albMethod = document.getElementById("dl-album-method");
       if (albMethod) albMethod.value = method;
+      const singleMethod = document.getElementById("dl-single-method");
+      if (singleMethod) singleMethod.value = method;
+      const singleBitrate = document.getElementById("dl-single-bitrate");
+      if (singleBitrate) singleBitrate.value = String(bitrate);
       const extMethod = document.getElementById("ext-method");
       if (extMethod) extMethod.value = method;
       const extBitrate = document.getElementById("ext-bitrate");
       if (extBitrate) extBitrate.value = String(bitrate);
-      alert("Download & audio engine preferences saved.");
+      this.showToast("Download & audio engine preferences saved.");
     } catch (err) {
-      alert(`Failed saving download preferences: ${err.message}`);
+      this.showToast(`Failed saving download preferences: ${err.message}`, "error");
     }
   }
 
@@ -1076,13 +1341,15 @@ class MusicLinkerController {
     try {
       if (this.offlineIds.has(track.id)) {
         await offlineStore.removeOfflineTrack(track.id);
+        this.showToast(`Removed "${track.title}" from offline cache.`);
       } else {
         await offlineStore.saveTrackForOffline(track, api);
+        this.showToast(`Saved "${track.title}" for offline playback.`);
       }
       await this.refreshOfflineState();
       this.renderTrackList();
     } catch (err) {
-      alert(`Offline cache error: ${err.message}`);
+      this.showToast(`Offline cache error: ${err.message}`, "error");
       this.renderTrackList();
     }
   }
@@ -1126,11 +1393,14 @@ class MusicLinkerController {
       try {
         const res = await api.request(`/api/tracks/${current.id}/next-transition`);
         if (res.transition?.next_track) {
-          const foundIdx = this.playQueue.findIndex((t) => t.id === res.transition.next_track.id);
-          if (foundIdx !== -1) {
-            await this.playByIndex(foundIdx);
-            return;
+          const targetTrack = res.transition.next_track;
+          let foundIdx = this.playQueue.findIndex((t) => t.id === targetTrack.id);
+          if (foundIdx === -1) {
+            this.playQueue.splice(this.currentIndex + 1, 0, targetTrack);
+            foundIdx = this.currentIndex + 1;
           }
+          await this.playByIndex(foundIdx);
+          return;
         }
       } catch (_err) {}
     }
@@ -1208,16 +1478,16 @@ class MusicLinkerController {
     const mode = this.lyricsData.sync_mode || "none";
     if (badge) {
       if (mode === "exact_lrc") {
-        badge.className = "px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40";
+        badge.className = "px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40";
         badge.textContent = "✓ Exact LRC Sync (LRCLIB)";
       } else if (mode === "youtube_captions") {
-        badge.className = "px-2 py-0.5 rounded-full text-[11px] font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40";
+        badge.className = "px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40";
         badge.textContent = "≈ Rough Sync (YouTube Stream Captions)";
       } else if (mode === "rough_interpolated") {
-        badge.className = "px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40";
+        badge.className = "px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40";
         badge.textContent = "≈ Rough Sync (Estimated Position)";
       } else {
-        badge.className = "px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-800 text-zinc-400";
+        badge.className = "px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-zinc-800 text-zinc-400";
         badge.textContent = "No Synced Lyrics";
       }
     }
@@ -1332,6 +1602,16 @@ class MusicLinkerController {
     const coverEl = document.getElementById("np-cover");
     const carTitle = document.getElementById("car-title");
     const carArtist = document.getElementById("car-artist");
+
+    if (!track) {
+      if (titleEl) titleEl.textContent = "Not Playing";
+      if (artistEl) artistEl.textContent = "Select a track or album";
+      if (coverEl) coverEl.src = "/icon.svg";
+      if (carTitle) carTitle.textContent = "Not Playing";
+      if (carArtist) carArtist.textContent = "—";
+      return;
+    }
+
     const numPrefix = track.track_number > 0 ? `#${String(track.track_number).padStart(2, "0")} ` : "";
     if (titleEl) titleEl.textContent = `${numPrefix}${track.title}`;
     if (artistEl) artistEl.textContent = `${track.artist_display} • ${track.album}`;
@@ -1361,8 +1641,8 @@ class MusicLinkerController {
       if (panel) panel.classList.toggle("hidden", !active);
       if (btn) {
         btn.className = active
-          ? "px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500 text-zinc-950 shadow-sm transition"
-          : "px-3 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 transition";
+          ? "ml-btn px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500 text-zinc-950 shadow-sm"
+          : "ml-btn px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70";
       }
     });
   }
@@ -1378,7 +1658,7 @@ class MusicLinkerController {
     const useLlmFilter = document.getElementById("ext-use-llm")?.checked ?? false;
 
     if (!username) {
-      alert("Please enter a Last.fm username.");
+      this.showToast("Please enter a Last.fm username.", "warning");
       return;
     }
 
@@ -1403,9 +1683,11 @@ class MusicLinkerController {
           preferred_download_method: preferredMethod,
         }),
       });
+      this.activeJobId = job.job_id;
+      this.showToast(`Started Last.fm extraction for ${username}`);
       this.subscribeToJobProgress(job.job_id);
     } catch (err) {
-      alert(`Failed starting job: ${err.message}`);
+      this.showToast(`Failed starting job: ${err.message}`, "error");
     }
   }
 
@@ -1419,7 +1701,6 @@ class MusicLinkerController {
     if (listEl) listEl.innerHTML = "";
 
     try {
-      await this.saveSettings(true);
       const res = await api.request("/api/curation/analyze", { method: "POST" });
       this.proposedCurationActions = res.actions || [];
       const engineLabel = res.used_llm ? `LLM Proxy (${res.llm_endpoint})` : "Built-in Fuzzy Deduplicator";
@@ -1453,7 +1734,10 @@ class MusicLinkerController {
     if (statusEl) statusEl.textContent = "AI Agent is reasoning over library tracks...";
 
     try {
-      await this.saveSettings(true);
+      const configCard = document.getElementById("agent-config-card");
+      if (configCard && !configCard.classList.contains("hidden")) {
+        await this.saveSettings(true);
+      }
       if (!this.agentChatHistory) this.agentChatHistory = [];
 
       const res = await api.request("/api/curation/agent", {
@@ -1472,7 +1756,6 @@ class MusicLinkerController {
         replyEl.textContent = res.reply || "Processed library instruction.";
       }
 
-      // Populate engine badge
       const engineBadge = document.getElementById("agent-engine-badge");
       if (engineBadge) {
         if (res.used_llm) {
@@ -1484,7 +1767,6 @@ class MusicLinkerController {
         }
       }
 
-      // Handle Model Thinking (DeepSeek/Qwen chain-of-thought)
       const thinkBox = document.getElementById("agent-thinking-box");
       const thinkText = document.getElementById("agent-thinking-text");
       if (thinkBox && thinkText) {
@@ -1496,7 +1778,6 @@ class MusicLinkerController {
         }
       }
 
-      // Handle Clean Debugging & Diagnostics
       const debugCard = document.getElementById("agent-debug-card");
       if (debugCard && res.debug) {
         debugCard.classList.remove("hidden");
@@ -1542,7 +1823,7 @@ class MusicLinkerController {
       this.renderCurationActions();
     } catch (err) {
       if (statusEl) statusEl.textContent = `Agent error: ${err.message}`;
-      alert(`AI Agent error: ${err.message}`);
+      this.showToast(`AI Agent error: ${err.message}`, "error");
     } finally {
       if (btn) {
         btn.disabled = false;
@@ -1613,16 +1894,16 @@ class MusicLinkerController {
         method: "POST",
         body: JSON.stringify({ actions: selected }),
       });
-      alert(
-        `Applied fixes: ${res.renamed} track(s)/album(s) renamed, ${res.removed_duplicates} duplicate(s) removed.`
+      this.showToast(
+        `Applied fixes: ${res.renamed} renamed, ${res.removed_duplicates} duplicate(s) removed.`
       );
       this.proposedCurationActions = [];
       this.renderCurationActions();
       document.getElementById("btn-apply-curation")?.classList.add("hidden");
       await this.loadAlbums();
-      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      await this.loadLibrary(document.getElementById("search-input")?.value || "", true);
     } catch (err) {
-      alert(`Failed applying curation actions: ${err.message}`);
+      this.showToast(`Failed applying curation actions: ${err.message}`, "error");
     }
   }
 
@@ -1649,8 +1930,11 @@ class MusicLinkerController {
       setVal("proxy-password", cfg.proxy_password || "");
       setVal("set-preferred-download-method", cfg.preferred_download_method || "auto");
       setVal("set-default-bitrate", cfg.default_bitrate_kbps || "320");
+      setVal("dl-single-method", cfg.preferred_download_method || "auto");
+      setVal("dl-single-bitrate", cfg.default_bitrate_kbps || "320");
       setVal("dl-album-method", cfg.preferred_download_method || "auto");
       setVal("ext-method", cfg.preferred_download_method || "auto");
+      setVal("ext-bitrate", cfg.default_bitrate_kbps || "320");
       await this.loadAlbumAliases();
     } catch (_err) {}
   }
@@ -1681,7 +1965,7 @@ class MusicLinkerController {
       }),
     });
     if (!silent) {
-      alert("Settings saved to SQLite WAL database.");
+      this.showToast("Settings saved to SQLite WAL database.");
     }
   }
 
@@ -1709,8 +1993,9 @@ class MusicLinkerController {
     api.setServerOrigin(rawUrl);
     document.getElementById("sync-modal")?.classList.add("hidden");
     await this.loadAlbums();
-    await this.loadLibrary();
+    await this.loadLibrary("", true);
     offlineStore.flushOfflineScrobbles(api).catch(() => {});
+    this.showToast("Connected to MusicLinker Server.");
   }
 
   async toggleCarMode() {
@@ -1738,16 +2023,17 @@ class MusicLinkerController {
     document.getElementById("btn-next")?.addEventListener("click", () => this.nextTrack());
     document.getElementById("btn-shuffle")?.addEventListener("click", () => this.toggleShuffle());
     document.getElementById("btn-randomize-now")?.addEventListener("click", () => this.randomizeAndPlayCurrentView());
+    document.getElementById("btn-rescan-library")?.addEventListener("click", () => this.rescanLibraryOnDisk());
     document.getElementById("car-btn-play")?.addEventListener("click", () => this.togglePlay());
     document.getElementById("car-btn-prev")?.addEventListener("click", () => this.prevTrack());
     document.getElementById("car-btn-next")?.addEventListener("click", () => this.nextTrack());
     document.getElementById("btn-car-mode")?.addEventListener("click", () => this.toggleCarMode());
     document.getElementById("btn-exit-car")?.addEventListener("click", () => this.toggleCarMode());
 
-    // Sort order selector (Track #, Alphabetical, Plays, Recent)
+    // Sort order selector
     document.getElementById("sort-select")?.addEventListener("change", (e) => {
       this.sortBy = e.target.value || "track_num";
-      this.loadLibrary(document.getElementById("search-input")?.value || "");
+      this.loadLibrary(document.getElementById("search-input")?.value || "", true);
     });
 
     // View mode switcher: Standard Library vs 3-Layer Selector
@@ -1800,10 +2086,15 @@ class MusicLinkerController {
       document.getElementById(`tab-btn-${tab}`)?.addEventListener("click", () => this.switchStudioTab(tab));
     });
 
-    // Library Search & Album Bulk Rename & Track Edit Modal
+    // Debounced Library Search
     document.getElementById("search-input")?.addEventListener("input", (e) => {
-      this.loadLibrary(e.target.value);
+      const val = e.target.value;
+      if (this.searchDebounceTimer) clearTimeout(this.searchDebounceTimer);
+      this.searchDebounceTimer = setTimeout(() => {
+        this.loadLibrary(val, false);
+      }, 180);
     });
+
     document.getElementById("btn-rename-selected-album")?.addEventListener("click", () => this.openBulkAlbumRenameModal());
     document.getElementById("btn-confirm-album-rename")?.addEventListener("click", () => this.submitBulkAlbumRename());
     document.getElementById("btn-save-track-edit")?.addEventListener("click", () => this.saveEditedTrackMetadata());
@@ -1819,10 +2110,29 @@ class MusicLinkerController {
       }
     });
 
-    // Jobs, Full Album Downloader, LLM Agent Curation & APK Pairing
+    // Single Track & Direct Link Downloader
+    document.getElementById("btn-search-single")?.addEventListener("click", () => this.previewSingleTrackOrLink());
+    document.getElementById("btn-download-single-direct")?.addEventListener("click", () => this.startDirectTrackDownload(null));
+    document.getElementById("dl-single-query")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.previewSingleTrackOrLink();
+      }
+    });
+
+    // Full Album / Playlist Downloader, Last.fm Extractor & Job Cancellation
     document.getElementById("btn-start-extract")?.addEventListener("click", () => this.startExtractionJob());
     document.getElementById("btn-preview-album")?.addEventListener("click", () => this.previewAlbumForDownload());
     document.getElementById("btn-download-album")?.addEventListener("click", () => this.startAlbumDownloadJob());
+    document.getElementById("dl-album-title")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.previewAlbumForDownload();
+      }
+    });
+    document.getElementById("btn-cancel-job")?.addEventListener("click", () => this.cancelActiveJob());
+
+    // LLM Agent Curation & APK Pairing
     document.getElementById("btn-run-curator")?.addEventListener("click", () => this.runLLMLibraryAudit());
     document.getElementById("btn-send-agent-prompt")?.addEventListener("click", () => this.sendAgentInstruction());
     document.getElementById("agent-user-prompt")?.addEventListener("keydown", (e) => {
@@ -1844,6 +2154,12 @@ class MusicLinkerController {
     });
     document.getElementById("btn-apply-curation")?.addEventListener("click", () => this.applySelectedCurationActions());
     document.getElementById("btn-show-sync")?.addEventListener("click", () => this.openSyncModal());
+    document.getElementById("btn-copy-pairing-url")?.addEventListener("click", () => {
+      const text = document.getElementById("sync-pairing-url")?.textContent || "";
+      if (text && navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => this.showToast("Pairing URL copied to clipboard!"));
+      }
+    });
     document.getElementById("btn-save-apk-server")?.addEventListener("click", () => this.saveApkServerConnection());
     document.getElementById("btn-save-settings")?.addEventListener("click", () => this.saveSettings(false));
     document.getElementById("btn-save-llm-settings")?.addEventListener("click", () => this.saveSettings(false));
