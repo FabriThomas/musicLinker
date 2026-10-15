@@ -728,11 +728,18 @@ class MusicLinkerController {
 
 
   async startAlbumDownloadJob() {
-    const artist = document.getElementById("dl-album-artist")?.value.trim() || "Unknown Artist";
-    const album = document.getElementById("dl-album-title")?.value.trim() || "";
+    let artist = document.getElementById("dl-album-artist")?.value.trim() || "";
+    let album = document.getElementById("dl-album-title")?.value.trim() || "";
     const bitrate = Number(document.getElementById("ext-bitrate")?.value || 320);
+
+    // If user pasted URL into artist field instead of album field, auto-swap
+    if ((artist.startsWith("http://") || artist.startsWith("https://") || artist.startsWith("spotify:")) && !album) {
+      album = artist;
+      artist = "";
+    }
+
     if (!album) {
-      alert("Please enter an Album Title or Playlist URL to download.");
+      alert("Please enter an Album Title, Spotify URL, or YouTube Album/Playlist URL to download.");
       return;
     }
 
@@ -743,6 +750,7 @@ class MusicLinkerController {
         (cb) => this.previewedAlbumTracks[Number(cb.dataset.dlAlbumTrack)]
       );
     }
+
 
     const logBox = document.getElementById("job-logs");
     const banner = document.getElementById("live-job-banner");

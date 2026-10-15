@@ -137,32 +137,40 @@ class JobService:
         job_staging = PATHS.staging_dir / job.job_id
         try:
             tracks_to_dl = req.tracks
-            canonical_album = self.repo.resolve_album_alias(req.artist, req.album)
+            album_artist = req.artist.strip()
+            raw_album_name = req.album.strip()
             lookup: dict[str, Any] = {}
 
             if not tracks_to_dl:
-                job.append_log(f"Resolving official tracklist for album '{req.artist} — {req.album}'...")
-                lookup = library_service.lookup_external_album_tracklist(req.artist, req.album)
-                canonical_album = str(lookup.get("album") or canonical_album)
+                job.append_log(f"Resolving official tracklist for '{album_artist or 'URL'} — {raw_album_name}'...")
+                lookup = library_service.lookup_external_album_tracklist(album_artist, raw_album_name)
                 raw_list = lookup.get("tracks") or []
+                if lookup.get("artist") and (not album_artist or album_artist.lower() in ("unknown artist", "unknown", "")):
+                    album_artist = str(lookup["artist"]).strip()
+                canonical_album = str(lookup.get("album") or raw_album_name)
+
                 from musiclinker.domain.models import AlbumTrackItem
 
                 tracks_to_dl = [
                     AlbumTrackItem(
                         track_number=int(item.get("track_number") or idx),
                         title=str(item.get("title") or f"Track {idx}"),
-                        artist=str(item.get("artist") or req.artist),
+                        artist=str(item.get("artist") or album_artist or "Unknown Artist"),
                         duration=int(item.get("duration") or 0),
                         youtube_url=str(item.get("youtube_url") or ""),
                     )
                     for idx, item in enumerate(raw_list, start=1)
                 ]
+            else:
+                canonical_album = raw_album_name
+
+            canonical_album = self.repo.resolve_album_alias(album_artist, canonical_album)
 
             if not tracks_to_dl:
-                raise ValueError(f"Could not find tracklist for album '{req.artist} — {req.album}'.")
+                raise ValueError(f"Could not find tracklist for '{album_artist} — {raw_album_name}'.")
 
             job.total_candidates = len(tracks_to_dl)
-            job.append_log(f"Album '{canonical_album}' resolved: {len(tracks_to_dl)} track(s) queued.")
+            job.append_log(f"Album '{canonical_album}' by '{album_artist}' resolved: {len(tracks_to_dl)} track(s) queued.")
 
             album_cover_bytes, album_cover_mime = None, "image/jpeg"
             if lookup and lookup.get("cover_url"):
@@ -170,9 +178,9 @@ class JobService:
                 if album_cover_bytes:
                     job.append_log(f"Cached verified album artwork from Spotify for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
 
-            if not album_cover_bytes and (spotify_client.is_spotify_url(req.album) or spotify_client.is_spotify_url(req.artist)):
+            if not album_cover_bytes and (spotify_client.is_spotify_url(raw_album_name) or spotify_client.is_spotify_url(album_artist)):
                 try:
-                    sp_target = req.album if spotify_client.is_spotify_url(req.album) else req.artist
+                    sp_target = raw_album_name if spotify_client.is_spotify_url(raw_album_name) else album_artist
                     sp_meta = spotify_client.fetch_spotify_metadata(sp_target)
                     if sp_meta.get("cover_url"):
                         album_cover_bytes, album_cover_mime = spotify_client.fetch_cover_bytes(sp_meta["cover_url"])
@@ -181,10 +189,11 @@ class JobService:
                 except Exception as exc:
                     logger.debug("Failed fetching cover from Spotify: %s", exc)
 
-            if not album_cover_bytes:
-                album_cover_bytes, album_cover_mime = musicbrainz_client.fetch_album_cover(req.artist, canonical_album)
+            if not album_cover_bytes and album_artist:
+                album_cover_bytes, album_cover_mime = musicbrainz_client.fetch_album_cover(album_artist, canonical_album)
                 if album_cover_bytes:
-                    job.append_log(f"Cached verified album artwork for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
+                    job.append_log(f"Cached verified album artwork from MusicBrainz for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
+
 
 
             total = len(tracks_to_dl)

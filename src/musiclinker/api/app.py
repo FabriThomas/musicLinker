@@ -105,7 +105,12 @@ def create_app() -> FastAPI:
         album: str = Query(..., min_length=1),
     ) -> dict[str, Any]:
         """Resolve an album's tracklist (`1..N`) from MusicBrainz, Last.fm, or YouTube prior to downloading."""
-        return library_service.lookup_external_album_tracklist(artist=artist, album_or_url=album)
+        try:
+            return library_service.lookup_external_album_tracklist(artist=artist, album_or_url=album)
+        except Exception as exc:
+            logger.error("Error looking up external album '%s' / '%s': %s", artist, album, exc)
+            return {"artist": artist or "Unknown Artist", "album": album, "tracks": [], "error": str(exc)}
+
 
     @app.post("/api/albums/rename", dependencies=[Depends(require_paired_client)])
     async def rename_album_endpoint(payload: AlbumBulkRenamePayload) -> dict[str, Any]:
@@ -338,13 +343,22 @@ def create_app() -> FastAPI:
 
     @app.post("/api/jobs/download", dependencies=[Depends(require_paired_client)])
     async def start_direct_download(req: DirectDownloadRequest) -> dict[str, Any]:
-        job = job_service.start_direct_download_job(req)
-        return job.to_dict()
+        try:
+            job = job_service.start_direct_download_job(req)
+            return job.to_dict()
+        except Exception as exc:
+            logger.error("Failed to start direct download job: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/jobs/download-album", dependencies=[Depends(require_paired_client)])
     async def start_album_download(req: AlbumDownloadRequest) -> dict[str, Any]:
-        job = job_service.start_album_download_job(req)
-        return job.to_dict()
+        try:
+            job = job_service.start_album_download_job(req)
+            return job.to_dict()
+        except Exception as exc:
+            logger.error("Failed to start album download job: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
     @app.get("/api/jobs", dependencies=[Depends(require_paired_client)])
     async def get_all_jobs() -> dict[str, Any]:

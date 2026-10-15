@@ -99,58 +99,88 @@ class LibraryService:
             target_sp = album_or_url.strip() if spotify_client.is_spotify_url(album_or_url) else artist.strip()
             try:
                 sp_meta = spotify_client.fetch_spotify_metadata(target_sp)
-                return sp_meta
+                if sp_meta and sp_meta.get("tracks"):
+                    return sp_meta
             except Exception as exc:
                 logger.warning("Spotify embed lookup failed for '%s': %s", target_sp, exc)
 
-        # 2. YouTube Album / Playlist URL
+        # 2. YouTube Album / Playlist / Video URL
         if album_or_url.strip().startswith(("http://", "https://")):
-            yt_tracks = youtube_client.expand_playlist_or_album_url(album_or_url.strip(), default_artist=artist)
+            try:
+                yt_tracks = youtube_client.expand_playlist_or_album_url(album_or_url.strip(), default_artist=artist)
+                if yt_tracks:
+                    return {
+                        "artist": artist.strip() or (yt_tracks[0]["artist"] if yt_tracks else "Unknown Artist"),
+                        "album": "Downloaded Album",
+                        "release_year": "",
+                        "source": "youtube_playlist",
+                        "tracks": yt_tracks,
+                    }
+            except Exception as exc:
+                logger.warning("YouTube playlist expansion failed for '%s': %s", album_or_url, exc)
             return {
-                "artist": artist.strip() or (yt_tracks[0]["artist"] if yt_tracks else "Unknown Artist"),
+                "artist": artist.strip() or "Unknown Artist",
                 "album": "Downloaded Album",
                 "release_year": "",
-                "source": "youtube_playlist",
-                "tracks": yt_tracks,
+                "source": "url",
+                "tracks": [],
             }
 
-        mb_data = musicbrainz_client.fetch_album_tracklist(artist, album_or_url)
-        if mb_data.get("tracks"):
-            mb_data["source"] = "musicbrainz"
-            return mb_data
+        # 3. MusicBrainz release lookup
+        try:
+            mb_data = musicbrainz_client.fetch_album_tracklist(artist, album_or_url)
+            if mb_data.get("tracks"):
+                mb_data["source"] = "musicbrainz"
+                return mb_data
+        except Exception as exc:
+            logger.warning("MusicBrainz lookup failed: %s", exc)
 
+        # 4. Last.fm album lookup
+        try:
+            cfg = self.repo.get_settings()
+            lfm = LastFMClient(api_key=str(cfg.get("lastfm_api_key", "")))
+            lfm_tracks = lfm.fetch_album_tracklist(artist, album_or_url)
+            if lfm_tracks:
+                return {
+                    "artist": artist.strip(),
+                    "album": album_or_url.strip(),
+                    "release_year": "",
+                    "source": "lastfm",
+                    "tracks": lfm_tracks,
+                }
+        except Exception as exc:
+            logger.warning("Last.fm album lookup failed: %s", exc)
 
-        cfg = self.repo.get_settings()
-        lfm = LastFMClient(api_key=str(cfg.get("lastfm_api_key", "")))
-        lfm_tracks = lfm.fetch_album_tracklist(artist, album_or_url)
-        if lfm_tracks:
+        # 5. Final fallback: search YouTube for tracks matching "<Artist> <Album>"
+        try:
+            yt_matches = youtube_client.search_videos(f"{artist} {album_or_url} audio", max_results=10)
+            fallback_tracks = [
+                {
+                    "track_number": idx,
+                    "title": m["title"],
+                    "artist": artist.strip() or "Unknown Artist",
+                    "duration": int(m.get("duration") or 0),
+                    "youtube_url": m["url"],
+                }
+                for idx, m in enumerate(yt_matches, start=1)
+            ]
             return {
                 "artist": artist.strip(),
                 "album": album_or_url.strip(),
                 "release_year": "",
-                "source": "lastfm",
-                "tracks": lfm_tracks,
+                "source": "youtube_search",
+                "tracks": fallback_tracks,
+            }
+        except Exception as exc:
+            logger.warning("YouTube search fallback failed: %s", exc)
+            return {
+                "artist": artist.strip(),
+                "album": album_or_url.strip(),
+                "release_year": "",
+                "source": "none",
+                "tracks": [],
             }
 
-        # Final fallback: search YouTube for tracks matching "<Artist> <Album>"
-        yt_matches = youtube_client.search_videos(f"{artist} {album_or_url} audio", max_results=10)
-        fallback_tracks = [
-            {
-                "track_number": idx,
-                "title": m["title"],
-                "artist": artist.strip(),
-                "duration": int(m.get("duration") or 0),
-                "youtube_url": m["url"],
-            }
-            for idx, m in enumerate(yt_matches, start=1)
-        ]
-        return {
-            "artist": artist.strip(),
-            "album": album_or_url.strip(),
-            "release_year": "",
-            "source": "youtube_search",
-            "tracks": fallback_tracks,
-        }
 
     def update_track_metadata(self, track_id: int, payload: TrackMetadataUpdatePayload) -> TrackEntity:
         track = self.repo.get_track(track_id)

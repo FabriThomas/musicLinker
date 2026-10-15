@@ -145,7 +145,7 @@ class AlbumTrackItem(BaseModel):
 
     track_number: int = Field(default=1, ge=1)
     title: str = Field(..., min_length=1)
-    artist: str = Field(..., min_length=1)
+    artist: str = Field(default="Unknown Artist")
     duration: int = Field(default=0)
     youtube_url: str = Field(default="")
 
@@ -153,14 +153,15 @@ class AlbumTrackItem(BaseModel):
 class AlbumDownloadRequest(BaseModel):
     """Payload to download an entire album (either resolved via MusicBrainz/Last.fm/YouTube or custom tracklist)."""
 
-    artist: str = Field(..., min_length=1)
-    album: str = Field(..., min_length=1)
+    artist: str = Field(default="", description="Artist name; optional when album URL is provided")
+    album: str = Field(..., min_length=1, description="Album name or Spotify/YouTube URL")
     bitrate_kbps: int = Field(default=320)
     tracks: list[AlbumTrackItem] = Field(
         default_factory=list,
         description="Optional explicit tracklist; if empty, server resolves the official tracklist automatically.",
     )
     skip_existing: bool = Field(default=True)
+
 
 
 class TrackMetadataUpdatePayload(BaseModel):

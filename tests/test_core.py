@@ -226,3 +226,33 @@ def test_spotify_client_and_youtube_music():
     assert len(lookup["tracks"]) >= 10
 
 
+def test_direct_album_download_job_endpoint():
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.services.job_service import job_service
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    # Test direct album job creation with Spotify URL and empty artist (should not 500)
+    with patch.object(job_service, "_run_album_download_pipeline") as mock_pipeline:
+        res = client.post("/api/jobs/download-album", json={
+            "artist": "",
+            "album": "https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy",
+            "tracks": []
+        })
+        assert res.status_code == 200
+        data = res.json()
+        assert "job_id" in data
+        assert len(data["job_id"]) == 10
+        assert data["job_type"] == "album_download"
+
+    # Test direct album job creation with empty album returning 422 validation error instead of 500
+    res_empty = client.post("/api/jobs/download-album", json={
+        "artist": "",
+        "album": "",
+        "tracks": []
+    })
+    assert res_empty.status_code == 422
+
+

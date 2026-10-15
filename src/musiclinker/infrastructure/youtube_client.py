@@ -12,11 +12,13 @@ import yt_dlp
 
 from musiclinker.core.exceptions import YouTubeResolutionError
 from musiclinker.core.logging_config import logger
+from musiclinker.core.paths import PATHS
 
 _VTT_TIMESTAMP_RE = re.compile(
     r"(\d{1,2}:)?(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(?:\d{1,2}:)?\d{2}:\d{2}\.\d{3}"
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_VIDEO_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
 
 
 class YouTubeClient:
@@ -31,6 +33,17 @@ class YouTubeClient:
             logger.warning("imageio_ffmpeg lookup failed (%s); falling back to system ffmpeg", exc)
             self.ffmpeg_exe = "ffmpeg"
 
+    def _get_base_ydl_opts(self) -> dict[str, Any]:
+        """Provides resilient default yt-dlp arguments including anti-bot clients and optional cookies."""
+        opts: dict[str, Any] = {
+            "extractor_args": {"youtube": {"player_client": ["mweb", "android", "ios"]}},
+        }
+        for cand in (PATHS.app_data_dir / "cookies.txt", PATHS.root_dir / "cookies.txt"):
+            if cand.exists():
+                opts["cookiefile"] = str(cand)
+                break
+        return opts
+
     def search_videos(self, query: str, max_results: int = 5) -> list[dict[str, Any]]:
         cache_key = f"{max_results}:{query.strip().lower()}"
         with self._cache_lock:
@@ -43,6 +56,7 @@ class YouTubeClient:
             "extract_flat": True,
             "skip_download": True,
             "noplaylist": True,
+            **self._get_base_ydl_opts(),
         }
         search_expr = query if query.startswith(("http://", "https://")) else f"ytsearch{max_results}:{query}"
 
@@ -79,27 +93,39 @@ class YouTubeClient:
         return results
 
     def expand_playlist_or_album_url(self, playlist_url: str, default_artist: str = "") -> list[dict[str, Any]]:
-        """Extract all tracks in order (`1..N`) from a YouTube Album or Playlist URL."""
+        """Extract all tracks in order (`1..N`) from a YouTube Album or Playlist URL, or single video URL."""
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": True,
             "skip_download": True,
             "noplaylist": False,
+            **self._get_base_ydl_opts(),
         }
+        clean_url = playlist_url.replace("music.youtube.com", "www.youtube.com")
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(playlist_url, download=False)
+                info = ydl.extract_info(clean_url, download=False)
         except Exception as exc:
-            raise YouTubeResolutionError(f"Failed expanding playlist/album URL '{playlist_url}': {exc}") from exc
+            logger.warning("Failed expanding playlist/album URL '%s': %s", playlist_url, exc)
+            return []
 
-        entries = info.get("entries", []) if isinstance(info, dict) else []
+        if not info:
+            return []
+
+        entries = info.get("entries", [])
+        if not entries and isinstance(info, dict):
+            # Single video URL or flat item provided
+            entries = [info]
+
         tracks: list[dict[str, Any]] = []
         for idx, entry in enumerate(entries, start=1):
             if not entry:
                 continue
-            vid_id = entry.get("id", "")
-            url = entry.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else "")
+            vid_id = str(entry.get("id") or "")
+            url = entry.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id and _VIDEO_ID_RE.match(vid_id) else "")
+            if url and "music.youtube.com" in url:
+                url = url.replace("music.youtube.com", "www.youtube.com")
             raw_title = str(entry.get("title") or f"Track {idx}").strip()
             artist = default_artist or str(entry.get("uploader") or "Unknown Artist").replace(" - Topic", "").strip()
             if " - " in raw_title and not default_artist:
@@ -114,6 +140,7 @@ class YouTubeClient:
                 }
             )
         return tracks
+
 
     def resolve_best_audio_match(self, artist: str, title: str) -> dict[str, Any]:
         """
@@ -135,6 +162,7 @@ class YouTubeClient:
                 "extract_flat": True,
                 "skip_download": True,
                 "noplaylist": True,
+                **self._get_base_ydl_opts(),
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(ytm_search_url, download=False)
@@ -144,22 +172,31 @@ class YouTubeClient:
                     continue
                 url = str(e.get("url") or "")
                 vid_id = str(e.get("id") or "")
-                if "watch?v=" in url or vid_id:
-                    final_url = url if "http" in url else f"https://music.youtube.com/watch?v={vid_id}"
-                    dur = int(e.get("duration") or 0)
-                    if dur == 0 or (30 <= dur <= 1200):
-                        thumbnails = e.get("thumbnails") or []
-                        thumb_url = thumbnails[-1].get("url", "") if thumbnails else e.get("thumbnail", "")
-                        return {
-                            "id": vid_id or final_url.split("v=")[-1].split("&")[0],
-                            "title": e.get("title") or f"{artist} - {title}",
-                            "uploader": e.get("uploader") or e.get("channel") or f"{artist} - Topic",
-                            "duration": dur,
-                            "url": final_url,
-                            "thumbnail": thumb_url,
-                            "source": "youtube_music",
-                        }
+                if not _VIDEO_ID_RE.match(vid_id):
+                    if "v=" in url:
+                        candidate_v = url.split("v=")[-1].split("&")[0]
+                        if _VIDEO_ID_RE.match(candidate_v):
+                            vid_id = candidate_v
+                        else:
+                            continue
+                    else:
+                        continue
+                final_url = f"https://www.youtube.com/watch?v={vid_id}"
+                dur = int(e.get("duration") or 0)
+                if dur == 0 or (30 <= dur <= 1200):
+                    thumbnails = e.get("thumbnails") or []
+                    thumb_url = thumbnails[-1].get("url", "") if thumbnails else e.get("thumbnail", "")
+                    return {
+                        "id": vid_id,
+                        "title": e.get("title") or f"{artist} - {title}",
+                        "uploader": e.get("uploader") or e.get("channel") or f"{artist} - Topic",
+                        "duration": dur,
+                        "url": final_url,
+                        "thumbnail": thumb_url,
+                        "source": "youtube_music",
+                    }
         except Exception as exc:
+
             logger.debug(
                 "YouTube Music direct search failed for '%s - %s' (%s); falling back to ytsearch",
                 artist,
@@ -233,6 +270,7 @@ class YouTubeClient:
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
+            **self._get_base_ydl_opts(),
             "writesubtitles": True,
             "writeautomaticsub": True,
             "subtitleslangs": ["en.*", "pt.*", "es.*", "orig"],
@@ -247,7 +285,8 @@ class YouTubeClient:
             ],
         }
 
-        target_expr = url_or_query if url_or_query.startswith(("http://", "https://")) else f"ytsearch1:{url_or_query}"
+        clean_expr = url_or_query.replace("music.youtube.com", "www.youtube.com")
+        target_expr = clean_expr if clean_expr.startswith(("http://", "https://")) else f"ytsearch1:{clean_expr}"
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(target_expr, download=True)
@@ -256,6 +295,7 @@ class YouTubeClient:
                     info = entries[0] if entries else {}
         except Exception as exc:
             raise YouTubeResolutionError(f"Failed downloading audio from '{url_or_query}': {exc}") from exc
+
 
         mp3_path = staging_dir / f"{stem_name}.mp3"
         if not mp3_path.exists():
