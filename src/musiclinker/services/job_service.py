@@ -29,8 +29,10 @@ from musiclinker.infrastructure.hasher import compute_track_hash, split_artists
 from musiclinker.infrastructure.lastfm_client import LastFMClient
 from musiclinker.infrastructure.lyrics_client import lyrics_client
 from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
+from musiclinker.infrastructure.spotify_client import spotify_client
 from musiclinker.infrastructure.tagger import audio_tagger
 from musiclinker.infrastructure.youtube_client import youtube_client
+
 from musiclinker.services.curation_service import curation_service
 from musiclinker.services.library_service import library_service, sanitize_filename
 
@@ -136,6 +138,7 @@ class JobService:
         try:
             tracks_to_dl = req.tracks
             canonical_album = self.repo.resolve_album_alias(req.artist, req.album)
+            lookup: dict[str, Any] = {}
 
             if not tracks_to_dl:
                 job.append_log(f"Resolving official tracklist for album '{req.artist} — {req.album}'...")
@@ -161,9 +164,28 @@ class JobService:
             job.total_candidates = len(tracks_to_dl)
             job.append_log(f"Album '{canonical_album}' resolved: {len(tracks_to_dl)} track(s) queued.")
 
-            album_cover_bytes, album_cover_mime = musicbrainz_client.fetch_album_cover(req.artist, canonical_album)
-            if album_cover_bytes:
-                job.append_log(f"Cached verified album artwork for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
+            album_cover_bytes, album_cover_mime = None, "image/jpeg"
+            if lookup and lookup.get("cover_url"):
+                album_cover_bytes, album_cover_mime = spotify_client.fetch_cover_bytes(lookup["cover_url"])
+                if album_cover_bytes:
+                    job.append_log(f"Cached verified album artwork from Spotify for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
+
+            if not album_cover_bytes and (spotify_client.is_spotify_url(req.album) or spotify_client.is_spotify_url(req.artist)):
+                try:
+                    sp_target = req.album if spotify_client.is_spotify_url(req.album) else req.artist
+                    sp_meta = spotify_client.fetch_spotify_metadata(sp_target)
+                    if sp_meta.get("cover_url"):
+                        album_cover_bytes, album_cover_mime = spotify_client.fetch_cover_bytes(sp_meta["cover_url"])
+                        if album_cover_bytes:
+                            job.append_log(f"Cached verified album artwork from Spotify for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
+                except Exception as exc:
+                    logger.debug("Failed fetching cover from Spotify: %s", exc)
+
+            if not album_cover_bytes:
+                album_cover_bytes, album_cover_mime = musicbrainz_client.fetch_album_cover(req.artist, canonical_album)
+                if album_cover_bytes:
+                    job.append_log(f"Cached verified album artwork for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
+
 
             total = len(tracks_to_dl)
             for idx, item in enumerate(tracks_to_dl, start=1):
@@ -343,13 +365,41 @@ class JobService:
         try:
             job.total_candidates = 1
             job.append_log(f"Resolving stream for: {req.query_or_url}")
+
+            artist_override = req.artist_override
+            title_override = req.title_override
+            album_override = req.album_override
+            track_num_override = req.track_number_override
+            cover_override_bytes = None
+            cover_override_mime = "image/jpeg"
+            target_query_or_url = req.query_or_url
+
+            if spotify_client.is_spotify_url(req.query_or_url):
+                try:
+                    job.append_log(f"Extracting Spotify metadata from: {req.query_or_url}")
+                    sp_meta = spotify_client.fetch_spotify_metadata(req.query_or_url)
+                    artist_override = artist_override or sp_meta.get("artist", "")
+                    if sp_meta.get("tracks"):
+                        first_tr = sp_meta["tracks"][0]
+                        title_override = title_override or first_tr.get("title", "")
+                    album_override = album_override or sp_meta.get("album", "")
+                    if sp_meta.get("cover_url"):
+                        cover_override_bytes, cover_override_mime = spotify_client.fetch_cover_bytes(sp_meta["cover_url"])
+                        if cover_override_bytes:
+                            job.append_log(f"Fetched verified cover artwork from Spotify ({len(cover_override_bytes)} bytes)")
+                    target_query_or_url = ""  # Let youtube_client resolve official YouTube Music studio track
+                except Exception as sp_exc:
+                    logger.warning("Failed extracting Spotify metadata from '%s': %s", req.query_or_url, sp_exc)
+
             entity = self._acquire_and_tag_single_track(
                 job=job,
-                artist_raw=req.artist_override,
-                title_raw=req.title_override,
-                album_hint=req.album_override,
-                track_number_hint=req.track_number_override,
-                query_or_url=req.query_or_url,
+                artist_raw=artist_override,
+                title_raw=title_override,
+                album_hint=album_override,
+                track_number_hint=track_num_override,
+                album_cover_override=cover_override_bytes,
+                album_cover_mime=cover_override_mime,
+                query_or_url=target_query_or_url,
                 playcount=0,
                 bitrate_kbps=req.bitrate_kbps,
                 staging_dir=job_staging,
@@ -357,6 +407,7 @@ class JobService:
             )
             job.downloaded_count = 1
             job.tracks_added.append(entity.to_dict())
+
             job.progress_pct = 100.0
             job.current_stage = "completed"
             job.status = JobStatus.COMPLETED

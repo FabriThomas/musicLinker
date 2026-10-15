@@ -183,3 +183,46 @@ def test_ai_curation_agent():
     assert "reply" in data2
     assert isinstance(data2["actions"], list)
 
+
+def test_spotify_client_and_youtube_music():
+    from musiclinker.infrastructure.spotify_client import spotify_client
+    from musiclinker.services.library_service import library_service
+
+    # 1. URL pattern recognition
+    assert spotify_client.is_spotify_url("https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy") is True
+    assert spotify_client.is_spotify_url("https://open.spotify.com/intl-pt/album/4aawyAB9vmqN3uQ7FjRGTy?si=abc") is True
+    assert spotify_client.is_spotify_url("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M") is True
+    assert spotify_client.is_spotify_url("https://open.spotify.com/track/6OmhkSOpvYBokMKQxpIGx2") is True
+    assert spotify_client.is_spotify_url("spotify:album:4aawyAB9vmqN3uQ7FjRGTy") is True
+    assert spotify_client.is_spotify_url("spotify:track:6OmhkSOpvYBokMKQxpIGx2") is True
+    assert spotify_client.is_spotify_url("https://www.youtube.com/watch?v=123") is False
+    assert spotify_client.is_spotify_url("Random Track Name") is False
+
+    # 2. URI parsing
+    parsed_album = spotify_client.parse_spotify_uri("https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy")
+    assert parsed_album == ("album", "4aawyAB9vmqN3uQ7FjRGTy")
+
+    parsed_track = spotify_client.parse_spotify_uri("spotify:track:6OmhkSOpvYBokMKQxpIGx2")
+    assert parsed_track == ("track", "6OmhkSOpvYBokMKQxpIGx2")
+
+    # 3. Live Spotify embed metadata fetch (zero-auth public embed)
+    meta = spotify_client.fetch_spotify_metadata("https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy")
+    assert meta["source"] == "spotify"
+    assert meta["entity_type"] == "album"
+    assert "Pitbull" in meta["artist"]
+    assert "Global Warming" in meta["album"]
+    assert len(meta["tracks"]) >= 10
+    first_tr = meta["tracks"][0]
+    assert first_tr["track_number"] == 1
+    assert "Global Warming" in first_tr["title"]
+    assert bool(meta["cover_url"]) is True
+
+    # 4. Library service external lookup integration
+    lookup = library_service.lookup_external_album_tracklist(
+        artist="",
+        album_or_url="https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy",
+    )
+    assert lookup["source"] == "spotify"
+    assert len(lookup["tracks"]) >= 10
+
+

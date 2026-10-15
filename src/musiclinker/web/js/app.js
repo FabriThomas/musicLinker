@@ -669,33 +669,53 @@ class MusicLinkerController {
   // ---- Full Album Downloader (Preview & Batch Download) ----
 
   async previewAlbumForDownload() {
-    const artist = document.getElementById("dl-album-artist")?.value.trim() || "";
-    const album = document.getElementById("dl-album-title")?.value.trim() || "";
+    const artistInput = document.getElementById("dl-album-artist");
+    const albumInput = document.getElementById("dl-album-title");
+    const artist = artistInput?.value.trim() || "";
+    const album = albumInput?.value.trim() || "";
     const box = document.getElementById("dl-album-preview-list");
-    if (!album) {
-      alert("Enter an Album name or YouTube Album/Playlist URL.");
+    if (!album && !artist) {
+      alert("Enter an Album name, Spotify URL, or YouTube Album/Playlist URL.");
       return;
     }
-    if (box) box.innerHTML = `<div class="text-xs text-zinc-400 p-2">Looking up official album tracklist...</div>`;
+    if (box) box.innerHTML = `<div class="text-xs text-zinc-400 p-2">Looking up tracklist from Spotify / MusicBrainz / YouTube Music...</div>`;
 
     try {
       const qs = new URLSearchParams({ artist, album });
       const res = await api.request(`/api/albums/lookup?${qs.toString()}`);
       this.previewedAlbumTracks = res.tracks || [];
       if (!this.previewedAlbumTracks.length) {
-        if (box) box.innerHTML = `<div class="text-xs text-amber-400 p-2">No tracks found. Try entering both Artist and Album name.</div>`;
+        if (box) box.innerHTML = `<div class="text-xs text-amber-400 p-2">No tracks found. Try entering Artist and Album name or a direct Spotify/YouTube link.</div>`;
         return;
       }
+
+      // Auto-fill artist if empty
+      if (res.artist && artistInput && !artistInput.value.trim()) {
+        artistInput.value = res.artist;
+      }
+
       if (box) {
-        box.innerHTML = this.previewedAlbumTracks
+        const coverBadge = res.cover_url
+          ? `<div class="flex items-center gap-2 pb-1.5 border-b border-zinc-800 text-[11px] text-zinc-400">
+               <img src="${this.escape(res.cover_url)}" class="w-8 h-8 rounded object-cover border border-zinc-700" alt="Cover" />
+               <div class="truncate">
+                 <div class="font-semibold text-zinc-200 truncate">${this.escape(res.album || "Album")}</div>
+                 <div class="text-emerald-400 text-[10px] uppercase font-mono">${this.escape(res.source || "online")} • ${res.tracks.length} tracks</div>
+               </div>
+             </div>`
+          : "";
+
+        box.innerHTML = coverBadge + this.previewedAlbumTracks
           .map(
             (tr, idx) => `
-            <label class="flex items-center justify-between p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs">
+            <label class="flex items-center justify-between p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs hover:border-zinc-700 cursor-pointer transition">
               <div class="flex items-center gap-2 truncate">
                 <input type="checkbox" data-dl-album-track="${idx}" checked class="accent-emerald-500" />
-                <span class="font-mono text-emerald-400">#${String(tr.track_number || idx + 1).padStart(2, "0")}</span>
-                <span class="truncate">${this.escape(tr.title)}</span>
+                <span class="font-mono text-emerald-400 text-[11px]">#${String(tr.track_number || idx + 1).padStart(2, "0")}</span>
+                <span class="truncate font-medium">${this.escape(tr.title)}</span>
+                ${tr.artist && tr.artist !== res.artist ? `<span class="text-zinc-500 text-[10px] truncate">— ${this.escape(tr.artist)}</span>` : ""}
               </div>
+              ${tr.duration ? `<span class="font-mono text-[10px] text-zinc-500 ml-2">${this.formatDuration(tr.duration)}</span>` : ""}
             </label>
           `
           )
@@ -705,6 +725,7 @@ class MusicLinkerController {
       if (box) box.innerHTML = `<div class="text-xs text-rose-400 p-2">Lookup failed: ${this.escape(err.message)}</div>`;
     }
   }
+
 
   async startAlbumDownloadJob() {
     const artist = document.getElementById("dl-album-artist")?.value.trim() || "Unknown Artist";

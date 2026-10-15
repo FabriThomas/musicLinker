@@ -16,8 +16,10 @@ from musiclinker.infrastructure.hasher import compute_track_hash, split_artists
 from musiclinker.infrastructure.lastfm_client import LastFMClient
 from musiclinker.infrastructure.lyrics_client import lyrics_client
 from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
+from musiclinker.infrastructure.spotify_client import spotify_client
 from musiclinker.infrastructure.tagger import audio_tagger
 from musiclinker.infrastructure.youtube_client import youtube_client
+
 
 _SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -84,10 +86,24 @@ class LibraryService:
     def lookup_external_album_tracklist(self, artist: str, album_or_url: str) -> dict[str, Any]:
         """
         Resolve the full tracklist (`1..N`) for an album so the user can preview and download the entire album:
-          1. If `album_or_url` is a YouTube playlist/album URL, expand via `yt-dlp`.
-          2. Otherwise query MusicBrainz for the official release tracklist.
-          3. Fallback to Last.fm `album.getInfo` if MusicBrainz has no match.
+          1. If `album_or_url` or `artist` is a Spotify Album/Playlist/Track URL or URI, scrape Spotify embed metadata.
+          2. If `album_or_url` is a YouTube playlist/album URL, expand via `yt-dlp`.
+          3. Otherwise query MusicBrainz for the official release tracklist.
+          4. Fallback to Last.fm `album.getInfo` if MusicBrainz has no match.
+          5. Final fallback to YouTube audio search.
         """
+        raw_target = album_or_url.strip() or artist.strip()
+
+        # 1. Spotify Album, Playlist, or Track URL/URI
+        if spotify_client.is_spotify_url(album_or_url) or spotify_client.is_spotify_url(artist):
+            target_sp = album_or_url.strip() if spotify_client.is_spotify_url(album_or_url) else artist.strip()
+            try:
+                sp_meta = spotify_client.fetch_spotify_metadata(target_sp)
+                return sp_meta
+            except Exception as exc:
+                logger.warning("Spotify embed lookup failed for '%s': %s", target_sp, exc)
+
+        # 2. YouTube Album / Playlist URL
         if album_or_url.strip().startswith(("http://", "https://")):
             yt_tracks = youtube_client.expand_playlist_or_album_url(album_or_url.strip(), default_artist=artist)
             return {
@@ -102,6 +118,7 @@ class LibraryService:
         if mb_data.get("tracks"):
             mb_data["source"] = "musicbrainz"
             return mb_data
+
 
         cfg = self.repo.get_settings()
         lfm = LastFMClient(api_key=str(cfg.get("lastfm_api_key", "")))

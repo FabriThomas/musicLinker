@@ -116,15 +116,96 @@ class YouTubeClient:
         return tracks
 
     def resolve_best_audio_match(self, artist: str, title: str) -> dict[str, Any]:
-        query = f"{artist} - {title} official audio"
-        matches = self.search_videos(query, max_results=3)
+        """
+        Resolve the best official studio audio release for a track:
+          1. Queries YouTube Music directly (`https://music.youtube.com/search?q=...`) to prioritize
+             official catalog studio tracks and filter out music video skits / sound effects.
+          2. Falls back to YouTube with Topic / Official Audio ranking if YouTube Music yields no direct stream.
+        """
+        import urllib.parse
+
+        # 1. Try YouTube Music search first
+        clean_q = f"{artist} {title}".strip()
+        encoded_q = urllib.parse.quote_plus(clean_q)
+        ytm_search_url = f"https://music.youtube.com/search?q={encoded_q}"
+        try:
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": True,
+                "skip_download": True,
+                "noplaylist": True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(ytm_search_url, download=False)
+            entries = info.get("entries", []) if isinstance(info, dict) else []
+            for e in entries:
+                if not e:
+                    continue
+                url = str(e.get("url") or "")
+                vid_id = str(e.get("id") or "")
+                if "watch?v=" in url or vid_id:
+                    final_url = url if "http" in url else f"https://music.youtube.com/watch?v={vid_id}"
+                    dur = int(e.get("duration") or 0)
+                    if dur == 0 or (30 <= dur <= 1200):
+                        thumbnails = e.get("thumbnails") or []
+                        thumb_url = thumbnails[-1].get("url", "") if thumbnails else e.get("thumbnail", "")
+                        return {
+                            "id": vid_id or final_url.split("v=")[-1].split("&")[0],
+                            "title": e.get("title") or f"{artist} - {title}",
+                            "uploader": e.get("uploader") or e.get("channel") or f"{artist} - Topic",
+                            "duration": dur,
+                            "url": final_url,
+                            "thumbnail": thumb_url,
+                            "source": "youtube_music",
+                        }
+        except Exception as exc:
+            logger.debug(
+                "YouTube Music direct search failed for '%s - %s' (%s); falling back to ytsearch",
+                artist,
+                title,
+                exc,
+            )
+
+        # 2. Fallback: Search YouTube with Topic & Official Audio priority
+        query = f"{artist} - {title} Topic"
+        matches = self.search_videos(query, max_results=5)
         if not matches:
-            raise YouTubeResolutionError(f"No YouTube results found for '{artist} - {title}'")
-        for candidate in matches:
-            dur = candidate.get("duration", 0)
-            if dur == 0 or (45 <= dur <= 900):
-                return candidate
-        return matches[0]
+            matches = self.search_videos(f"{artist} - {title} official audio", max_results=5)
+
+        if not matches:
+            raise YouTubeResolutionError(f"No YouTube audio match found for '{artist} - {title}'")
+
+        # Score candidates to prefer Topic channels and official audio
+        def score_candidate(cand: dict[str, Any]) -> int:
+            score = 0
+            uploader = str(cand.get("uploader") or "").lower()
+            cand_title = str(cand.get("title") or "").lower()
+            dur = cand.get("duration", 0)
+
+            if "topic" in uploader:
+                score += 50
+            if "vevo" in uploader or "official" in uploader:
+                score += 20
+            if "official audio" in cand_title:
+                score += 30
+            elif "audio" in cand_title:
+                score += 15
+
+            # Penalize likely live recordings or fan edits
+            if "live" in cand_title and "live" not in title.lower():
+                score -= 30
+            if "remix" in cand_title and "remix" not in title.lower():
+                score -= 20
+            if "cover" in cand_title and "cover" not in title.lower():
+                score -= 40
+            if 40 <= dur <= 900:
+                score += 10
+            return score
+
+        best = max(matches, key=score_candidate)
+        return best
+
 
     def download_mp3_to_staging(
         self,

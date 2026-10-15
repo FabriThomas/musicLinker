@@ -29,3 +29,7 @@ class TaggingError(MusicLinkerError):
 
 class JobCancelledError(MusicLinkerError):
     """Raised when a user cancels an active background extraction/download job."""
+
+
+class SpotifyResolutionError(MusicLinkerError):
+    """Raised when Spotify embed scraping or metadata resolution fails."""
