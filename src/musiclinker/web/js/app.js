@@ -671,8 +671,17 @@ class MusicLinkerController {
   async previewAlbumForDownload() {
     const artistInput = document.getElementById("dl-album-artist");
     const albumInput = document.getElementById("dl-album-title");
-    const artist = artistInput?.value.trim() || "";
-    const album = albumInput?.value.trim() || "";
+    let artist = artistInput?.value.trim() || "";
+    let album = albumInput?.value.trim() || "";
+
+    // Auto-swap if user pasted URL into Artist input
+    if ((artist.startsWith("http://") || artist.startsWith("https://") || artist.startsWith("spotify:")) && !album) {
+      album = artist;
+      artist = "";
+      if (albumInput) albumInput.value = album;
+      if (artistInput) artistInput.value = "";
+    }
+
     const box = document.getElementById("dl-album-preview-list");
     if (!album && !artist) {
       alert("Enter an Album name, Spotify URL, or YouTube Album/Playlist URL.");
@@ -689,9 +698,12 @@ class MusicLinkerController {
         return;
       }
 
-      // Auto-fill artist if empty
-      if (res.artist && artistInput && !artistInput.value.trim()) {
+      // Auto-fill artist and album inputs with resolved metadata
+      if (res.artist && artistInput && (!artistInput.value.trim() || artistInput.value.startsWith("http"))) {
         artistInput.value = res.artist;
+      }
+      if (res.album && albumInput && (albumInput.value.startsWith("http") || albumInput.value.startsWith("spotify:") || !albumInput.value.trim())) {
+        albumInput.value = res.album;
       }
 
       if (box) {
@@ -1652,6 +1664,10 @@ class MusicLinkerController {
     const m = Math.floor(s / 60);
     const rem = String(s % 60).padStart(2, "0");
     return `${m}:${rem}`;
+  }
+
+  formatDuration(sec) {
+    return this.formatTime(sec);
   }
 
   escape(str) {

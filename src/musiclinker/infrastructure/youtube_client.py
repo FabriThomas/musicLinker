@@ -92,54 +92,163 @@ class YouTubeClient:
             self._search_cache[cache_key] = results
         return results
 
+    def _normalize_playlist_url(self, playlist_url: str) -> str:
+        """Resolve browse IDs or ensure proper playlist endpoints for YouTube Music and YouTube."""
+        clean = playlist_url.strip()
+        if "music.youtube.com/browse/MPREb_" in clean:
+            try:
+                import urllib.request
+                req = urllib.request.Request(clean, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    html = resp.read().decode("utf-8", errors="ignore")
+                match = re.search(r"OLAK5uy_[a-zA-Z0-9_-]+", html)
+                if match:
+                    return f"https://music.youtube.com/playlist?list={match.group(0)}"
+            except Exception as exc:
+                logger.debug("Failed resolving MPREb browse ID (%s); proceeding with original URL", exc)
+
+        # Do not convert YouTube Music album playlists (OLAK5uy_) to www.youtube.com
+        if "OLAK5uy_" in clean:
+            return clean
+
+        return clean.replace("music.youtube.com", "www.youtube.com")
+
     def expand_playlist_or_album_url(self, playlist_url: str, default_artist: str = "") -> list[dict[str, Any]]:
-        """Extract all tracks in order (`1..N`) from a YouTube Album or Playlist URL, or single video URL."""
+        """Extract all tracks in order (`1..N`) from a YouTube Album or Playlist URL, or full-album timestamped video."""
+        album_data = self.lookup_youtube_album(playlist_url, default_artist=default_artist)
+        return album_data.get("tracks", [])
+
+    def lookup_youtube_album(self, playlist_url: str, default_artist: str = "") -> dict[str, Any]:
+        """
+        Extract complete album metadata (title, artist, cover art, tracklist) from a YouTube
+        Album/Playlist URL or a single Full Album video with chapter markers/description timestamps.
+        """
+        clean_url = self._normalize_playlist_url(playlist_url)
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
-            "extract_flat": True,
+            "extract_flat": "in_playlist",
             "skip_download": True,
             "noplaylist": False,
             **self._get_base_ydl_opts(),
         }
-        clean_url = playlist_url.replace("music.youtube.com", "www.youtube.com")
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(clean_url, download=False)
         except Exception as exc:
             logger.warning("Failed expanding playlist/album URL '%s': %s", playlist_url, exc)
-            return []
+            return {"artist": default_artist or "Unknown Artist", "album": "Downloaded Album", "cover_url": "", "source": "url", "tracks": []}
 
         if not info:
-            return []
+            return {"artist": default_artist or "Unknown Artist", "album": "Downloaded Album", "cover_url": "", "source": "url", "tracks": []}
+
+        # Resolve album cover
+        thumbnails = info.get("thumbnails") or []
+        cover_url = thumbnails[-1].get("url", "") if thumbnails else info.get("thumbnail", "")
+
+        # Resolve album title & artist
+        from musiclinker.infrastructure.hasher import clean_album_name
+        raw_album_title = str(info.get("title") or "Downloaded Album").strip()
+        if raw_album_title.lower().startswith("album - "):
+            raw_album_title = raw_album_title[8:].strip()
+        album_title = clean_album_name(raw_album_title)
+
+        album_artist = default_artist or str(info.get("uploader") or info.get("channel") or "Unknown Artist").replace(" - Topic", "").strip()
 
         entries = info.get("entries", [])
         if not entries and isinstance(info, dict):
-            # Single video URL or flat item provided
             entries = [info]
 
         tracks: list[dict[str, Any]] = []
-        for idx, entry in enumerate(entries, start=1):
-            if not entry:
-                continue
-            vid_id = str(entry.get("id") or "")
-            url = entry.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id and _VIDEO_ID_RE.match(vid_id) else "")
-            if url and "music.youtube.com" in url:
-                url = url.replace("music.youtube.com", "www.youtube.com")
-            raw_title = str(entry.get("title") or f"Track {idx}").strip()
-            artist = default_artist or str(entry.get("uploader") or "Unknown Artist").replace(" - Topic", "").strip()
-            if " - " in raw_title and not default_artist:
-                artist, raw_title = raw_title.split(" - ", 1)
-            tracks.append(
-                {
-                    "track_number": idx,
-                    "title": raw_title.strip(),
-                    "artist": artist.strip(),
-                    "duration": int(entry.get("duration") or 0),
-                    "youtube_url": url,
-                }
-            )
-        return tracks
+
+        # If entries is a single video, check for chapter markers or description timestamps
+        if len(entries) == 1 and entries[0]:
+            single_entry = entries[0]
+            chapters = single_entry.get("chapters") or []
+            description = str(single_entry.get("description") or "")
+            vid_id = str(single_entry.get("id") or "")
+            vid_url = single_entry.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}" if vid_id else clean_url
+
+            # 1. Video chapters
+            if chapters:
+                for c_idx, ch in enumerate(chapters, start=1):
+                    ch_title = str(ch.get("title") or f"Track {c_idx}").strip()
+                    ch_title = re.sub(r"^\d+\s*[\.\-\)]\s*", "", ch_title).strip()
+                    ch_start = int(ch.get("start_time") or 0)
+                    ch_end = int(ch.get("end_time") or ch_start)
+                    ch_dur = max(0, ch_end - ch_start)
+                    tracks.append(
+                        {
+                            "track_number": c_idx,
+                            "title": ch_title,
+                            "artist": album_artist,
+                            "duration": ch_dur,
+                            "youtube_url": f"{vid_url}&t={ch_start}s" if vid_id else vid_url,
+                        }
+                    )
+            # 2. Timestamp lines in description (e.g. "01. Song 03:45" or "0:00 Song")
+            elif description and re.search(r"\d{1,2}:\d{2}", description):
+                time_re = re.compile(r"\[?(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]?")
+                parsed_stamps: list[tuple[int, str]] = []
+                for line in description.splitlines():
+                    m = time_re.search(line)
+                    if m:
+                        t_clean = time_re.sub("", line).strip(" -:|.#")
+                        t_clean = re.sub(r"^\d+\s*[\.\-\)]\s*", "", t_clean).strip()
+                        if t_clean and len(t_clean) >= 2:
+                            parts = [int(p) for p in m.group(0).strip("[]").split(":")]
+                            sec = parts[0] * 3600 + parts[1] * 60 + parts[2] if len(parts) == 3 else parts[0] * 60 + parts[1]
+                            parsed_stamps.append((sec, t_clean))
+
+                if len(parsed_stamps) >= 2:
+                    total_dur = int(single_entry.get("duration") or 0)
+                    for s_idx, (start_sec, tr_name) in enumerate(parsed_stamps, start=1):
+                        next_sec = parsed_stamps[s_idx][0] if s_idx < len(parsed_stamps) else total_dur
+                        dur = max(0, next_sec - start_sec)
+                        tracks.append(
+                            {
+                                "track_number": s_idx,
+                                "title": tr_name,
+                                "artist": album_artist,
+                                "duration": dur,
+                                "youtube_url": f"{vid_url}&t={start_sec}s" if vid_id else vid_url,
+                            }
+                        )
+
+        # Standard playlist entries
+        if not tracks:
+            for idx, entry in enumerate(entries, start=1):
+                if not entry:
+                    continue
+                vid_id = str(entry.get("id") or "")
+                url = entry.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id and _VIDEO_ID_RE.match(vid_id) else "")
+                if url and "music.youtube.com" in url:
+                    url = url.replace("music.youtube.com", "www.youtube.com")
+                raw_title = str(entry.get("title") or f"Track {idx}").strip()
+                artist = default_artist or str(entry.get("uploader") or entry.get("channel") or album_artist).replace(" - Topic", "").strip()
+                if " - " in raw_title and not default_artist:
+                    artist, raw_title = raw_title.split(" - ", 1)
+                raw_title = re.sub(r"^\d+\s*[\.\-\)]\s*", "", raw_title).strip()
+                tracks.append(
+                    {
+                        "track_number": idx,
+                        "title": raw_title.strip(),
+                        "artist": artist.strip(),
+                        "duration": int(entry.get("duration") or 0),
+                        "youtube_url": url,
+                    }
+                )
+
+        return {
+            "artist": album_artist,
+            "album": album_title,
+            "release_year": str(info.get("release_year") or info.get("upload_date", "")[:4]),
+            "cover_url": cover_url,
+            "source": "youtube_playlist",
+            "tracks": tracks,
+        }
+
 
 
     def resolve_best_audio_match(self, artist: str, title: str) -> dict[str, Any]:

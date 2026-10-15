@@ -83,7 +83,7 @@ class LibraryService:
         logger.info("Library sync complete: %d track(s) indexed, %d missing entry(s) pruned", indexed, pruned)
         return {"indexed": indexed, "pruned": pruned}
 
-    def lookup_external_album_tracklist(self, artist: str, album_or_url: str) -> dict[str, Any]:
+    def lookup_external_album_tracklist(self, artist: str = "", album_or_url: str = "") -> dict[str, Any]:
         """
         Resolve the full tracklist (`1..N`) for an album so the user can preview and download the entire album:
           1. If `album_or_url` or `artist` is a Spotify Album/Playlist/Track URL or URI, scrape Spotify embed metadata.
@@ -92,11 +92,14 @@ class LibraryService:
           4. Fallback to Last.fm `album.getInfo` if MusicBrainz has no match.
           5. Final fallback to YouTube audio search.
         """
-        raw_target = album_or_url.strip() or artist.strip()
+        artist_clean = artist.strip()
+        album_clean = album_or_url.strip()
+        if (artist_clean.startswith(("http://", "https://", "spotify:")) and not album_clean.startswith(("http://", "https://", "spotify:"))):
+            album_clean, artist_clean = artist_clean, album_clean
 
         # 1. Spotify Album, Playlist, or Track URL/URI
-        if spotify_client.is_spotify_url(album_or_url) or spotify_client.is_spotify_url(artist):
-            target_sp = album_or_url.strip() if spotify_client.is_spotify_url(album_or_url) else artist.strip()
+        if spotify_client.is_spotify_url(album_clean) or spotify_client.is_spotify_url(artist_clean):
+            target_sp = album_clean if spotify_client.is_spotify_url(album_clean) else artist_clean
             try:
                 sp_meta = spotify_client.fetch_spotify_metadata(target_sp)
                 if sp_meta and sp_meta.get("tracks"):
@@ -105,21 +108,15 @@ class LibraryService:
                 logger.warning("Spotify embed lookup failed for '%s': %s", target_sp, exc)
 
         # 2. YouTube Album / Playlist / Video URL
-        if album_or_url.strip().startswith(("http://", "https://")):
+        if album_clean.startswith(("http://", "https://")):
             try:
-                yt_tracks = youtube_client.expand_playlist_or_album_url(album_or_url.strip(), default_artist=artist)
-                if yt_tracks:
-                    return {
-                        "artist": artist.strip() or (yt_tracks[0]["artist"] if yt_tracks else "Unknown Artist"),
-                        "album": "Downloaded Album",
-                        "release_year": "",
-                        "source": "youtube_playlist",
-                        "tracks": yt_tracks,
-                    }
+                yt_album = youtube_client.lookup_youtube_album(album_clean, default_artist=artist_clean)
+                if yt_album.get("tracks"):
+                    return yt_album
             except Exception as exc:
-                logger.warning("YouTube playlist expansion failed for '%s': %s", album_or_url, exc)
+                logger.warning("YouTube album expansion failed for '%s': %s", album_clean, exc)
             return {
-                "artist": artist.strip() or "Unknown Artist",
+                "artist": artist_clean or "Unknown Artist",
                 "album": "Downloaded Album",
                 "release_year": "",
                 "source": "url",

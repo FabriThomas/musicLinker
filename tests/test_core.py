@@ -266,3 +266,70 @@ def test_direct_album_download_job_endpoint():
     assert res_empty.status_code == 422
 
 
+def test_youtube_album_lookup_mocked():
+    from unittest.mock import patch
+    from musiclinker.infrastructure.youtube_client import youtube_client
+    from musiclinker.services.library_service import library_service
+
+    # Test full video with chapters
+    mock_video_info = {
+        "title": "Daft Punk - Discovery (Full Album)",
+        "uploader": "Daft Punk",
+        "webpage_url": "https://www.youtube.com/watch?v=mock123",
+        "id": "mock123",
+        "chapters": [
+            {"title": "01. One More Time", "start_time": 0, "end_time": 320},
+            {"title": "02. Aerodynamic", "start_time": 320, "end_time": 530},
+        ],
+        "thumbnail": "https://img.youtube.com/vi/mock123/hqdefault.jpg",
+    }
+
+    from unittest.mock import MagicMock
+    mock_ydl = MagicMock()
+    mock_ydl.__enter__.return_value = mock_ydl
+    mock_ydl.extract_info.return_value = mock_video_info
+
+    with patch("musiclinker.infrastructure.youtube_client.yt_dlp.YoutubeDL", return_value=mock_ydl):
+        res = youtube_client.lookup_youtube_album("https://www.youtube.com/watch?v=mock123")
+        assert res["artist"] == "Daft Punk"
+        assert "Discovery" in res["album"]
+        assert len(res["tracks"]) == 2
+        assert res["tracks"][0]["title"] == "One More Time"
+        assert res["tracks"][0]["duration"] == 320
+        assert "t=0s" in res["tracks"][0]["youtube_url"]
+        assert res["tracks"][1]["title"] == "Aerodynamic"
+        assert res["tracks"][1]["duration"] == 210
+        assert "t=320s" in res["tracks"][1]["youtube_url"]
+
+    # Test video with timestamps in description
+    mock_desc_info = {
+        "title": "Justice - Cross",
+        "uploader": "Justice - Topic",
+        "webpage_url": "https://www.youtube.com/watch?v=mock456",
+        "id": "mock456",
+        "duration": 500,
+        "description": "Tracklist:\n0:00 1. Genesis\n3:54 2. Let There Be Light\n",
+        "chapters": [],
+    }
+    mock_ydl_desc = MagicMock()
+    mock_ydl_desc.__enter__.return_value = mock_ydl_desc
+    mock_ydl_desc.extract_info.return_value = mock_desc_info
+
+    with patch("musiclinker.infrastructure.youtube_client.yt_dlp.YoutubeDL", return_value=mock_ydl_desc):
+        res = youtube_client.lookup_youtube_album("https://www.youtube.com/watch?v=mock456")
+        assert res["artist"] == "Justice"
+        assert len(res["tracks"]) == 2
+        assert res["tracks"][0]["title"] == "Genesis"
+        assert res["tracks"][1]["title"] == "Let There Be Light"
+
+    # Test library service delegation
+    with patch("musiclinker.infrastructure.youtube_client.yt_dlp.YoutubeDL", return_value=mock_ydl):
+        lib_res = library_service.lookup_external_album_tracklist(
+            artist="https://www.youtube.com/watch?v=mock123",  # artist passed as URL should auto-swap
+            album_or_url="",
+        )
+        assert lib_res["source"] == "youtube_playlist"
+        assert len(lib_res["tracks"]) == 2
+
+
+
