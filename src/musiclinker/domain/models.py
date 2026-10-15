@@ -127,6 +127,10 @@ class ExtractionJobRequest(BaseModel):
         default=False,
         description="Run LLM/heuristic deduplication and album/track canonicalization before downloading",
     )
+    preferred_download_method: str = Field(
+        default="auto",
+        description="Preferential audio source: 'auto', 'youtube_music', 'youtube_video', or 'spotify_match'",
+    )
 
 
 class DirectDownloadRequest(BaseModel):
@@ -138,6 +142,10 @@ class DirectDownloadRequest(BaseModel):
     album_override: str = Field(default="")
     track_number_override: int = Field(default=0)
     bitrate_kbps: int = Field(default=320)
+    download_method: str = Field(
+        default="auto",
+        description="Preferential audio source: 'auto', 'youtube_music', 'youtube_video', or 'spotify_match'",
+    )
 
 
 class AlbumTrackItem(BaseModel):
@@ -161,6 +169,18 @@ class AlbumDownloadRequest(BaseModel):
         description="Optional explicit tracklist; if empty, server resolves the official tracklist automatically.",
     )
     skip_existing: bool = Field(default=True)
+    download_method: str = Field(
+        default="auto",
+        description="Preferential audio source: 'auto', 'youtube_music', 'youtube_video', or 'spotify_match'",
+    )
+
+
+class BatchTrackDeletePayload(BaseModel):
+    """Payload to batch delete tracks from SQLite database and optionally remove files from disk."""
+
+    track_ids: list[int] = Field(..., min_length=1, description="List of track IDs to delete")
+    delete_files: bool = Field(default=True, description="Whether to also remove .mp3 and .lrc files from disk")
+    unmark_hashes: bool = Field(default=False, description="Whether to remove hashes from seen_hashes history")
 
 
 
@@ -269,3 +289,4 @@ class SettingsUpdatePayload(BaseModel):
     proxy_name: str | None = None
     proxy_server_url: str | None = None
     proxy_password: str | None = None
+    preferred_download_method: str | None = None

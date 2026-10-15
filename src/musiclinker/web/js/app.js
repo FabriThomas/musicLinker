@@ -300,6 +300,12 @@ class MusicLinkerController {
                 ✎
               </button>
               <button
+                data-delete-idx="${idx}"
+                title="Delete Track from Library & Disk"
+                class="px-2 py-1 rounded-lg text-xs text-red-400 hover:text-red-200 hover:bg-red-950/60 border border-transparent hover:border-red-500/30 transition">
+                🗑
+              </button>
+              <button
                 data-offline-idx="${idx}"
                 title="${isOffline ? "Saved for Offline (tap to remove)" : "Save for Offline"}"
                 class="px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
@@ -335,6 +341,17 @@ class MusicLinkerController {
         e.stopPropagation();
         const track = this.tracks[Number(btn.dataset.editIdx)];
         if (track) this.openEditTrackModal(track);
+      });
+    });
+
+    container.querySelectorAll("[data-delete-idx]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const track = this.tracks[Number(btn.dataset.deleteIdx)];
+        if (!track) return;
+        if (confirm(`Delete "${track.title}" by "${track.artist_display}" from library and disk?`)) {
+          await this.deleteTrack(track.id, true, false);
+        }
       });
     });
 
@@ -764,6 +781,8 @@ class MusicLinkerController {
     }
 
 
+    const method = document.getElementById("dl-album-method")?.value || "auto";
+
     const logBox = document.getElementById("job-logs");
     const banner = document.getElementById("live-job-banner");
     if (logBox) logBox.textContent = `Starting full album download for '${artist} — ${album}'...`;
@@ -778,6 +797,7 @@ class MusicLinkerController {
           bitrate_kbps: bitrate,
           tracks: selectedTracks,
           skip_existing: true,
+          download_method: method,
         }),
       });
       this.subscribeToJobProgress(job.job_id);
@@ -894,6 +914,156 @@ class MusicLinkerController {
       await this.loadLibrary(document.getElementById("search-input")?.value || "");
     } catch (err) {
       alert(`Album rename failed: ${err.message}`);
+    }
+  }
+
+  async deleteTrack(trackId, deleteFile = true, unmarkHash = false) {
+    try {
+      await api.request(`/api/tracks/${trackId}?delete_file=${deleteFile}&unmark_hash=${unmarkHash}`, {
+        method: "DELETE",
+      });
+      const currentTrack = this.playQueue[this.currentIndex];
+      if (currentTrack && currentTrack.id === trackId) {
+        if (this.playQueue.length > 1) {
+          await this.nextTrack();
+        } else {
+          this.audio.pause();
+          this.currentIndex = -1;
+          this.updateNowPlayingUI(null);
+        }
+      }
+      await this.loadAlbums();
+      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      if (this.viewMode === "layered") {
+        this.renderLayeredSelector();
+      }
+    } catch (err) {
+      alert(`Failed to delete track: ${err.message}`);
+    }
+  }
+
+  async deleteSelectedAlbum() {
+    if (!this.selectedAlbum) return;
+    const albumName = this.selectedAlbum;
+    if (!confirm(`Are you sure you want to delete the entire album "${albumName}" and all of its tracks from disk? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await api.request(`/api/albums/${encodeURIComponent(albumName)}?delete_files=true`, {
+        method: "DELETE",
+      });
+      this.selectedAlbum = "";
+      await this.loadAlbums();
+      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      if (this.viewMode === "layered") {
+        this.renderLayeredSelector();
+      }
+    } catch (err) {
+      alert(`Failed to delete album: ${err.message}`);
+    }
+  }
+
+  async deleteLayerSelectedTracks() {
+    const selected = this.getLayerSelectedTracks();
+    if (!selected.length) {
+      alert("No tracks currently selected in Layer 3.");
+      return;
+    }
+    if (!confirm(`Permanently delete ${selected.length} selected track(s) from your library and disk?`)) {
+      return;
+    }
+    try {
+      const res = await api.request("/api/tracks/batch-delete", {
+        method: "POST",
+        body: JSON.stringify({
+          track_ids: selected.map((t) => t.id),
+          delete_files: true,
+          unmark_hashes: false,
+        }),
+      });
+      alert(`Deleted ${res.count || selected.length} track(s).`);
+      this.layerExcludedTrackIds.clear();
+      await this.loadAlbums();
+      await this.loadLibrary(document.getElementById("search-input")?.value || "");
+      this.renderLayeredSelector();
+    } catch (err) {
+      alert(`Batch delete failed: ${err.message}`);
+    }
+  }
+
+  async deleteAlbumAlias(aliasId) {
+    if (!confirm("Remove this album canonicalization alias rule?")) return;
+    try {
+      await api.request(`/api/albums/aliases/${aliasId}`, {
+        method: "DELETE",
+      });
+      await this.loadAlbumAliases();
+    } catch (err) {
+      alert(`Failed deleting alias: ${err.message}`);
+    }
+  }
+
+  async loadAlbumAliases() {
+    const box = document.getElementById("settings-aliases-list");
+    if (!box) return;
+    try {
+      const data = await api.request("/api/albums");
+      const aliases = data.aliases || [];
+      if (!aliases.length) {
+        box.innerHTML = `<div class="text-[11px] text-zinc-500 italic p-2">No album alias rules defined. Edit an album or rename an album to create rules.</div>`;
+        return;
+      }
+      box.innerHTML = aliases
+        .map(
+          (a) => `
+          <div class="flex items-center justify-between p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs">
+            <div class="min-w-0 pr-2">
+              <div class="truncate font-semibold text-zinc-200">
+                ${this.escape(a.raw_album_display)} <span class="text-zinc-500 font-normal">→</span> <span class="text-emerald-400">${this.escape(a.canonical_album)}</span>
+              </div>
+              <div class="text-[10px] text-zinc-500 truncate">${this.escape(a.artist_norm || "All Artists")}</div>
+            </div>
+            <button
+              data-delete-alias="${a.id}"
+              class="px-2 py-1 rounded bg-zinc-800 hover:bg-red-950/80 hover:text-red-300 text-zinc-400 text-xs transition"
+              title="Delete alias rule">
+              ✕
+            </button>
+          </div>
+        `
+        )
+        .join("");
+
+      box.querySelectorAll("[data-delete-alias]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          this.deleteAlbumAlias(Number(btn.dataset.deleteAlias));
+        });
+      });
+    } catch (err) {
+      box.innerHTML = `<div class="text-xs text-red-400 p-2">Failed loading aliases: ${err.message}</div>`;
+    }
+  }
+
+  async saveDownloadPreferences() {
+    const method = document.getElementById("set-preferred-download-method")?.value || "auto";
+    const bitrate = Number(document.getElementById("set-default-bitrate")?.value || 320);
+    try {
+      await api.request("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          preferred_download_method: method,
+          default_bitrate_kbps: bitrate,
+        }),
+      });
+      const albMethod = document.getElementById("dl-album-method");
+      if (albMethod) albMethod.value = method;
+      const extMethod = document.getElementById("ext-method");
+      if (extMethod) extMethod.value = method;
+      const extBitrate = document.getElementById("ext-bitrate");
+      if (extBitrate) extBitrate.value = String(bitrate);
+      alert("Download & audio engine preferences saved.");
+    } catch (err) {
+      alert(`Failed saving download preferences: ${err.message}`);
     }
   }
 
@@ -1212,6 +1382,8 @@ class MusicLinkerController {
       return;
     }
 
+    const preferredMethod = document.getElementById("ext-method")?.value || "auto";
+
     const logBox = document.getElementById("job-logs");
     const banner = document.getElementById("live-job-banner");
     if (logBox) logBox.textContent = "Starting extraction job...";
@@ -1228,6 +1400,7 @@ class MusicLinkerController {
           bitrate_kbps: bitrate,
           download_enabled: true,
           use_llm_filter: useLlmFilter,
+          preferred_download_method: preferredMethod,
         }),
       });
       this.subscribeToJobProgress(job.job_id);
@@ -1474,6 +1647,11 @@ class MusicLinkerController {
       setVal("proxy-name", cfg.proxy_name || "default");
       setVal("proxy-server-url", cfg.proxy_server_url || "");
       setVal("proxy-password", cfg.proxy_password || "");
+      setVal("set-preferred-download-method", cfg.preferred_download_method || "auto");
+      setVal("set-default-bitrate", cfg.default_bitrate_kbps || "320");
+      setVal("dl-album-method", cfg.preferred_download_method || "auto");
+      setVal("ext-method", cfg.preferred_download_method || "auto");
+      await this.loadAlbumAliases();
     } catch (_err) {}
   }
 
@@ -1590,6 +1768,8 @@ class MusicLinkerController {
     // Play by Album & Offline Album Cache buttons
     document.getElementById("btn-play-selected-album")?.addEventListener("click", () => this.playSelectedAlbumInOrder());
     document.getElementById("btn-cache-selected-album")?.addEventListener("click", () => this.cacheSelectedAlbumOffline());
+    document.getElementById("btn-delete-selected-album")?.addEventListener("click", () => this.deleteSelectedAlbum());
+    document.getElementById("btn-layer-delete-selected")?.addEventListener("click", () => this.deleteLayerSelectedTracks());
 
     // Styled Seek & Volume Sliders
     document.getElementById("seek-bar")?.addEventListener("input", (e) => {
@@ -1620,13 +1800,24 @@ class MusicLinkerController {
       document.getElementById(`tab-btn-${tab}`)?.addEventListener("click", () => this.switchStudioTab(tab));
     });
 
-    // Library Search & Album Bulk Rename
+    // Library Search & Album Bulk Rename & Track Edit Modal
     document.getElementById("search-input")?.addEventListener("input", (e) => {
       this.loadLibrary(e.target.value);
     });
     document.getElementById("btn-rename-selected-album")?.addEventListener("click", () => this.openBulkAlbumRenameModal());
     document.getElementById("btn-confirm-album-rename")?.addEventListener("click", () => this.submitBulkAlbumRename());
     document.getElementById("btn-save-track-edit")?.addEventListener("click", () => this.saveEditedTrackMetadata());
+    document.getElementById("btn-delete-track-modal")?.addEventListener("click", async () => {
+      const trackId = Number(document.getElementById("edit-track-id")?.value || 0);
+      const title = document.getElementById("edit-track-title")?.value || "track";
+      const deleteFile = document.getElementById("edit-delete-file")?.checked ?? true;
+      const unmarkHash = document.getElementById("edit-unmark-hash")?.checked ?? false;
+      if (!trackId) return;
+      if (confirm(`Delete "${title}" from your library${deleteFile ? " and disk" : ""}?`)) {
+        document.getElementById("edit-track-modal")?.classList.add("hidden");
+        await this.deleteTrack(trackId, deleteFile, unmarkHash);
+      }
+    });
 
     // Jobs, Full Album Downloader, LLM Agent Curation & APK Pairing
     document.getElementById("btn-start-extract")?.addEventListener("click", () => this.startExtractionJob());
@@ -1657,6 +1848,8 @@ class MusicLinkerController {
     document.getElementById("btn-save-settings")?.addEventListener("click", () => this.saveSettings(false));
     document.getElementById("btn-save-llm-settings")?.addEventListener("click", () => this.saveSettings(false));
     document.getElementById("btn-save-proxy-settings")?.addEventListener("click", () => this.saveSettings(false));
+    document.getElementById("btn-save-download-preferences")?.addEventListener("click", () => this.saveDownloadPreferences());
+    document.getElementById("btn-refresh-aliases")?.addEventListener("click", () => this.loadAlbumAliases());
   }
 
   formatTime(sec) {

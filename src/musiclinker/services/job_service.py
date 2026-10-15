@@ -222,6 +222,7 @@ class JobService:
                         query_or_url=item.youtube_url,
                         playcount=0,
                         bitrate_kbps=req.bitrate_kbps,
+                        download_method=req.download_method,
                         staging_dir=job_staging,
                         progress_cb=lambda p, b=base_pct, s=total: setattr(
                             job, "progress_pct", b + (p / s)
@@ -338,6 +339,7 @@ class JobService:
                         query_or_url="",
                         playcount=cand.playcount,
                         bitrate_kbps=req.bitrate_kbps,
+                        download_method=req.preferred_download_method,
                         staging_dir=job_staging,
                         progress_cb=lambda p, b=base_pct, s=total_to_dl: setattr(
                             job, "progress_pct", b + (p / s)
@@ -411,6 +413,7 @@ class JobService:
                 query_or_url=target_query_or_url,
                 playcount=0,
                 bitrate_kbps=req.bitrate_kbps,
+                download_method=req.download_method,
                 staging_dir=job_staging,
                 progress_cb=lambda p: setattr(job, "progress_pct", p),
             )
@@ -442,13 +445,15 @@ class JobService:
         query_or_url: str,
         playcount: int,
         bitrate_kbps: int,
+        download_method: str = "auto",
         staging_dir: Path,
         progress_cb: Any = None,
     ) -> TrackEntity:
         job.current_stage = "youtube_audio_and_captions"
         job.lyric_sync_status = "Checking YouTube stream & subtitle cues..."
         if not query_or_url:
-            yt_match = youtube_client.resolve_best_audio_match(artist_raw, title_raw)
+            resolved_method = download_method or str(self.repo.get_settings().get("preferred_download_method", "auto"))
+            yt_match = youtube_client.resolve_best_audio_match(artist_raw, title_raw, preferred_method=resolved_method)
             target_url = yt_match["url"]
             thumb_url = yt_match.get("thumbnail", "")
         else:

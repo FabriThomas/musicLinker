@@ -251,67 +251,74 @@ class YouTubeClient:
 
 
 
-    def resolve_best_audio_match(self, artist: str, title: str) -> dict[str, Any]:
+    def resolve_best_audio_match(
+        self,
+        artist: str,
+        title: str,
+        preferred_method: str = "auto",
+    ) -> dict[str, Any]:
         """
-        Resolve the best official studio audio release for a track:
-          1. Queries YouTube Music directly (`https://music.youtube.com/search?q=...`) to prioritize
-             official catalog studio tracks and filter out music video skits / sound effects.
-          2. Falls back to YouTube with Topic / Official Audio ranking if YouTube Music yields no direct stream.
+        Resolve the best official studio audio release for a track based on preferred_method:
+          - 'auto': Queries YouTube Music official catalog first to avoid video skits;
+            smoothly falls back to YouTube Topic / Official Audio ranking.
+          - 'youtube_music': Strictly prioritizes YouTube Music studio catalog & Topic audio.
+          - 'youtube_video': Searches standard YouTube prioritizing Official Music Videos / Official Audio.
+          - 'spotify_match': Uses studio catalog matching (prioritizes official release streams).
         """
         import urllib.parse
 
-        # 1. Try YouTube Music search first
-        clean_q = f"{artist} {title}".strip()
-        encoded_q = urllib.parse.quote_plus(clean_q)
-        ytm_search_url = f"https://music.youtube.com/search?q={encoded_q}"
-        try:
-            ydl_opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "extract_flat": True,
-                "skip_download": True,
-                "noplaylist": True,
-                **self._get_base_ydl_opts(),
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(ytm_search_url, download=False)
-            entries = info.get("entries", []) if isinstance(info, dict) else []
-            for e in entries:
-                if not e:
-                    continue
-                url = str(e.get("url") or "")
-                vid_id = str(e.get("id") or "")
-                if not _VIDEO_ID_RE.match(vid_id):
-                    if "v=" in url:
-                        candidate_v = url.split("v=")[-1].split("&")[0]
-                        if _VIDEO_ID_RE.match(candidate_v):
-                            vid_id = candidate_v
+        # 1. Try YouTube Music search first (unless user explicitly requests standard YouTube video)
+        if preferred_method != "youtube_video":
+            clean_q = f"{artist} {title}".strip()
+            encoded_q = urllib.parse.quote_plus(clean_q)
+            ytm_search_url = f"https://music.youtube.com/search?q={encoded_q}"
+            try:
+                ydl_opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "extract_flat": True,
+                    "skip_download": True,
+                    "noplaylist": True,
+                    **self._get_base_ydl_opts(),
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(ytm_search_url, download=False)
+                entries = info.get("entries", []) if isinstance(info, dict) else []
+                for e in entries:
+                    if not e:
+                        continue
+                    url = str(e.get("url") or "")
+                    vid_id = str(e.get("id") or "")
+                    if not _VIDEO_ID_RE.match(vid_id):
+                        if "v=" in url:
+                            candidate_v = url.split("v=")[-1].split("&")[0]
+                            if _VIDEO_ID_RE.match(candidate_v):
+                                vid_id = candidate_v
+                            else:
+                                continue
                         else:
                             continue
-                    else:
-                        continue
-                final_url = f"https://www.youtube.com/watch?v={vid_id}"
-                dur = int(e.get("duration") or 0)
-                if dur == 0 or (30 <= dur <= 1200):
-                    thumbnails = e.get("thumbnails") or []
-                    thumb_url = thumbnails[-1].get("url", "") if thumbnails else e.get("thumbnail", "")
-                    return {
-                        "id": vid_id,
-                        "title": e.get("title") or f"{artist} - {title}",
-                        "uploader": e.get("uploader") or e.get("channel") or f"{artist} - Topic",
-                        "duration": dur,
-                        "url": final_url,
-                        "thumbnail": thumb_url,
-                        "source": "youtube_music",
-                    }
-        except Exception as exc:
-
-            logger.debug(
-                "YouTube Music direct search failed for '%s - %s' (%s); falling back to ytsearch",
-                artist,
-                title,
-                exc,
-            )
+                    final_url = f"https://www.youtube.com/watch?v={vid_id}"
+                    dur = int(e.get("duration") or 0)
+                    if dur == 0 or (30 <= dur <= 1200):
+                        thumbnails = e.get("thumbnails") or []
+                        thumb_url = thumbnails[-1].get("url", "") if thumbnails else e.get("thumbnail", "")
+                        return {
+                            "id": vid_id,
+                            "title": e.get("title") or f"{artist} - {title}",
+                            "uploader": e.get("uploader") or e.get("channel") or f"{artist} - Topic",
+                            "duration": dur,
+                            "url": final_url,
+                            "thumbnail": thumb_url,
+                            "source": "youtube_music",
+                        }
+            except Exception as exc:
+                logger.debug(
+                    "YouTube Music direct search failed for '%s - %s' (%s); falling back to ytsearch",
+                    artist,
+                    title,
+                    exc,
+                )
 
         # 2. Fallback: Search YouTube with Topic & Official Audio priority
         query = f"{artist} - {title} Topic"

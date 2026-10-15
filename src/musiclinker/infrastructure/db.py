@@ -35,6 +35,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "proxy_server_url": os.environ.get("PROXY_SERVER_URL", ""),
     "proxy_password": os.environ.get("PROXY_PASSWORD", ""),
     "lan_pair_token": generate_pair_token(),
+    "preferred_download_method": "auto",
 }
 
 
@@ -300,6 +301,12 @@ class DatabaseRepository:
         rows = conn.execute("SELECT * FROM album_aliases ORDER BY updated_at DESC").fetchall()
         return [dict(r) for r in rows]
 
+    def delete_album_alias(self, alias_id: int) -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM album_aliases WHERE id = ?", (alias_id,))
+            conn.commit()
+
     # ---- Deduplication Hash Operations ----
 
     def is_hash_seen(self, track_hash: str) -> bool:
@@ -317,6 +324,12 @@ class DatabaseRepository:
                 "INSERT OR REPLACE INTO seen_hashes (track_hash, artist, title, source, created_at) VALUES (?, ?, ?, ?, ?)",
                 (track_hash, artist, title, source, int(time.time())),
             )
+            conn.commit()
+
+    def unmark_hash(self, track_hash: str) -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM seen_hashes WHERE track_hash = ?", (track_hash,))
             conn.commit()
 
     # ---- Track Library Operations ----

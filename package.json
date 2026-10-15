@@ -1,6 +1,6 @@
 {
   "name": "musiclinker-android",
-  "version": "3.0.3",
+  "version": "3.0.5",
 
   "description": "Capacitor Native Android APK wrapper for MusicLinker Studio",
   "private": true,

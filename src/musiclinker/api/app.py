@@ -22,6 +22,7 @@ from musiclinker.domain.models import (
     AlbumBulkRenamePayload,
     AlbumDownloadRequest,
     BatchScrobblePayload,
+    BatchTrackDeletePayload,
     DirectDownloadRequest,
     ExtractionJobRequest,
     JobStatus,
@@ -63,7 +64,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="3.0.3",
+        version="3.0.5",
         lifespan=lifespan,
     )
 
@@ -123,6 +124,44 @@ def create_app() -> FastAPI:
             return {"track": updated.to_dict()}
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/tracks/{track_id}", dependencies=[Depends(require_paired_client)])
+    async def delete_single_track(
+        track_id: int,
+        delete_file: bool = Query(default=True),
+        unmark_hash: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        """Delete a track from SQLite and optionally remove .mp3 & .lrc from disk and unmark hash."""
+        success = library_service.delete_track(track_id, delete_file=delete_file, unmark_hash=unmark_hash)
+        if not success:
+            raise HTTPException(status_code=404, detail="Track not found.")
+        return {"status": "deleted", "track_id": track_id}
+
+    @app.post("/api/tracks/batch-delete", dependencies=[Depends(require_paired_client)])
+    async def batch_delete_tracks(payload: BatchTrackDeletePayload) -> dict[str, Any]:
+        """Batch delete multiple tracks from SQLite and optionally remove files from disk."""
+        deleted = library_service.delete_tracks_batch(
+            payload.track_ids,
+            delete_files=payload.delete_files,
+            unmark_hashes=payload.unmark_hashes,
+        )
+        return {"status": "deleted", "count": deleted}
+
+    @app.delete("/api/albums/{album_name:path}", dependencies=[Depends(require_paired_client)])
+    async def delete_entire_album(
+        album_name: str,
+        artist: str = Query(default=""),
+        delete_files: bool = Query(default=True),
+    ) -> dict[str, Any]:
+        """Delete all tracks belonging to an album from SQLite and disk."""
+        deleted = library_service.delete_album(album_name, artist=artist, delete_files=delete_files)
+        return {"status": "deleted", "count": deleted}
+
+    @app.delete("/api/albums/aliases/{alias_id}", dependencies=[Depends(require_paired_client)])
+    async def remove_album_alias(alias_id: int) -> dict[str, str]:
+        """Remove a saved album canonicalization alias rule."""
+        library_service.delete_album_alias(alias_id)
+        return {"status": "deleted", "alias_id": str(alias_id)}
 
     @app.post("/api/library/rescan", dependencies=[Depends(require_paired_client)])
     async def rescan_library() -> dict[str, int]:
@@ -431,6 +470,7 @@ def create_app() -> FastAPI:
             "proxy_server_url": cfg.get("proxy_server_url", ""),
             "proxy_password_configured": bool(cfg.get("proxy_password")),
             "proxy_password": cfg.get("proxy_password", ""),
+            "preferred_download_method": cfg.get("preferred_download_method", "auto"),
         }
 
     @app.put("/api/settings", dependencies=[Depends(require_paired_client)])

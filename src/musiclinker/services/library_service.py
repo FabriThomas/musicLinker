@@ -333,5 +333,54 @@ class LibraryService:
                     }
         return None
 
+    def delete_track(self, track_id: int, delete_file: bool = True, unmark_hash: bool = False) -> bool:
+        track = self.repo.get_track(track_id)
+        if not track:
+            return False
+
+        if delete_file:
+            try:
+                mp3_path = Path(track.file_path)
+                if mp3_path.exists():
+                    mp3_path.unlink(missing_ok=True)
+                lrc_path = Path(track.lrc_path) if track.lrc_path else mp3_path.with_suffix(".lrc")
+                if lrc_path.exists():
+                    lrc_path.unlink(missing_ok=True)
+
+                # Clean up parent album folder if now empty
+                album_dir = mp3_path.parent
+                if album_dir.exists() and not any(album_dir.iterdir()):
+                    album_dir.rmdir()
+                    # Clean up artist folder if now empty
+                    artist_dir = album_dir.parent
+                    if artist_dir.exists() and not any(artist_dir.iterdir()) and artist_dir != PATHS.downloads_dir:
+                        artist_dir.rmdir()
+            except Exception as exc:
+                logger.warning("Error deleting files for track %s (%s): %s", track_id, track.title, exc)
+
+        if unmark_hash:
+            self.repo.unmark_hash(track.track_hash)
+
+        self.repo.delete_track(track_id)
+        return True
+
+    def delete_tracks_batch(self, track_ids: list[int], delete_files: bool = True, unmark_hashes: bool = False) -> int:
+        deleted = 0
+        for tid in track_ids:
+            if self.delete_track(tid, delete_file=delete_files, unmark_hash=unmark_hashes):
+                deleted += 1
+        return deleted
+
+    def delete_album(self, album_name: str, artist: str = "", delete_files: bool = True) -> int:
+        tracks = self.repo.list_tracks(album=album_name)
+        if artist.strip():
+            artist_clean = artist.strip().lower()
+            tracks = [t for t in tracks if t.album_artist.lower() == artist_clean or t.artist_display.lower() == artist_clean]
+        return self.delete_tracks_batch([t.id for t in tracks], delete_files=delete_files, unmark_hashes=False)
+
+    def delete_album_alias(self, alias_id: int) -> bool:
+        self.repo.delete_album_alias(alias_id)
+        return True
+
 
 library_service = LibraryService()

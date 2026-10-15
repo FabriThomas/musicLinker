@@ -84,9 +84,14 @@
               ↓ Cache Album Offline (APK)
             </button>
           </div>
-          <button id="btn-rename-selected-album" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs">
-            ✎ Rename Album
-          </button>
+          <div class="flex items-center gap-1.5">
+            <button id="btn-rename-selected-album" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs">
+              ✎ Rename Album
+            </button>
+            <button id="btn-delete-selected-album" class="px-2.5 py-1 rounded-lg bg-red-950/60 hover:bg-red-900 border border-red-500/30 text-red-300 text-xs font-medium" title="Delete entire album and files">
+              🗑 Delete Album
+            </button>
+          </div>
         </div>
 
         <div id="track-list" class="flex-1 overflow-y-auto ml-scroll space-y-1 pr-1 min-h-0"></div>
@@ -110,6 +115,9 @@
             </button>
             <button id="btn-layer-cache-offline" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs">
               ↓ Offline
+            </button>
+            <button id="btn-layer-delete-selected" class="px-2.5 py-1 rounded-lg bg-red-950/60 hover:bg-red-900 border border-red-500/30 text-red-300 text-xs font-medium" title="Delete selected tracks from library">
+              🗑 Delete
             </button>
           </div>
         </div>
@@ -208,7 +216,15 @@
           <div class="grid grid-cols-2 gap-2 text-xs">
             <input id="dl-album-artist" type="text" placeholder="Artist (e.g. Daft Punk, or leave blank if URL)" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
             <input id="dl-album-title" type="text" placeholder="Album Name, Spotify (Album/Playlist), or YouTube Music URL" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
-
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <label class="text-[11px] text-zinc-400 shrink-0">Audio Source:</label>
+            <select id="dl-album-method" class="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200">
+              <option value="auto">Auto (YouTube Music Studio Catalog + Smart Fallback)</option>
+              <option value="youtube_music">YouTube Music Only (Pure Studio Releases)</option>
+              <option value="youtube_video">YouTube Video (Standard / Official Videos)</option>
+              <option value="spotify_match">Spotify Matched (Match Official Album Streams)</option>
+            </select>
           </div>
           <div class="flex gap-2">
             <button id="btn-preview-album" class="flex-1 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium">
@@ -235,9 +251,15 @@
             </select>
             <input id="ext-min-plays" type="number" value="10" min="1" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" title="Min Plays" />
             <input id="ext-cap" type="number" value="25" min="1" max="500" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" title="Download Cap" />
-            <select id="ext-bitrate" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 col-span-2">
+            <select id="ext-bitrate" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5">
               <option value="320">320 kbps MP3 (Audiophile Quality)</option>
               <option value="192">192 kbps MP3 (Compact Mobile)</option>
+            </select>
+            <select id="ext-method" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5">
+              <option value="auto">Method: Auto (YTM + Fallback)</option>
+              <option value="youtube_music">Method: YouTube Music Only</option>
+              <option value="youtube_video">Method: YouTube Video</option>
+              <option value="spotify_match">Method: Spotify Matched</option>
             </select>
           </div>
           <label class="flex items-center gap-2 text-xs cursor-pointer">
@@ -375,6 +397,40 @@
 
       <!-- Tab Panel 4: Settings & Reverse Proxy -->
       <div id="tab-panel-settings" class="hidden flex-1 bg-zinc-900/45 border border-zinc-800/80 rounded-2xl p-4 flex flex-col gap-4 min-h-0 overflow-y-auto ml-scroll">
+        <!-- Preferential Download & Audio Method Settings -->
+        <div class="space-y-3 bg-zinc-950/70 border border-zinc-800/90 rounded-xl p-3 text-xs">
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">⚡ Preferential Download & Audio Engine</h2>
+          <p class="text-[11px] text-zinc-400">
+            Select your default preferred audio provider and target download fidelity across all extractions and album downloads.
+          </p>
+          <div class="space-y-2">
+            <div>
+              <label class="block text-[10px] text-zinc-400 mb-1">Preferential Audio Source Strategy</label>
+              <select id="set-preferred-download-method" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200">
+                <option value="auto">Auto (YouTube Music Studio Catalog + Smart Topic Fallback)</option>
+                <option value="youtube_music">YouTube Music Only (Pure Official Studio Releases, No Video Skits)</option>
+                <option value="youtube_video">YouTube Video (Official Music Videos & Standard Audio)</option>
+                <option value="spotify_match">Spotify Matched (Match Official Album Metadata to High-Fidelity Audio)</option>
+              </select>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[10px] text-zinc-400 mb-1">Default MP3 Bitrate</label>
+                <select id="set-default-bitrate" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200">
+                  <option value="320">320 kbps (Audiophile CBR)</option>
+                  <option value="256">256 kbps (High Fidelity)</option>
+                  <option value="192">192 kbps (Compact Mobile)</option>
+                </select>
+              </div>
+              <div class="flex items-end">
+                <button id="btn-save-download-preferences" class="w-full py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs">
+                  Save Preferences
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="space-y-3">
           <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">🔀 Built-in Reverse Proxy (`/v1`)</h2>
           <p class="text-xs text-zinc-400">
@@ -399,6 +455,15 @@
               Save Reverse Proxy
             </button>
           </div>
+        </div>
+
+        <!-- Saved Album Aliases CRUD List -->
+        <div class="space-y-2.5 border-t border-zinc-800/80 pt-3">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">🗂 Album Aliases & Canonical Rules</h2>
+            <button id="btn-refresh-aliases" class="text-[11px] text-emerald-400 hover:underline">Refresh</button>
+          </div>
+          <div id="settings-aliases-list" class="max-h-48 overflow-y-auto ml-scroll space-y-1.5 text-xs"></div>
         </div>
 
         <div class="space-y-3 border-t border-zinc-800/80 pt-3">
@@ -478,8 +543,21 @@
           <input id="edit-remember-alias" type="checkbox" checked class="accent-emerald-500" />
           <span class="text-zinc-300">Auto-rename future tracks with this old album name</span>
         </label>
+        <div class="space-y-1.5 pt-2 border-t border-zinc-800">
+          <label class="flex items-center gap-2 cursor-pointer text-[11px] text-zinc-400">
+            <input id="edit-delete-file" type="checkbox" checked class="accent-red-500" />
+            <span>Also delete physical .mp3 & .lrc file when deleting</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer text-[11px] text-zinc-400">
+            <input id="edit-unmark-hash" type="checkbox" class="accent-red-500" />
+            <span>Allow re-downloading (unmark from download history)</span>
+          </label>
+        </div>
       </div>
       <div class="flex gap-2 pt-2">
+        <button id="btn-delete-track-modal" type="button" class="px-3 py-2 rounded-xl bg-red-950/60 hover:bg-red-900 border border-red-500/30 text-red-300 text-xs font-semibold">
+          🗑 Delete
+        </button>
         <button onclick="document.getElementById('edit-track-modal').classList.add('hidden')" class="flex-1 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold">Cancel</button>
         <button id="btn-save-track-edit" class="flex-1 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-bold">Save & Retag MP3</button>
       </div>

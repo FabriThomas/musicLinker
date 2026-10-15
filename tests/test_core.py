@@ -332,4 +332,77 @@ def test_youtube_album_lookup_mocked():
         assert len(lib_res["tracks"]) == 2
 
 
+def test_crud_endpoints_and_library_service(tmp_path):
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.infrastructure.db import DatabaseRepository
+    from musiclinker.services.library_service import LibraryService
+
+    test_db = tmp_path / "crud_test.db"
+    repo = DatabaseRepository(db_path=test_db)
+    lib_service = LibraryService(repo=repo)
+
+    # 1. Create a dummy audio file on disk
+    mp3_file = tmp_path / "song.mp3"
+    mp3_file.write_bytes(b"dummy mp3 data")
+    lrc_file = tmp_path / "song.lrc"
+    lrc_file.write_text("[00:00.00] Test Lyric", encoding="utf-8")
+
+    # Insert track into database
+    track = repo.upsert_track(
+        track_hash="hash_crud_1",
+        title="Test Track",
+        artist_display="Test Artist",
+        artists=["Test Artist"],
+        album_artist="Test Artist",
+        album="Test Album",
+        track_number=1,
+        file_path=str(mp3_file),
+        lrc_path=str(lrc_file),
+    )
+    assert track.id > 0
+    assert repo.is_hash_seen("hash_crud_1") is True
+
+    # Save an album alias
+    repo.save_album_alias("Test Artist", "Old Raw Album", "Test Album")
+    aliases = repo.list_album_aliases()
+    assert len(aliases) >= 1
+    alias_id = aliases[0]["id"]
+
+    # 2. Test deleting single track via library service with file deletion and unmark
+    success = lib_service.delete_track(track.id, delete_file=True, unmark_hash=True)
+    assert success is True
+    assert repo.get_track(track.id) is None
+    assert repo.is_hash_seen("hash_crud_1") is False
+    assert not mp3_file.exists()
+    assert not lrc_file.exists()
+
+    # 3. Test deleting album alias
+    lib_service.delete_album_alias(alias_id)
+    assert len(repo.list_album_aliases()) == 0
+
+    # 4. Test API endpoint routes using TestClient
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    # Settings: preferred download method
+    res_set = client.put("/api/settings", json={"preferred_download_method": "youtube_music"})
+    assert res_set.status_code == 200
+    assert res_set.json()["preferred_download_method"] == "youtube_music"
+
+    # Batch delete endpoint with empty list (should 422) or valid list
+    res_batch = client.post("/api/tracks/batch-delete", json={
+        "track_ids": [99999],
+        "delete_files": False,
+        "unmark_hashes": False
+    })
+    assert res_batch.status_code == 200
+    assert res_batch.json()["count"] == 0
+
+    # Album delete endpoint
+    res_album_del = client.delete("/api/albums/NonExistentAlbum?delete_files=false")
+    assert res_album_del.status_code == 200
+    assert res_album_del.json()["status"] == "deleted"
+
+
+
 
