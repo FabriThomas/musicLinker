@@ -63,9 +63,10 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="3.0.1",
+        version="3.0.2",
         lifespan=lifespan,
     )
+
 
     app.add_middleware(
         CORSMiddleware,
