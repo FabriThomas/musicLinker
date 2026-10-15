@@ -217,9 +217,64 @@ class CurationService:
         instruction: str,
         history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
-        """Execute an autonomous curation instruction via LLM reasoning with library tool actions."""
+        """Execute an autonomous curation instruction via LLM reasoning with library tool actions and clean debugging."""
         tracks = self.repo.list_tracks()
-        sample = [
+        artists_summary = self.repo.list_artists_summary()
+        albums_summary = self.repo.list_albums_summary()
+        total_tracks = len(tracks)
+
+        # 1. Extract potential artist/album keywords from instruction
+        lower_ins = instruction.lower()
+        matched_keywords: list[str] = []
+        focused_tracks: list[Any] = []
+        seen_track_ids: set[int] = set()
+
+        for a in artists_summary:
+            art_name = str(a.get("artist") or "")
+            if art_name and len(art_name) >= 3 and art_name.lower() in lower_ins:
+                matched_keywords.append(art_name)
+                matching = self.repo.list_tracks(artist=art_name)
+                for t in matching:
+                    if t.id not in seen_track_ids:
+                        seen_track_ids.add(t.id)
+                        focused_tracks.append(t)
+
+        for alb in albums_summary:
+            alb_name = str(alb.get("album") or "")
+            if alb_name and len(alb_name) >= 3 and alb_name.lower() in lower_ins:
+                matched_keywords.append(alb_name)
+                matching = self.repo.list_tracks(album=alb_name)
+                for t in matching:
+                    if t.id not in seen_track_ids:
+                        seen_track_ids.add(t.id)
+                        focused_tracks.append(t)
+
+        # 2. Add tracks with potential noise or candidate duplicates to prioritize curation
+        noisy_tracks: list[Any] = []
+        for t in tracks:
+            if t.id in seen_track_ids:
+                continue
+            t_lower = t.title.lower()
+            if any(term in t_lower for term in ("remaster", "official", "deluxe", "live", "edit", "version", "feat.", "ft.")):
+                noisy_tracks.append(t)
+                seen_track_ids.add(t.id)
+            elif "- single" in t.album.lower():
+                noisy_tracks.append(t)
+                seen_track_ids.add(t.id)
+            if len(noisy_tracks) >= 50:
+                break
+
+        # 3. Fill remaining sample up to 150 tracks
+        remaining_sample: list[Any] = []
+        for t in tracks:
+            if t.id not in seen_track_ids:
+                remaining_sample.append(t)
+                seen_track_ids.add(t.id)
+            if len(focused_tracks) + len(noisy_tracks) + len(remaining_sample) >= 150:
+                break
+
+        combined_sample_entities = focused_tracks + noisy_tracks + remaining_sample
+        sample_payload = [
             {
                 "id": t.id,
                 "title": t.title,
@@ -229,14 +284,30 @@ class CurationService:
                 "year": t.original_year or t.release_year,
                 "playcount": t.lastfm_playcount + t.local_playcount,
             }
-            for t in tracks[:150]
+            for t in combined_sample_entities
         ]
+
+        top_artists = sorted(artists_summary, key=lambda x: x.get("track_count", 0), reverse=True)[:10]
+        top_albums = sorted(albums_summary, key=lambda x: x.get("track_count", 0), reverse=True)[:10]
+        library_overview = {
+            "total_tracks": total_tracks,
+            "total_artists": len(artists_summary),
+            "total_albums": len(albums_summary),
+            "top_artists": [{"artist": a["artist"], "tracks": a["track_count"]} for a in top_artists],
+            "top_albums": [{"album": a["album"], "artist": a["album_artist"], "tracks": a["track_count"]} for a in top_albums],
+            "matched_keywords": matched_keywords,
+        }
 
         llm = self._build_llm()
         last_error = ""
         if llm.is_configured():
             try:
-                res = llm.agent_command(instruction, sample, history=history)
+                res = llm.agent_command(
+                    instruction=instruction,
+                    tracks_summary=sample_payload,
+                    library_overview=library_overview,
+                    history=history,
+                )
                 parsed_actions: list[LLMCurationAction] = []
                 for act in res.get("actions") or []:
                     act_type = str(act.get("action_type") or "rename")
@@ -253,23 +324,34 @@ class CurationService:
                             duplicate_of_track_id=act.get("duplicate_of_track_id"),
                             old_album=str(act.get("old_album") or ""),
                             new_album=str(act.get("new_album") or ""),
-                            reason=str(act.get("reason") or ""),
+                            reason=str(act.get("reason") or "LLM curated action"),
                         )
                     )
                 return {
-                    "reply": res.get("reply", "Understood and processed library request."),
+                    "reply": res.get("reply", "Processed library instruction."),
                     "actions": [a.model_dump() for a in parsed_actions],
                     "used_llm": True,
-                    "engine": f"LLM ({llm.model}) via {llm.base_url}",
+                    "engine": f"LLM ({res.get('model', llm.model)}) via {llm.base_url}",
+                    "thinking": res.get("thinking", ""),
+                    "debug": {
+                        "status": "success",
+                        "duration_ms": res.get("duration_ms", 0),
+                        "model": res.get("model", llm.model),
+                        "endpoint": res.get("endpoint", llm._endpoint_url()),
+                        "total_library_tracks": total_tracks,
+                        "evaluated_tracks_count": len(sample_payload),
+                        "matched_keywords": matched_keywords,
+                        "actions_count": len(parsed_actions),
+                        "tokens": res.get("tokens", {}),
+                    },
                 }
             except Exception as exc:
                 last_error = str(exc)
                 logger.warning("LLM Agent call failed (%s); using fallback heuristic reasoning", exc)
 
-        # Fallback heuristic agent if LLM is not configured or fails
-        lower_ins = instruction.lower()
+        # Fallback heuristic agent if LLM is not configured or encounters a network error
         fallback_actions: list[LLMCurationAction] = []
-        status_note = f" (Note: LLM error - {last_error})" if last_error else " (LLM not configured: using built-in heuristics)"
+        status_note = f"\n\n*(Note: LLM error — {last_error})*" if last_error else "\n\n*(LLM not configured: using built-in heuristic engine)*"
 
         if not tracks:
             reply_msg = (
@@ -284,28 +366,72 @@ class CurationService:
                 LLMCurationAction(**a) for a in audit.get("actions", [])
                 if a.get("action_type") == "duplicate_remove"
             ]
-            reply_msg = f"Audited {len(tracks)} track(s){status_note}.\nDetected {len(fallback_actions)} duplicate track version(s)."
+            reply_msg = (
+                f"### 🔍 Library Deduplication Audit\n"
+                f"- **Total Library Tracks**: {total_tracks}\n"
+                f"- **Distinct Artists**: {len(artists_summary)}\n"
+                f"- **Duplicate Candidates Detected**: {len(fallback_actions)}\n\n"
+                f"Review the candidate duplicates listed below. You can uncheck any version you prefer to keep, then click **Apply Selected Agent Actions** to clean your library."
+                f"{status_note}"
+            )
         elif "clean" in lower_ins or "rename" in lower_ins or "album" in lower_ins or "title" in lower_ins:
             audit = self.analyze_library()
             fallback_actions = [
                 LLMCurationAction(**a) for a in audit.get("actions", [])
                 if a.get("action_type") == "rename"
             ]
-            reply_msg = f"Audited {len(tracks)} track(s){status_note}.\nFound {len(fallback_actions)} track(s) with messy titles or non-standard album names."
-        else:
             reply_msg = (
-                f"I reviewed your library of {len(tracks)} track(s){status_note}.\n"
-                "To run specific curation tasks, click one of the quick prompt chips above or configure your "
-                "OpenAI/Proxy API key in '⚙ LLM / Proxy Setup'."
+                f"### 🧹 Track & Album Normalization Audit\n"
+                f"- **Total Tracks Evaluated**: {total_tracks}\n"
+                f"- **Tracks with Noise / Non-Canonical Album**: {len(fallback_actions)}\n\n"
+                f"Stripped release artifacts (e.g. `[Official Video]`, `(Remastered)`, `- Single`). "
+                f"Select the proposed changes below to update SQLite and rewrite ID3v2.4 tags."
+                f"{status_note}"
+            )
+        elif "audit" in lower_ins or "health" in lower_ins or "stat" in lower_ins or "analyze" in lower_ins:
+            missing_covers = sum(1 for t in tracks if not t.has_cover)
+            top_art_str = ", ".join(f"{a['artist']} ({a['track_count']} tracks)" for a in top_artists[:5]) or "None"
+            reply_msg = (
+                f"### 📊 Library Health & Statistics Overview\n"
+                f"- **Total Tracks**: {total_tracks}\n"
+                f"- **Total Distinct Artists**: {len(artists_summary)}\n"
+                f"- **Total Albums**: {len(albums_summary)}\n"
+                f"- **Missing Cover Art**: {missing_covers} track(s)\n"
+                f"- **Top Artists**: {top_art_str}\n\n"
+                f"Everything is indexed and ready for offline playback or full album streaming."
+                f"{status_note}"
+            )
+        else:
+            top_art_str = ", ".join(a["artist"] for a in top_artists[:4]) or "artists"
+            reply_msg = (
+                f"### 🎵 Library Overview ({total_tracks} tracks)\n"
+                f"I reviewed your collection across {len(artists_summary)} artists (featuring {top_art_str}).\n\n"
+                f"**Available Actions:**\n"
+                f"- Click **Remove Duplicates** or **Clean Titles** above to run automated audits.\n"
+                f"- Ask me specific questions about artists or albums.\n"
+                f"- To enable full LLM autonomous reasoning, enter your API key in **⚙ LLM / Proxy Setup**."
+                f"{status_note}"
             )
 
         return {
             "reply": reply_msg,
             "actions": [a.model_dump() for a in fallback_actions],
             "used_llm": False,
-            "engine": "Built-in Heuristics",
+            "engine": "Built-in Heuristic Engine",
             "error": last_error,
+            "debug": {
+                "status": "fallback" if last_error else "heuristics_only",
+                "error_detail": last_error,
+                "total_library_tracks": total_tracks,
+                "total_artists": len(artists_summary),
+                "total_albums": len(albums_summary),
+                "evaluated_tracks_count": total_tracks,
+                "matched_keywords": matched_keywords,
+                "actions_count": len(fallback_actions),
+                "reason": f"Fallback due to: {last_error}" if last_error else "LLM not configured (OpenAI/Proxy API key is empty)",
+            },
         }
+
 
     def apply_curation_actions(self, actions: list[LLMCurationAction]) -> dict[str, int]:
         renamed = 0

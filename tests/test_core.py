@@ -174,14 +174,24 @@ def test_ai_curation_agent():
     data = res.json()
     assert "reply" in data
     assert "actions" in data
+    assert "debug" in data
     assert data["used_llm"] is False
+    assert data["debug"]["status"] in ("heuristics_only", "fallback")
+    assert "evaluated_tracks_count" in data["debug"]
 
     # Test agent with title cleaning prompt
     res2 = client.post("/api/curation/agent", json={"instruction": "Clean messy track titles"})
     assert res2.status_code == 200
     data2 = res2.json()
     assert "reply" in data2
+    assert "debug" in data2
     assert isinstance(data2["actions"], list)
+
+    # Test LLMClient thinking tags extraction
+    from musiclinker.infrastructure.llm_client import LLMClient
+    thinking, clean = LLMClient._extract_thinking("<think>Let me evaluate track 1 and 2</think>{\"reply\": \"Cleaned!\"}")
+    assert thinking == "Let me evaluate track 1 and 2"
+    assert clean == "{\"reply\": \"Cleaned!\"}"
 
 
 def test_spotify_client_and_youtube_music():

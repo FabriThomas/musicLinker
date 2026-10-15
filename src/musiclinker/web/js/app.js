@@ -1287,6 +1287,64 @@ class MusicLinkerController {
         replyEl.textContent = res.reply || "Processed library instruction.";
       }
 
+      // Populate engine badge
+      const engineBadge = document.getElementById("agent-engine-badge");
+      if (engineBadge) {
+        if (res.used_llm) {
+          engineBadge.className = "px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono";
+          engineBadge.textContent = res.debug?.model ? `⚡ LLM: ${res.debug.model}` : "⚡ LLM Active";
+        } else {
+          engineBadge.className = "px-2 py-0.5 rounded-full text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/30 font-mono";
+          engineBadge.textContent = "⚙ Built-in Heuristics";
+        }
+      }
+
+      // Handle Model Thinking (DeepSeek/Qwen chain-of-thought)
+      const thinkBox = document.getElementById("agent-thinking-box");
+      const thinkText = document.getElementById("agent-thinking-text");
+      if (thinkBox && thinkText) {
+        if (res.thinking) {
+          thinkText.textContent = res.thinking;
+          thinkBox.classList.remove("hidden");
+        } else {
+          thinkBox.classList.add("hidden");
+        }
+      }
+
+      // Handle Clean Debugging & Diagnostics
+      const debugCard = document.getElementById("agent-debug-card");
+      if (debugCard && res.debug) {
+        debugCard.classList.remove("hidden");
+        const d = res.debug;
+        const lat = d.duration_ms ? `${d.duration_ms}ms` : "-";
+        const latencyEl = document.getElementById("agent-debug-latency");
+        const statusEl2 = document.getElementById("debug-status");
+        const durationEl = document.getElementById("debug-duration");
+        const modelEl = document.getElementById("debug-model");
+        const evalEl = document.getElementById("debug-evaluated");
+        const detailEl = document.getElementById("debug-detail");
+
+        if (latencyEl) latencyEl.textContent = lat !== "-" ? `⏱ ${lat}` : "";
+        if (statusEl2) {
+          statusEl2.textContent = d.status || "ok";
+          statusEl2.className = d.status === "success" ? "text-emerald-400 font-bold" : "text-amber-400 font-bold";
+        }
+        if (durationEl) durationEl.textContent = lat;
+        if (modelEl) modelEl.textContent = d.model || (res.used_llm ? "LLM" : "Local Heuristic");
+        if (evalEl) evalEl.textContent = `${d.evaluated_tracks_count ?? "-"} / ${d.total_library_tracks ?? "-"} tracks`;
+        if (detailEl) {
+          const lines = [];
+          if (d.endpoint) lines.push(`Endpoint: ${d.endpoint}`);
+          if (d.matched_keywords && d.matched_keywords.length) lines.push(`Focused Keywords: ${d.matched_keywords.join(", ")}`);
+          if (d.error_detail) lines.push(`LLM Error: ${d.error_detail}`);
+          if (d.reason) lines.push(`Note: ${d.reason}`);
+          if (d.tokens && (d.tokens.prompt_tokens || d.tokens.total_tokens)) {
+            lines.push(`Tokens: prompt=${d.tokens.prompt_tokens || 0}, completion=${d.tokens.completion_tokens || 0}`);
+          }
+          detailEl.textContent = lines.join(" • ") || "Audit completed without errors.";
+        }
+      }
+
       this.proposedCurationActions = res.actions || [];
       const engineLabel = res.engine || (res.used_llm ? "External LLM" : "Built-in Heuristics");
       if (statusEl) {

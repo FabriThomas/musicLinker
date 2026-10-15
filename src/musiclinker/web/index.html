@@ -321,11 +321,41 @@
         </div>
 
         <!-- Agent Reasoning & Conversation Bubble -->
-        <div id="agent-conversation-box" class="hidden bg-zinc-950/80 border border-emerald-500/30 rounded-xl p-3 text-xs space-y-1.5 font-sans">
-          <div class="flex items-center gap-1.5 text-emerald-400 font-semibold text-[11px]">
-            <span>🤖 AI Curator Reasoning</span>
+        <div id="agent-conversation-box" class="hidden bg-zinc-950/80 border border-emerald-500/30 rounded-xl p-3 text-xs space-y-2 font-sans">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-1.5 text-emerald-400 font-semibold text-[11px]">
+              <span>🤖 AI Curator Reasoning</span>
+            </div>
+            <span id="agent-engine-badge" class="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
+              LLM
+            </span>
           </div>
           <div id="agent-reply-text" class="text-zinc-200 text-xs leading-relaxed whitespace-pre-wrap"></div>
+
+          <!-- Deep Model Thinking Box (for DeepSeek/Qwen/reasoning models) -->
+          <details id="agent-thinking-box" class="hidden border-t border-zinc-800 pt-2 text-[11px]">
+            <summary class="cursor-pointer text-zinc-400 hover:text-zinc-200 font-mono select-none">
+              💭 View Internal Chain of Thought
+            </summary>
+            <pre id="agent-thinking-text" class="mt-2 p-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-[10px] whitespace-pre-wrap max-h-40 overflow-y-auto ml-scroll"></pre>
+          </details>
+
+          <!-- Clean Debugging & Diagnostics Section -->
+          <details id="agent-debug-card" class="hidden border-t border-zinc-800 pt-2 text-[11px]">
+            <summary class="cursor-pointer text-zinc-400 hover:text-emerald-400 font-mono select-none flex items-center justify-between">
+              <span>🔍 Execution & Debug Diagnostics</span>
+              <span id="agent-debug-latency" class="text-[10px] text-zinc-500"></span>
+            </summary>
+            <div class="mt-2 p-2.5 rounded-lg bg-zinc-900/90 border border-zinc-800 space-y-1.5 font-mono text-[10px]">
+              <div class="grid grid-cols-2 gap-1 text-zinc-300">
+                <div><span class="text-zinc-500">Status:</span> <span id="debug-status" class="text-emerald-400">ok</span></div>
+                <div><span class="text-zinc-500">Latency:</span> <span id="debug-duration">-</span></div>
+                <div><span class="text-zinc-500">Model:</span> <span id="debug-model">-</span></div>
+                <div><span class="text-zinc-500">Evaluated:</span> <span id="debug-evaluated">-</span></div>
+              </div>
+              <div id="debug-detail" class="text-zinc-400 pt-1 border-t border-zinc-800 break-words"></div>
+            </div>
+          </details>
         </div>
 
         <div class="flex items-center justify-between text-xs text-zinc-400 font-mono px-1">
