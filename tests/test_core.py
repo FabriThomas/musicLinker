@@ -616,3 +616,47 @@ def test_playlist_crud_and_tracks():
     assert res_get.status_code == 404
 
 
+def test_resolve_best_audio_match_accuracy():
+    from unittest.mock import patch
+    from musiclinker.infrastructure.youtube_client import youtube_client
+
+    mock_candidates = [
+        # Candidate 1: Wrong song by the same artist (the artist's big hit), duration 180s
+        {
+            "id": "wrong_hit",
+            "title": "Pink Floyd - Comfortably Numb (Official Video)",
+            "uploader": "Pink Floyd - Topic",
+            "duration": 380,
+            "url": "https://www.youtube.com/watch?v=wrong_hit",
+        },
+        # Candidate 2: Completely random song from another artist
+        {
+            "id": "random_song",
+            "title": "Random Artist - Money Trees",
+            "uploader": "Random Artist - Topic",
+            "duration": 210,
+            "url": "https://www.youtube.com/watch?v=random_song",
+        },
+        # Candidate 3: The exact correct track with expected duration ~382s
+        {
+            "id": "correct_match",
+            "title": "Pink Floyd - Money (Official Audio)",
+            "uploader": "Pink Floyd - Topic",
+            "duration": 382,
+            "url": "https://www.youtube.com/watch?v=correct_match",
+        },
+    ]
+
+    with patch.object(youtube_client, "search_videos", return_value=mock_candidates):
+        with patch.object(youtube_client, "_get_base_ydl_opts", return_value={}):
+            match = youtube_client.resolve_best_audio_match(
+                artist="Pink Floyd",
+                title="Money",
+                preferred_method="spotify_match",
+                expected_duration=382,
+            )
+            assert match["id"] == "correct_match"
+            assert match["title"] == "Pink Floyd - Money (Official Audio)"
+
+
+

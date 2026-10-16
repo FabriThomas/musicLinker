@@ -288,18 +288,29 @@ class YouTubeClient:
         artist: str,
         title: str,
         preferred_method: str = "auto",
+        expected_duration: int = 0,
     ) -> dict[str, Any]:
         """
         Resolve the best official studio audio release for a track based on preferred_method:
-          - 'auto': Queries YouTube Music official catalog first to avoid video skits;
-            smoothly falls back to YouTube Topic / Official Audio ranking.
+          - 'auto': Queries YouTube Music official catalog and YouTube Topic audio with strict title & duration scoring.
           - 'youtube_music': Strictly prioritizes YouTube Music studio catalog & Topic audio.
           - 'youtube_video': Searches standard YouTube prioritizing Official Music Videos / Official Audio.
-          - 'spotify_match': Uses studio catalog matching (prioritizes official release streams).
+          - 'spotify_match': Uses studio catalog matching (prioritizes official release streams with duration matching).
         """
         import urllib.parse
+        from musiclinker.infrastructure.hasher import normalize_text, clean_track_title
 
-        # 1. Try YouTube Music search first (unless user explicitly requests standard YouTube video)
+        candidates: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        def add_candidate(cand: dict[str, Any], default_source: str = "youtube") -> None:
+            cid = cand.get("id") or cand.get("url")
+            if cid and cid not in seen_ids:
+                seen_ids.add(cid)
+                cand.setdefault("source", default_source)
+                candidates.append(cand)
+
+        # 1. Gather YouTube Music candidates if applicable
         if preferred_method != "youtube_video":
             clean_q = f"{artist} {title}".strip()
             encoded_q = urllib.parse.quote_plus(clean_q)
@@ -332,18 +343,19 @@ class YouTubeClient:
                             continue
                     final_url = f"https://www.youtube.com/watch?v={vid_id}"
                     dur = int(e.get("duration") or 0)
-                    if dur == 0 or (30 <= dur <= 1200):
-                        thumbnails = e.get("thumbnails") or []
-                        thumb_url = thumbnails[-1].get("url", "") if thumbnails else e.get("thumbnail", "")
-                        return {
+                    thumbnails = e.get("thumbnails") or []
+                    thumb_url = thumbnails[-1].get("url", "") if thumbnails else e.get("thumbnail", "")
+                    add_candidate(
+                        {
                             "id": vid_id,
                             "title": e.get("title") or f"{artist} - {title}",
                             "uploader": e.get("uploader") or e.get("channel") or f"{artist} - Topic",
                             "duration": dur,
                             "url": final_url,
                             "thumbnail": thumb_url,
-                            "source": "youtube_music",
-                        }
+                        },
+                        default_source="youtube_music",
+                    )
             except Exception as exc:
                 logger.debug(
                     "YouTube Music direct search failed for '%s - %s' (%s); falling back to ytsearch",
@@ -352,53 +364,131 @@ class YouTubeClient:
                     exc,
                 )
 
-        # 2. Search YouTube with mode-appropriate query & scoring
+        # 2. Gather YouTube search candidates
+        search_queries: list[str] = []
+        c_title = clean_track_title(title)
         if preferred_method == "youtube_video":
-            query = f"{artist} - {title} official video"
+            search_queries.append(f"{artist} - {c_title} official video")
+            search_queries.append(f"{artist} - {c_title}")
         else:
-            query = f"{artist} - {title} Topic"
-        matches = self.search_videos(query, max_results=5)
-        if not matches:
-            matches = self.search_videos(f"{artist} - {title} official audio", max_results=5)
+            search_queries.append(f"{artist} - {c_title} Topic")
+            search_queries.append(f"{artist} - {c_title} official audio")
+            search_queries.append(f"{artist} - {c_title}")
 
-        if not matches:
+        for sq in search_queries:
+            try:
+                for match in self.search_videos(sq, max_results=5):
+                    add_candidate(match, default_source="youtube")
+            except Exception as exc:
+                logger.debug("YouTube search query '%s' failed: %s", sq, exc)
+
+        if not candidates:
             raise YouTubeResolutionError(f"No YouTube audio match found for '{artist} - {title}'")
 
-        def score_candidate(cand: dict[str, Any]) -> int:
-            score = 0
+        # 3. High-precision candidate scoring
+        target_norm = normalize_text(c_title)
+        target_words = [w for w in target_norm.split() if len(w) > 1]
+        artist_norm = normalize_text(artist)
+        artist_words = [w for w in artist_norm.split() if len(w) > 1]
+        t_lower = title.lower()
+
+        def score_candidate(cand: dict[str, Any]) -> float:
             uploader = str(cand.get("uploader") or "").lower()
-            cand_title = str(cand.get("title") or "").lower()
-            dur = cand.get("duration", 0)
+            uploader_norm = normalize_text(uploader)
+            cand_title = str(cand.get("title") or "")
+            cand_title_lower = cand_title.lower()
+            cand_norm = normalize_text(cand_title)
+            dur = int(cand.get("duration") or 0)
 
-            if preferred_method == "youtube_video":
-                if "official music video" in cand_title or "official video" in cand_title:
-                    score += 45
-                if "vevo" in uploader or "official" in uploader:
-                    score += 30
-                if "topic" in uploader:
-                    score += 15
+            # A. Title recall verification
+            cand_words = set(cand_norm.split())
+            if target_words:
+                overlap = sum(1 for w in target_words if w in cand_words)
+                recall = overlap / len(target_words)
             else:
-                if "topic" in uploader:
-                    score += 65 if preferred_method == "youtube_music" else 50
-                if "vevo" in uploader or "official" in uploader:
-                    score += 20
-                if "official audio" in cand_title:
-                    score += 35
-                elif "audio" in cand_title:
-                    score += 15
+                recall = 1.0
 
-            if "live" in cand_title and "live" not in title.lower():
-                score -= 30
-            if "remix" in cand_title and "remix" not in title.lower():
-                score -= 20
-            if "cover" in cand_title and "cover" not in title.lower():
-                score -= 40
-            if 40 <= dur <= 900:
-                score += 10
+            # Reject if core title words are completely missing
+            if target_words and recall < 0.4 and len(target_words) >= 2:
+                return -999.0
+
+            score = recall * 120.0
+
+            # Bonus for exact or clean substring match
+            if target_norm and target_norm in cand_norm:
+                score += 40.0
+
+            # B. Artist verification
+            if artist_words:
+                art_in_uploader = any(w in uploader_norm for w in artist_words)
+                art_in_title = any(w in cand_norm for w in artist_words)
+                if art_in_uploader:
+                    score += 55.0
+                elif art_in_title:
+                    score += 35.0
+                else:
+                    # Penalize heavily if artist is absent everywhere
+                    score -= 80.0
+
+            # C. Topic channel & official audio bonus
+            if "topic" in uploader:
+                score += 60.0 if preferred_method != "youtube_video" else 20.0
+            if "official audio" in cand_title_lower:
+                score += 35.0
+            elif "audio" in cand_title_lower:
+                score += 15.0
+            if preferred_method == "youtube_video":
+                if "official music video" in cand_title_lower or "official video" in cand_title_lower:
+                    score += 50.0
+                if "vevo" in uploader:
+                    score += 30.0
+
+            # D. Duration tolerance scoring
+            if expected_duration > 0 and dur > 0:
+                delta = abs(dur - expected_duration)
+                if delta <= 4:
+                    score += 60.0
+                elif delta <= 10:
+                    score += 40.0
+                elif delta <= 20:
+                    score += 20.0
+                elif delta <= 35:
+                    score += 5.0
+                elif delta > 45:
+                    score -= 60.0
+                if delta > 90:
+                    score -= 200.0  # Massive duration mismatch (completely wrong song)
+            elif 40 <= dur <= 900:
+                score += 10.0
+
+            # E. Penalties for wrong versions, live, remixes, covers, karaoke
+            if "live" in cand_title_lower and "live" not in t_lower:
+                score -= 50.0
+            if "remix" in cand_title_lower and "remix" not in t_lower:
+                score -= 50.0
+            if "cover" in cand_title_lower and "cover" not in t_lower:
+                score -= 90.0
+            if any(k in cand_title_lower for k in ("karaoke", "instrumental", "acoustic", "slowed", "reverb", "sped up")) and not any(k in t_lower for k in ("karaoke", "instrumental", "acoustic", "slowed", "reverb", "sped up")):
+                score -= 80.0
+            if any(k in cand_title_lower for k in ("full album", "1 hour", "10 hours", "compilation", "greatest hits")):
+                score -= 180.0
+
             return score
 
-        best = max(matches, key=score_candidate)
-        return best
+        scored_candidates = [(score_candidate(c), c) for c in candidates]
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+
+        best_score, best_candidate = scored_candidates[0]
+        logger.debug(
+            "resolve_best_audio_match for '%s - %s': selected '%s' (%s, score=%.1f)",
+            artist,
+            title,
+            best_candidate.get("title"),
+            best_candidate.get("url"),
+            best_score,
+        )
+
+        return best_candidate
 
     @staticmethod
     def _parse_timestamp_slice(url_or_query: str) -> tuple[str, float | None, float | None]:

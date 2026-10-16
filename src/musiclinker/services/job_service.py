@@ -325,6 +325,7 @@ class JobService:
                         album_cover_override=album_cover_bytes,
                         album_cover_mime=album_cover_mime,
                         album_year_override=album_release_year or None,
+                        expected_duration=item.duration,
                         query_or_url=item.youtube_url,
                         playcount=0,
                         bitrate_kbps=req.bitrate_kbps,
@@ -491,6 +492,7 @@ class JobService:
             cover_override_mime = "image/jpeg"
             target_query_or_url = req.query_or_url
 
+            expected_dur = 0
             if spotify_client.is_spotify_url(req.query_or_url):
                 try:
                     job.append_log(f"Extracting Spotify metadata from: {req.query_or_url}")
@@ -514,6 +516,7 @@ class JobService:
                         first_tr = sp_tracks[0]
                         title_override = title_override or first_tr.get("title", "")
                         artist_override = artist_override or first_tr.get("artist", "")
+                        expected_dur = int(first_tr.get("duration") or 0)
                         if not track_num_override and first_tr.get("track_number"):
                             track_num_override = int(first_tr["track_number"])
                     album_override = album_override or sp_meta.get("album", "")
@@ -533,6 +536,7 @@ class JobService:
                 track_number_hint=track_num_override,
                 album_cover_override=cover_override_bytes,
                 album_cover_mime=cover_override_mime,
+                expected_duration=expected_dur,
                 query_or_url=target_query_or_url,
                 playcount=0,
                 bitrate_kbps=req.bitrate_kbps,
@@ -566,6 +570,7 @@ class JobService:
         album_cover_override: bytes | None = None,
         album_cover_mime: str = "image/jpeg",
         album_year_override: str | None = None,
+        expected_duration: int = 0,
         query_or_url: str,
         playcount: int,
         bitrate_kbps: int,
@@ -578,7 +583,12 @@ class JobService:
         job.lyric_sync_status = "Checking YouTube stream & subtitle cues..."
         if not query_or_url:
             resolved_method = download_method or str(self.repo.get_settings().get("preferred_download_method", "auto"))
-            yt_match = youtube_client.resolve_best_audio_match(artist_raw, title_raw, preferred_method=resolved_method)
+            yt_match = youtube_client.resolve_best_audio_match(
+                artist_raw,
+                title_raw,
+                preferred_method=resolved_method,
+                expected_duration=expected_duration,
+            )
             target_url = yt_match["url"]
             thumb_url = yt_match.get("thumbnail", "")
         else:

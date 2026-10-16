@@ -69,21 +69,32 @@ input[type="range"].ml-slider:hover::-moz-range-thumb {
   user-select: none;
   position: relative;
   overflow: hidden;
+  box-shadow:
+    0 2px 5px -1px rgba(0, 0, 0, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
   transition:
-    transform 0.16s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.16s ease,
-    background-color 0.18s ease,
-    border-color 0.18s ease,
-    color 0.18s ease,
-    box-shadow 0.18s ease;
+    transform 0.14s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.14s ease,
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .ml-btn:hover:not(:disabled) {
-  transform: translateY(-1.5px);
+  transform: translateY(-2px);
+  box-shadow:
+    0 6px 14px -2px rgba(0, 0, 0, 0.55),
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .ml-btn:active:not(:disabled) {
-  transform: translateY(0.5px) scale(0.96);
+  transform: translateY(1.5px) scale(0.975);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.6),
+    inset 0 2px 4px rgba(0, 0, 0, 0.6);
 }
 
 .ml-btn:disabled {
@@ -94,17 +105,45 @@ input[type="range"].ml-slider:hover::-moz-range-thumb {
 .ml-btn-primary {
   background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   color: #022c22;
-  border: 1px solid rgba(52, 211, 153, 0.45);
+  border: 1px solid rgba(52, 211, 153, 0.5);
   box-shadow:
-    0 4px 14px -2px rgba(16, 185, 129, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    0 4px 14px -2px rgba(16, 185, 129, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .ml-btn-primary:hover:not(:disabled) {
   background: linear-gradient(135deg, #34d399 0%, #10b981 100%);
   box-shadow:
-    0 8px 20px -3px rgba(16, 185, 129, 0.45),
+    0 8px 22px -3px rgba(16, 185, 129, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+}
+
+.ml-btn-hero-play {
+  width: 48px;
+  height: 48px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #022c22;
+  border: 1px solid rgba(110, 231, 183, 0.5);
+  box-shadow:
+    0 4px 18px 0 rgba(16, 185, 129, 0.45),
     inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  font-size: 1.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ml-btn-hero-play:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.06);
+  box-shadow:
+    0 8px 25px 2px rgba(16, 185, 129, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.ml-btn-hero-play:active:not(:disabled) {
+  transform: translateY(2px) scale(0.96);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6);
 }
 
 .ml-btn-indigo {
@@ -124,21 +163,34 @@ input[type="range"].ml-slider:hover::-moz-range-thumb {
 }
 
 .ml-btn-secondary {
-  background: rgba(39, 39, 42, 0.85);
+  background: linear-gradient(180deg, rgba(45, 45, 50, 0.9) 0%, rgba(30, 30, 35, 0.95) 100%);
   color: #e4e4e7;
   border: 1px solid rgba(82, 82, 91, 0.65);
   box-shadow:
-    0 2px 8px rgba(0, 0, 0, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .ml-btn-secondary:hover:not(:disabled) {
-  background: rgba(63, 63, 70, 0.9);
+  background: linear-gradient(180deg, rgba(65, 65, 72, 0.95) 0%, rgba(45, 45, 52, 0.98) 100%);
   border-color: rgba(16, 185, 129, 0.55);
   color: #ffffff;
   box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.35),
-    0 0 0 1px rgba(16, 185, 129, 0.2);
+    0 4px 14px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(16, 185, 129, 0.25);
+}
+
+/* Vertical 5-Band Equalizer Sliders */
+input[type="range"].ml-eq-slider {
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 24px;
+  height: 125px;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
 }
 
 .ml-btn-danger {

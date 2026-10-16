@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>MusicLinker Studio & APK v3.0.7 — Track, Playlist & Album Downloader + AI Curator</title>
+  <title>MusicLinker Studio & APK v3.0.8 — Track, Playlist & Album Downloader + AI Curator + 5-Band DSP</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/styles.css" />
@@ -18,7 +18,7 @@
       <div>
         <div class="flex items-center gap-2">
           <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker</h1>
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.0.7 APK + Studio</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.0.8 APK + Studio</span>
         </div>
         <p class="text-[11px] text-zinc-400 hidden sm:block">Track, Playlist & Album Downloader • 3-Layer Selector • Synced Lyrics • AI Curator</p>
       </div>
@@ -659,11 +659,14 @@
 
     <div class="flex flex-col items-center gap-2 flex-1 max-w-xl w-full">
       <div class="flex items-center gap-2.5">
-        <button id="btn-prev" class="ml-btn ml-btn-secondary px-3.5 py-1.5 text-xs">⏮ Prev</button>
-        <button id="btn-play" class="ml-btn ml-btn-primary px-6 py-1.5 text-sm">▶ Play</button>
-        <button id="btn-next" class="ml-btn ml-btn-secondary px-3.5 py-1.5 text-xs">Next ⏭</button>
-        <button id="btn-shuffle" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-zinc-400" title="Toggle Randomizer">
+        <button id="btn-prev" class="ml-btn ml-btn-secondary w-9 h-9 rounded-full text-xs font-bold" title="Previous Track">⏮</button>
+        <button id="btn-play" class="ml-btn ml-btn-hero-play" title="Play / Pause">▶</button>
+        <button id="btn-next" class="ml-btn ml-btn-secondary w-9 h-9 rounded-full text-xs font-bold" title="Next Track">⏭</button>
+        <button id="btn-shuffle" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-zinc-400 rounded-xl" title="Toggle Randomizer">
           🔀 Shuffle
+        </button>
+        <button id="btn-open-eq" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-emerald-400 font-bold rounded-xl flex items-center gap-1.5" title="Open Studio Audio Equalizer (DSP)">
+          <span>🎚</span> <span>EQ</span>
         </button>
       </div>
       <div class="flex items-center gap-3 w-full">
@@ -872,6 +875,9 @@
         <button id="btn-big-next" class="ml-btn ml-btn-secondary p-3.5 rounded-full text-xl" title="Next Track">
           ⏭
         </button>
+        <button id="btn-big-eq" class="ml-btn ml-btn-secondary p-3 rounded-full text-base text-emerald-400 hover:text-white" title="Open Audio Equalizer (DSP)">
+          🎚
+        </button>
       </div>
     </div>
   </div>
@@ -953,6 +959,105 @@
         </button>
         <button id="btn-save-playlist-submit" class="ml-btn ml-btn-primary flex-1 py-2 text-xs font-bold">
           Save Playlist
+        </button>
+      </div>
+    </div>
+  <!-- Studio Audio Equalizer Modal (5-Band DSP) -->
+  <div id="eq-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-md">
+    <div class="bg-zinc-900/95 border border-zinc-700/80 rounded-3xl p-6 max-w-lg w-full space-y-5 shadow-2xl">
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-800">
+        <div class="flex items-center gap-2.5">
+          <span class="text-xl">🎚</span>
+          <div>
+            <h3 class="font-bold text-base text-white">Studio Audio Equalizer</h3>
+            <p class="text-[11px] text-zinc-400">Web Audio API 5-Band BiquadFilter DSP</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-2 text-xs font-semibold cursor-pointer select-none">
+            <input type="checkbox" id="eq-enable-toggle" checked class="accent-emerald-500 w-4 h-4 rounded cursor-pointer" />
+            <span id="eq-enable-label" class="text-emerald-400">DSP ON</span>
+          </label>
+          <button id="btn-close-eq-modal" class="text-zinc-400 hover:text-white p-1 rounded-lg">✕</button>
+        </div>
+      </div>
+
+      <!-- Presets Row -->
+      <div>
+        <span class="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Presets</span>
+        <div id="eq-presets-list" class="flex flex-wrap gap-1.5">
+          <!-- Dynamically populated via app.js -->
+        </div>
+      </div>
+
+      <!-- 5 Equalizer Sliders -->
+      <div class="bg-zinc-950/70 border border-zinc-800/80 rounded-2xl p-4">
+        <div class="grid grid-cols-5 gap-2 sm:gap-4 text-center">
+          <!-- Band 0: 60 Hz -->
+          <div class="flex flex-col items-center gap-2">
+            <span id="eq-val-0" class="text-[11px] font-mono text-emerald-400 font-bold">0 dB</span>
+            <div class="h-36 flex items-center justify-center">
+              <input id="eq-slider-0" data-band="0" type="range" min="-12" max="12" step="0.5" value="0" class="ml-eq-slider" orient="vertical" />
+            </div>
+            <div>
+              <div class="text-xs font-bold text-zinc-200">60 Hz</div>
+              <div class="text-[10px] text-zinc-400">Sub</div>
+            </div>
+          </div>
+          <!-- Band 1: 230 Hz -->
+          <div class="flex flex-col items-center gap-2">
+            <span id="eq-val-1" class="text-[11px] font-mono text-emerald-400 font-bold">0 dB</span>
+            <div class="h-36 flex items-center justify-center">
+              <input id="eq-slider-1" data-band="1" type="range" min="-12" max="12" step="0.5" value="0" class="ml-eq-slider" orient="vertical" />
+            </div>
+            <div>
+              <div class="text-xs font-bold text-zinc-200">230 Hz</div>
+              <div class="text-[10px] text-zinc-400">Bass</div>
+            </div>
+          </div>
+          <!-- Band 2: 910 Hz -->
+          <div class="flex flex-col items-center gap-2">
+            <span id="eq-val-2" class="text-[11px] font-mono text-emerald-400 font-bold">0 dB</span>
+            <div class="h-36 flex items-center justify-center">
+              <input id="eq-slider-2" data-band="2" type="range" min="-12" max="12" step="0.5" value="0" class="ml-eq-slider" orient="vertical" />
+            </div>
+            <div>
+              <div class="text-xs font-bold text-zinc-200">910 Hz</div>
+              <div class="text-[10px] text-zinc-400">Mids</div>
+            </div>
+          </div>
+          <!-- Band 3: 3.6 kHz -->
+          <div class="flex flex-col items-center gap-2">
+            <span id="eq-val-3" class="text-[11px] font-mono text-emerald-400 font-bold">0 dB</span>
+            <div class="h-36 flex items-center justify-center">
+              <input id="eq-slider-3" data-band="3" type="range" min="-12" max="12" step="0.5" value="0" class="ml-eq-slider" orient="vertical" />
+            </div>
+            <div>
+              <div class="text-xs font-bold text-zinc-200">3.6 kHz</div>
+              <div class="text-[10px] text-zinc-400">Presence</div>
+            </div>
+          </div>
+          <!-- Band 4: 14 kHz -->
+          <div class="flex flex-col items-center gap-2">
+            <span id="eq-val-4" class="text-[11px] font-mono text-emerald-400 font-bold">0 dB</span>
+            <div class="h-36 flex items-center justify-center">
+              <input id="eq-slider-4" data-band="4" type="range" min="-12" max="12" step="0.5" value="0" class="ml-eq-slider" orient="vertical" />
+            </div>
+            <div>
+              <div class="text-xs font-bold text-zinc-200">14 kHz</div>
+              <div class="text-[10px] text-zinc-400">Air</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer Actions -->
+      <div class="flex items-center justify-between pt-2">
+        <button id="btn-eq-reset" class="ml-btn ml-btn-secondary px-3.5 py-1.5 text-xs rounded-xl">
+          ↺ Reset to Flat
+        </button>
+        <button id="btn-eq-done" class="ml-btn ml-btn-primary px-5 py-1.5 text-xs font-bold rounded-xl">
+          Done
         </button>
       </div>
     </div>

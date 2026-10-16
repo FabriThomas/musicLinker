@@ -1,5 +1,5 @@
 /**
- * Main UI controller for MusicLinker Studio & Android APK v3.0.6:
+ * Main UI controller for MusicLinker Studio & Android APK v3.0.8:
  *  - Single Track / Direct Link Downloader (Search query, YouTube/YTM URL, or Spotify Track URL)
  *  - Full Album & Playlist Downloader (Spotify Album/Playlist, YouTube Playlist/Chapters, MusicBrainz, Last.fm)
  *  - Play by Album (1..N track_number order), Randomizer (Shuffle), and Sort by Track # / Alphabetical / Plays
@@ -11,7 +11,7 @@
  */
 import { api } from "./api.js";
 import { offlineStore } from "./offline-store.js";
-import { AudioEngine } from "./audio-engine.js";
+import { AudioEngine, EQ_PRESETS, EQ_BANDS } from "./audio-engine.js";
 
 class MusicLinkerController {
   constructor() {
@@ -26,6 +26,8 @@ class MusicLinkerController {
     this.currentIndex = -1;
     this.searchDebounceTimer = null;
     this.activeJobId = null;
+    this.activeEventSource = null;
+    this.isJobRunning = false;
 
     // 3-Layer Selection Mode & Playlists State
     this.viewMode = "standard"; // 'standard' | 'layered' | 'playlists'
@@ -75,6 +77,7 @@ class MusicLinkerController {
     }
     this.bindDOMEvents();
     this.initAllSliderFills();
+    this.initEqualizerUI();
     await this.refreshOfflineState();
     await this.loadSettingsIntoUI();
     await this.loadAlbums();
@@ -889,9 +892,13 @@ class MusicLinkerController {
           download_method: method,
         }),
       });
-      this.activeJobId = job.job_id;
-      this.showToast(`Queued download: ${previewItem?.title || queryOrUrl}`);
-      this.subscribeToJobProgress(job.job_id);
+      if (this.isJobRunning) {
+        this.showToast(`Queued in FIFO buffer: ${previewItem?.title || queryOrUrl}`);
+      } else {
+        this.activeJobId = job.job_id;
+        this.showToast(`Queued download: ${previewItem?.title || queryOrUrl}`);
+        this.subscribeToJobProgress(job.job_id);
+      }
     } catch (err) {
       this.showToast(`Download failed to start: ${err.message}`, "error");
     }
@@ -1039,9 +1046,13 @@ class MusicLinkerController {
           download_method: method,
         }),
       });
-      this.activeJobId = job.job_id;
-      this.showToast(`Started downloading "${album}"`);
-      this.subscribeToJobProgress(job.job_id);
+      if (this.isJobRunning) {
+        this.showToast(`Queued in FIFO buffer: "${album}"`);
+      } else {
+        this.activeJobId = job.job_id;
+        this.showToast(`Started downloading "${album}"`);
+        this.subscribeToJobProgress(job.job_id);
+      }
     } catch (err) {
       this.showToast(`Album download failed to start: ${err.message}`, "error");
     }
@@ -1085,7 +1096,16 @@ class MusicLinkerController {
   }
 
   subscribeToJobProgress(jobId) {
+    // 1. Close previous active EventSource if any to eliminate dual-stream visual glitches
+    if (this.activeEventSource) {
+      try {
+        this.activeEventSource.close();
+      } catch (_e) {}
+      this.activeEventSource = null;
+    }
+
     this.activeJobId = jobId;
+    this.isJobRunning = true;
     this.jobTracksSeenCount = 0;
     const logBox = document.getElementById("job-logs");
     const pauseBtn = document.getElementById("btn-pause-job");
@@ -1099,8 +1119,12 @@ class MusicLinkerController {
     }
     if (retryBtn) retryBtn.classList.add("hidden");
 
-    api.subscribeJobEvents(jobId, (state) => {
+    this.activeEventSource = api.subscribeJobEvents(jobId, async (state) => {
+      // Discard callbacks from previous jobs
+      if (this.activeJobId !== jobId) return;
+
       this.isJobPaused = Boolean(state.is_paused);
+      this.isJobRunning = (state.status === "running" || state.status === "queued");
       if (pauseBtn) {
         pauseBtn.textContent = this.isJobPaused ? "▶ Resume" : "⏸ Pause";
       }
@@ -1118,7 +1142,9 @@ class MusicLinkerController {
       if (bar) bar.style.width = pct;
       if (bannerBar) bannerBar.style.width = pct;
       if (bannerStep) {
-        const statusPrefix = this.isJobPaused ? "[PAUSED] " : "";
+        const statusPrefix = this.isJobPaused
+          ? "[PAUSED] "
+          : (state.status === "queued" ? "[QUEUED in FIFO queue] " : "");
         bannerStep.textContent = `${statusPrefix}${state.current_step} (${state.progress_pct}%)`;
       }
       if (bannerLyric) {
@@ -1135,18 +1161,108 @@ class MusicLinkerController {
       }
 
       if (state.status === "completed") {
+        this.isJobRunning = false;
         this.showToast(`Download job complete (${state.downloaded_count} track(s) added)!`);
         if (pauseBtn) pauseBtn.classList.add("hidden");
         if (retryBtn) retryBtn.classList.add("hidden");
         this.loadAlbums();
         this.loadLibrary(document.getElementById("search-input")?.value || "", true);
+        await this._checkAndTransitionNextFifoJob();
       } else if (state.status === "failed") {
+        this.isJobRunning = false;
         this.showToast(`Job interrupted or failed: ${state.current_step}`, "error");
         if (retryBtn) retryBtn.classList.remove("hidden");
       } else if (state.status === "cancelled") {
+        this.isJobRunning = false;
         this.showToast("Download job cancelled.", "warning");
         if (pauseBtn) pauseBtn.classList.add("hidden");
+        await this._checkAndTransitionNextFifoJob();
       }
+    });
+  }
+
+  async _checkAndTransitionNextFifoJob() {
+    try {
+      const data = await api.request("/api/jobs");
+      const jobs = data.jobs || [];
+      const nextActive = jobs.find((j) => (j.status === "running" || j.status === "queued") && j.job_id !== this.activeJobId);
+      if (nextActive) {
+        this.showToast(`FIFO Buffer: Moving to next job...`);
+        this.subscribeToJobProgress(nextActive.job_id);
+      }
+    } catch (_e) {}
+  }
+
+  // ---- Web Audio API 5-Band Equalizer (DSP) ----
+
+  initEqualizerUI() {
+    this.renderEqPresetsUI();
+    this.refreshEqualizerModalValues();
+  }
+
+  openEqualizerModal() {
+    const modal = document.getElementById("eq-modal");
+    if (!modal) return;
+    this.engine.initAudioContext();
+    this.refreshEqualizerModalValues();
+    modal.classList.remove("hidden");
+  }
+
+  closeEqualizerModal() {
+    const modal = document.getElementById("eq-modal");
+    if (modal) modal.classList.add("hidden");
+  }
+
+  refreshEqualizerModalValues() {
+    const state = this.engine.getEqState();
+    const toggle = document.getElementById("eq-enable-toggle");
+    const label = document.getElementById("eq-enable-label");
+    if (toggle) toggle.checked = state.enabled;
+    if (label) {
+      label.textContent = state.enabled ? "DSP ON" : "DSP OFF";
+      label.className = state.enabled ? "text-emerald-400 font-bold" : "text-zinc-500 font-bold";
+    }
+
+    state.gains.forEach((gain, idx) => {
+      const slider = document.getElementById(`eq-slider-${idx}`);
+      const valBadge = document.getElementById(`eq-val-${idx}`);
+      if (slider) slider.value = gain;
+      if (valBadge) valBadge.textContent = `${gain > 0 ? "+" : ""}${gain} dB`;
+    });
+    this.renderEqPresetsUI();
+  }
+
+  renderEqPresetsUI() {
+    const container = document.getElementById("eq-presets-list");
+    if (!container) return;
+    const state = this.engine.getEqState();
+    const activePreset = state.preset;
+
+    container.innerHTML = Object.keys(EQ_PRESETS)
+      .map((name) => {
+        const isActive = activePreset === name;
+        return `
+          <button
+            type="button"
+            data-eq-preset="${name}"
+            class="ml-btn px-2.5 py-1 text-xs rounded-lg border ${
+              isActive
+                ? "bg-emerald-500 text-zinc-950 border-emerald-400 font-bold shadow-sm"
+                : "bg-zinc-800/80 text-zinc-300 border-zinc-700 hover:border-zinc-500"
+            }">
+            ${name}
+          </button>
+        `;
+      })
+      .join("");
+
+    container.querySelectorAll("[data-eq-preset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const pName = btn.dataset.eqPreset;
+        this.engine.setPreset(pName);
+        this.refreshEqualizerModalValues();
+        this.showToast(`EQ Preset: ${pName}`);
+      });
     });
   }
 
@@ -2219,10 +2335,10 @@ class MusicLinkerController {
     const btn = document.getElementById("btn-play");
     const carBtn = document.getElementById("car-btn-play");
     const bigBtn = document.getElementById("btn-big-play");
-    const label = playing ? "⏸ Pause" : "▶ Play";
+    const label = playing ? "⏸" : "▶";
     if (btn) btn.textContent = label;
-    if (carBtn) carBtn.textContent = label;
-    if (bigBtn) bigBtn.textContent = playing ? "⏸" : "▶";
+    if (carBtn) carBtn.textContent = playing ? "⏸ PAUSE" : "▶ PLAY";
+    if (bigBtn) bigBtn.textContent = label;
   }
 
   // ---- Studio Right-Column Tabs ----
@@ -2278,9 +2394,13 @@ class MusicLinkerController {
           preferred_download_method: preferredMethod,
         }),
       });
-      this.activeJobId = job.job_id;
-      this.showToast(`Started Last.fm extraction for ${username}`);
-      this.subscribeToJobProgress(job.job_id);
+      if (this.isJobRunning) {
+        this.showToast(`Extraction queued in FIFO buffer for ${username}`);
+      } else {
+        this.activeJobId = job.job_id;
+        this.showToast(`Started Last.fm extraction for ${username}`);
+        this.subscribeToJobProgress(job.job_id);
+      }
     } catch (err) {
       this.showToast(`Failed starting job: ${err.message}`, "error");
     }
@@ -2618,6 +2738,38 @@ class MusicLinkerController {
     document.getElementById("btn-next")?.addEventListener("click", () => this.nextTrack());
     document.getElementById("btn-shuffle")?.addEventListener("click", () => this.toggleShuffle());
     document.getElementById("btn-randomize-now")?.addEventListener("click", () => this.randomizeAndPlayCurrentView());
+
+    // Equalizer Modal & DSP controls
+    document.getElementById("btn-open-eq")?.addEventListener("click", () => this.openEqualizerModal());
+    document.getElementById("btn-big-eq")?.addEventListener("click", () => this.openEqualizerModal());
+    document.getElementById("btn-close-eq-modal")?.addEventListener("click", () => this.closeEqualizerModal());
+    document.getElementById("btn-eq-done")?.addEventListener("click", () => this.closeEqualizerModal());
+    document.getElementById("btn-eq-reset")?.addEventListener("click", () => {
+      this.engine.setPreset("Flat");
+      this.refreshEqualizerModalValues();
+      this.showToast("Equalizer reset to Flat");
+    });
+    document.getElementById("eq-enable-toggle")?.addEventListener("change", (e) => {
+      const enabled = this.engine.toggleEq(e.target.checked);
+      const label = document.getElementById("eq-enable-label");
+      if (label) {
+        label.textContent = enabled ? "DSP ON" : "DSP OFF";
+        label.className = enabled ? "text-emerald-400 font-bold" : "text-zinc-500 font-bold";
+      }
+    });
+
+    for (let i = 0; i < 5; i++) {
+      const slider = document.getElementById(`eq-slider-${i}`);
+      slider?.addEventListener("input", (e) => {
+        const val = Number(e.target.value) || 0;
+        const valBadge = document.getElementById(`eq-val-${i}`);
+        if (valBadge) {
+          valBadge.textContent = `${val > 0 ? "+" : ""}${val} dB`;
+        }
+        this.engine.setBandGain(i, val);
+        this.renderEqPresetsUI();
+      });
+    }
     document.getElementById("btn-rescan-library")?.addEventListener("click", () => this.rescanLibraryOnDisk());
     document.getElementById("car-btn-play")?.addEventListener("click", () => this.togglePlay());
     document.getElementById("car-btn-prev")?.addEventListener("click", () => this.prevTrack());

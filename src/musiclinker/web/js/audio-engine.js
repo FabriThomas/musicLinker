@@ -3,6 +3,25 @@
  */
 import { offlineStore } from "./offline-store.js";
 
+export const EQ_PRESETS = {
+  Flat: [0, 0, 0, 0, 0],
+  "Bass Boost": [6, 4, 1, 0, 0],
+  "Treble Boost": [0, 0, 1, 4, 6],
+  Rock: [4, 2, -1, 2, 4],
+  Electronic: [5, 3, 0, 2, 4],
+  Vocal: [-2, 1, 4, 3, 1],
+  "Hip-Hop": [6, 5, 0, 1, 2],
+  Acoustic: [2, 1, 2, 3, 2],
+};
+
+export const EQ_BANDS = [
+  { label: "60 Hz", name: "Sub-Bass", freq: 60, type: "lowshelf" },
+  { label: "230 Hz", name: "Bass", freq: 230, type: "peaking" },
+  { label: "910 Hz", name: "Mids", freq: 910, type: "peaking" },
+  { label: "3.6 kHz", name: "Presence", freq: 3600, type: "peaking" },
+  { label: "14 kHz", name: "Air / Treble", freq: 14000, type: "highshelf" },
+];
+
 export class AudioEngine {
   constructor({ onTimeUpdate, onTrackEnded, onScrobbleDue, onNowPlaying, onStateChange }) {
     this.audio = new Audio();
@@ -23,11 +42,125 @@ export class AudioEngine {
     this.accumulatedPlaySeconds = 0;
     this.lastTickTimestamp = null;
 
+    // Web Audio API DSP Equalizer State
+    this.audioCtx = null;
+    this.sourceNode = null;
+    this.eqFilters = [];
+    this.eqEnabled = true;
+    this.currentEqPreset = "Flat";
+    this.eqGains = [0, 0, 0, 0, 0];
+
+    this._loadSavedEq();
     this._bindEvents();
+  }
+
+  _loadSavedEq() {
+    try {
+      const saved = localStorage.getItem("ml_eq_state");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.enabled === "boolean") this.eqEnabled = parsed.enabled;
+        if (parsed.preset && EQ_PRESETS[parsed.preset]) this.currentEqPreset = parsed.preset;
+        if (Array.isArray(parsed.gains) && parsed.gains.length === 5) {
+          this.eqGains = parsed.gains.map(g => Number(g) || 0);
+        }
+      }
+    } catch (_e) {}
+  }
+
+  _saveEq() {
+    try {
+      localStorage.setItem("ml_eq_state", JSON.stringify({
+        enabled: this.eqEnabled,
+        preset: this.currentEqPreset,
+        gains: this.eqGains,
+      }));
+    } catch (_e) {}
+  }
+
+  initAudioContext() {
+    if (this.audioCtx) {
+      if (this.audioCtx.state === "suspended") {
+        this.audioCtx.resume();
+      }
+      return;
+    }
+    try {
+      const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtxClass) return;
+      this.audioCtx = new AudioCtxClass();
+      this.sourceNode = this.audioCtx.createMediaElementSource(this.audio);
+
+      this.eqFilters = EQ_BANDS.map((band, idx) => {
+        const filter = this.audioCtx.createBiquadFilter();
+        filter.type = band.type;
+        filter.frequency.value = band.freq;
+        if (band.type === "peaking") {
+          filter.Q.value = 1.0;
+        }
+        filter.gain.value = this.eqEnabled ? this.eqGains[idx] : 0;
+        return filter;
+      });
+
+      let prevNode = this.sourceNode;
+      for (const filter of this.eqFilters) {
+        prevNode.connect(filter);
+        prevNode = filter;
+      }
+      prevNode.connect(this.audioCtx.destination);
+    } catch (err) {
+      console.warn("AudioContext equalizer initialization failed:", err);
+    }
+  }
+
+  setBandGain(bandIdx, gainDb) {
+    if (bandIdx < 0 || bandIdx >= 5) return;
+    const clamped = Math.max(-12, Math.min(12, Number(gainDb) || 0));
+    this.eqGains[bandIdx] = clamped;
+    this.currentEqPreset = "Custom";
+
+    if (this.audioCtx && this.eqFilters[bandIdx]) {
+      this.eqFilters[bandIdx].gain.value = this.eqEnabled ? clamped : 0;
+    }
+    this._saveEq();
+  }
+
+  setPreset(presetName) {
+    const preset = EQ_PRESETS[presetName];
+    if (!preset) return;
+    this.currentEqPreset = presetName;
+    this.eqGains = [...preset];
+
+    if (this.audioCtx && this.eqFilters.length === 5) {
+      this.eqFilters.forEach((f, idx) => {
+        f.gain.value = this.eqEnabled ? this.eqGains[idx] : 0;
+      });
+    }
+    this._saveEq();
+  }
+
+  toggleEq(enabled) {
+    this.eqEnabled = typeof enabled === "boolean" ? enabled : !this.eqEnabled;
+    if (this.audioCtx && this.eqFilters.length === 5) {
+      this.eqFilters.forEach((f, idx) => {
+        f.gain.value = this.eqEnabled ? this.eqGains[idx] : 0;
+      });
+    }
+    this._saveEq();
+    return this.eqEnabled;
+  }
+
+  getEqState() {
+    return {
+      enabled: this.eqEnabled,
+      preset: this.currentEqPreset,
+      gains: [...this.eqGains],
+    };
   }
 
   _bindEvents() {
     this.audio.addEventListener("play", () => {
+      this.initAudioContext();
       this.lastTickTimestamp = performance.now();
       this.onStateChange?.(true);
       this._updateMediaSessionPlaybackState("playing");
