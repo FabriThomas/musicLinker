@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>MusicLinker Studio & APK v3.0.8 — Track, Playlist & Album Downloader + AI Curator + 5-Band DSP</title>
+  <title>MusicLinker Studio & APK v3.0.9 — Track, Playlist & Album Downloader + 5-Band DSP</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/styles.css" />
@@ -18,32 +18,37 @@
       <div>
         <div class="flex items-center gap-2">
           <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker</h1>
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.0.8 APK + Studio</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.0.9 APK + Studio</span>
         </div>
-        <p class="text-[11px] text-zinc-400 hidden sm:block">Track, Playlist & Album Downloader • 3-Layer Selector • Synced Lyrics • AI Curator</p>
+        <p class="text-[11px] text-zinc-400 hidden sm:block">Track, Playlist & Album Downloader • Synced Lyrics • On-Device AppData • 5-Band DSP</p>
       </div>
     </div>
 
     <div class="flex items-center gap-2">
-      <div class="relative">
+      <div class="relative flex items-center">
+        <svg class="w-3.5 h-3.5 absolute left-3 text-zinc-500 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input
           id="search-input"
           type="search"
           placeholder="Filter songs, artists, albums..."
-          class="bg-zinc-900/95 border border-zinc-700/80 rounded-xl pl-3 pr-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 w-36 sm:w-56 transition"
+          class="bg-zinc-900/95 border border-zinc-700/80 rounded-xl pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 w-36 sm:w-56 transition text-zinc-200"
         />
       </div>
-      <button id="btn-rescan-library" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs" title="Rescan downloads folder & sync SQLite">
-        <span>↻</span> <span class="hidden md:inline">Rescan</span>
+      <button id="btn-rescan-library" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs flex items-center gap-1.5" title="Rescan downloads folder & sync SQLite">
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+        <span class="hidden md:inline">Rescan</span>
       </button>
-      <button id="btn-randomize-now" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs" title="Randomize & Play Queue">
-        <span>🎲</span> <span class="hidden sm:inline">Shuffle Play</span>
+      <button id="btn-randomize-now" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs flex items-center gap-1.5" title="Randomize & Play Queue">
+        <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+        <span class="hidden sm:inline">Shuffle Play</span>
       </button>
-      <button id="btn-car-mode" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs hidden sm:inline-flex" title="High-contrast driving mode">
-        <span>🚗</span> <span>Car</span>
+      <button id="btn-car-mode" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs hidden sm:inline-flex items-center gap-1.5" title="High-contrast driving mode">
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="9" rx="2"/><path d="M5 11l2-6h10l2 6"/><circle cx="7.5" cy="15.5" r="1.5"/><circle cx="16.5" cy="15.5" r="1.5"/></svg>
+        <span>Car</span>
       </button>
-      <button id="btn-show-sync" class="ml-btn ml-btn-primary px-3 py-1.5 text-xs">
-        <span>📱</span> <span>APK / Sync</span>
+      <button id="btn-show-sync" class="ml-btn ml-btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+        <span>APK / Sync</span>
       </button>
     </div>
   </header>
@@ -55,14 +60,17 @@
       <!-- Library Toolbar: View Mode Toggle + Sort Selector -->
       <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5 shrink-0">
         <div class="flex items-center gap-1.5 bg-zinc-950/90 border border-zinc-800 p-1 rounded-xl">
-          <button id="btn-view-standard" class="ml-btn px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950">
-            🎵 Standard Library
+          <button id="btn-view-standard" class="ml-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-zinc-950 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            <span>Standard Library</span>
           </button>
-          <button id="btn-view-layered" class="ml-btn px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200">
-            🗂 3-Layer Selector
+          <button id="btn-view-layered" class="ml-btn px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+            <span>3-Layer Selector</span>
           </button>
-          <button id="btn-view-playlists" class="ml-btn px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200">
-            📑 Playlists
+          <button id="btn-view-playlists" class="ml-btn px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            <span>Playlists</span>
           </button>
         </div>
 
@@ -85,19 +93,23 @@
         <!-- Contextual Action Bar when an Album is selected -->
         <div id="selected-album-actions" class="hidden flex flex-wrap items-center justify-between gap-2 bg-emerald-950/35 border border-emerald-500/35 rounded-xl p-2.5 mb-2 shrink-0">
           <div class="flex flex-wrap items-center gap-2">
-            <button id="btn-play-selected-album" class="ml-btn ml-btn-primary px-3 py-1.5 text-xs">
-              ▶ Play Album (1..N)
+            <button id="btn-play-selected-album" class="ml-btn ml-btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>Play Album (1..N)</span>
             </button>
-            <button id="btn-cache-selected-album" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs text-emerald-300">
-              ↓ Cache Offline (APK)
+            <button id="btn-cache-selected-album" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs text-emerald-300 flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Save on Device (APK)</span>
             </button>
           </div>
           <div class="flex items-center gap-1.5">
-            <button id="btn-rename-selected-album" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs">
-              ✎ Rename Album
+            <button id="btn-rename-selected-album" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              <span>Rename</span>
             </button>
-            <button id="btn-delete-selected-album" class="ml-btn ml-btn-danger px-2.5 py-1.5 text-xs" title="Delete entire album and files">
-              🗑 Delete Album
+            <button id="btn-delete-selected-album" class="ml-btn ml-btn-danger px-2.5 py-1.5 text-xs flex items-center gap-1.5" title="Delete entire album and files">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <span>Delete Album</span>
             </button>
           </div>
         </div>
@@ -112,26 +124,33 @@
             0 artist(s) • All albums • 0 track(s) selected
           </div>
           <div class="flex flex-wrap items-center gap-1.5">
-            <button id="btn-layer-clear-artists" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs">
-              ↺ Reset
+            <button id="btn-layer-clear-artists" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs flex items-center gap-1">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6M2.66 15.57a10 10 0 1 0 .57-8.38L2.5 8"/></svg>
+              <span>Reset</span>
             </button>
-            <button id="btn-layer-play" class="ml-btn ml-btn-primary px-3 py-1 text-xs">
-              ▶ Play Selected
+            <button id="btn-layer-play" class="ml-btn ml-btn-primary px-3 py-1 text-xs flex items-center gap-1">
+              <svg class="w-3 h-3 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>Play Selected</span>
             </button>
-            <button id="btn-layer-shuffle" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-emerald-300">
-              🎲 Shuffle
+            <button id="btn-layer-shuffle" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-emerald-300 flex items-center gap-1">
+              <svg class="w-3 h-3 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+              <span>Shuffle</span>
             </button>
-            <button id="btn-layer-save-playlist" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-amber-300" title="Save current funnel selection as a custom playlist">
-              + Save Playlist
+            <button id="btn-layer-save-playlist" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-amber-300 flex items-center gap-1" title="Save current funnel selection as a custom playlist">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span>Save Playlist</span>
             </button>
-            <button id="btn-layer-export-modal" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-sky-300" title="Export tracklist as TXT, M3U or JSON">
-              ⤓ Export
+            <button id="btn-layer-export-modal" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-sky-300 flex items-center gap-1" title="Export tracklist as TXT, M3U or JSON">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Export</span>
             </button>
-            <button id="btn-layer-cache-offline" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs" title="Cache selected tracks directly onto device storage">
-              ↓ Save on Device
+            <button id="btn-layer-cache-offline" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs flex items-center gap-1" title="Cache selected tracks directly onto device storage">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+              <span>Save on Device</span>
             </button>
-            <button id="btn-layer-delete-selected" class="ml-btn ml-btn-danger px-2.5 py-1 text-xs" title="Delete selected tracks from library">
-              🗑 Delete
+            <button id="btn-layer-delete-selected" class="ml-btn ml-btn-danger px-2.5 py-1 text-xs flex items-center gap-1" title="Delete selected tracks from library">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <span>Delete</span>
             </button>
           </div>
         </div>
@@ -167,15 +186,20 @@
       <div id="playlists-view" class="hidden flex-1 flex flex-col min-h-0 overflow-hidden gap-3">
         <div class="flex items-center justify-between gap-2 shrink-0">
           <div class="flex items-center gap-2">
-            <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-300">📑 Custom Playlists</h2>
+            <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              <span>Custom Playlists</span>
+            </h2>
             <span id="playlist-summary-badge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400">0 Playlists</span>
           </div>
           <div class="flex items-center gap-1.5">
-            <button id="btn-create-playlist" class="ml-btn ml-btn-primary px-3 py-1 text-xs">
-              + New Playlist
+            <button id="btn-create-playlist" class="ml-btn ml-btn-primary px-3 py-1 text-xs flex items-center gap-1">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span>New Playlist</span>
             </button>
-            <button id="btn-refresh-playlists" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs">
-              ↻ Refresh
+            <button id="btn-refresh-playlists" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs flex items-center gap-1">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              <span>Refresh</span>
             </button>
           </div>
         </div>
@@ -201,26 +225,33 @@
                 <div class="min-w-0">
                   <div class="flex items-center gap-2">
                     <h3 id="pl-detail-title" class="text-sm font-bold truncate text-white">Playlist Title</h3>
-                    <button id="btn-pl-edit-meta" class="text-xs text-zinc-400 hover:text-white" title="Edit Name & Description">✎</button>
+                    <button id="btn-pl-edit-meta" class="p-1 text-zinc-400 hover:text-white rounded" title="Edit Name & Description">
+                      <svg class="w-3 h-3 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </button>
                   </div>
                   <p id="pl-detail-desc" class="text-xs text-zinc-400 truncate mt-0.5">Description</p>
                   <span id="pl-detail-count" class="text-[10px] font-mono text-emerald-400">0 track(s)</span>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                  <button id="btn-pl-play" class="ml-btn ml-btn-primary px-3 py-1 text-xs">
-                    ▶ Play
+                  <button id="btn-pl-play" class="ml-btn ml-btn-primary px-3 py-1 text-xs flex items-center gap-1">
+                    <svg class="w-3 h-3 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                    <span>Play</span>
                   </button>
-                  <button id="btn-pl-shuffle" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-emerald-300">
-                    🎲 Shuffle
+                  <button id="btn-pl-shuffle" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-emerald-300 flex items-center gap-1">
+                    <svg class="w-3 h-3 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                    <span>Shuffle</span>
                   </button>
-                  <button id="btn-pl-export" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs" title="Export as M3U / TXT / JSON">
-                    ⤓ Export
+                  <button id="btn-pl-export" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs flex items-center gap-1" title="Export as M3U / TXT / JSON">
+                    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <span>Export</span>
                   </button>
-                  <button id="btn-pl-cache-offline" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-sky-400" title="Cache all tracks on device storage">
-                    ↓ Save on Device
+                  <button id="btn-pl-cache-offline" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-sky-400 flex items-center gap-1" title="Cache all tracks on device storage">
+                    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                    <span>Save on Device</span>
                   </button>
-                  <button id="btn-pl-delete" class="ml-btn ml-btn-danger px-2.5 py-1 text-xs" title="Delete this playlist">
-                    🗑 Delete
+                  <button id="btn-pl-delete" class="ml-btn ml-btn-danger px-2.5 py-1 text-xs flex items-center gap-1" title="Delete this playlist">
+                    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    <span>Delete</span>
                   </button>
                 </div>
               </div>
@@ -244,14 +275,17 @@
           </span>
           <div class="flex items-center gap-1.5 min-w-0">
             <span id="banner-lyric-status" class="text-[11px] text-zinc-300 font-mono truncate max-w-[140px]">Waiting...</span>
-            <button id="btn-pause-job" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] rounded-md" title="Pause / Resume active download job">
-              ⏸ Pause
+            <button id="btn-pause-job" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] rounded-md flex items-center gap-1" title="Pause / Resume active download job">
+              <svg class="w-3 h-3 fill-current" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+              <span>Pause</span>
             </button>
-            <button id="btn-retry-job" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] rounded-md hidden" title="Retry dropped / failed connection">
-              ↻ Retry
+            <button id="btn-retry-job" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] rounded-md hidden flex items-center gap-1" title="Retry dropped / failed connection">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              <span>Retry</span>
             </button>
-            <button id="btn-cancel-job" class="ml-btn ml-btn-danger px-2 py-0.5 text-[10px] rounded-md" title="Cancel download job">
-              ✕ Cancel
+            <button id="btn-cancel-job" class="ml-btn ml-btn-danger px-2 py-0.5 text-[10px] rounded-md flex items-center gap-1" title="Cancel download job">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <span>Cancel</span>
             </button>
           </div>
         </div>
@@ -263,17 +297,21 @@
 
       <!-- Studio Navigation Tabs -->
       <div class="grid grid-cols-4 gap-1.5 bg-zinc-900/75 border border-zinc-800/80 p-1.5 rounded-2xl shrink-0">
-        <button id="tab-btn-lyrics" class="ml-btn px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500 text-zinc-950 shadow-sm">
-          🎤 Lyrics
+        <button id="tab-btn-lyrics" class="ml-btn px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500 text-zinc-950 shadow-sm flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          <span>Lyrics</span>
         </button>
-        <button id="tab-btn-extractor" class="ml-btn px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70">
-          ⬇ Downloader
+        <button id="tab-btn-extractor" class="ml-btn px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>Downloader</span>
         </button>
-        <button id="tab-btn-curator" class="ml-btn px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70">
-          ✨ AI Curator
+        <button id="tab-btn-curator" class="ml-btn px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+          <span>AI Curator</span>
         </button>
-        <button id="tab-btn-settings" class="ml-btn px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70">
-          ⚙ Settings
+        <button id="tab-btn-settings" class="ml-btn px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Settings</span>
         </button>
       </div>
 
@@ -286,10 +324,12 @@
             </span>
             <span id="lyric-rough-pos" class="text-[11px] font-mono text-zinc-400">—</span>
           </div>
-          <div class="flex items-center gap-1 text-[11px]">
-            <button id="btn-lyric-earlier" class="ml-btn ml-btn-secondary px-2 py-0.5 rounded-md text-[11px]">-0.5s</button>
-            <span id="lyric-offset-label" class="font-mono text-zinc-400 px-1.5">+0.0s</span>
-            <button id="btn-lyric-later" class="ml-btn ml-btn-secondary px-2 py-0.5 rounded-md text-[11px]">+0.5s</button>
+          <div class="flex items-center gap-1.5 text-[11px]">
+            <span id="lyric-saved-status" class="text-[10px] font-mono text-emerald-400 font-semibold hidden">Saved permanently ✓</span>
+            <button id="btn-lyric-earlier" class="ml-btn ml-btn-secondary px-2 py-0.5 rounded-md text-[11px]" title="Shift lyrics earlier by 0.5s and save permanently to file">-0.5s</button>
+            <span id="lyric-offset-label" class="font-mono text-zinc-300 px-1 font-semibold">+0.0s</span>
+            <button id="btn-lyric-later" class="ml-btn ml-btn-secondary px-2 py-0.5 rounded-md text-[11px]" title="Shift lyrics later by 0.5s and save permanently to file">+0.5s</button>
+            <button id="btn-save-lyric-offset" class="ml-btn ml-btn-secondary px-2 py-0.5 rounded-md text-[11px] text-emerald-400 font-semibold" title="Permanently alter MP3 file & LRC file">Save ✓</button>
           </div>
         </div>
 
@@ -308,7 +348,8 @@
         <div class="bg-zinc-950/80 border border-zinc-800/90 rounded-xl p-3 space-y-2.5 shadow-inner">
           <div class="flex items-center justify-between">
             <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-              <span>🎵 Single Track & Direct Link Downloader</span>
+              <svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              <span>Single Track & Direct Link Downloader</span>
             </h2>
             <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
               Search • YouTube • Spotify
@@ -341,8 +382,9 @@
 
           <!-- Optional Custom Metadata Override -->
           <details id="dl-single-overrides-details" class="text-xs border-t border-zinc-800/80 pt-2">
-            <summary class="cursor-pointer text-[11px] text-zinc-400 hover:text-emerald-400 font-medium select-none">
-              ✎ Optional Custom Metadata Override (Artist, Title, Album, Track #)
+            <summary class="cursor-pointer text-[11px] text-zinc-400 hover:text-emerald-400 font-medium select-none flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              <span>Optional Custom Metadata Override (Artist, Title, Album, Track #)</span>
             </summary>
             <div class="grid grid-cols-2 gap-2 mt-2">
               <input id="dl-single-artist" type="text" placeholder="Artist override (optional)" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs" />
@@ -353,11 +395,13 @@
           </details>
 
           <div class="flex gap-2">
-            <button id="btn-search-single" class="ml-btn ml-btn-secondary flex-1 py-2 text-xs">
-              <span>🔍</span> <span>Search & Preview</span>
+            <button id="btn-search-single" class="ml-btn ml-btn-secondary flex-1 py-2 text-xs flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span>Search & Preview</span>
             </button>
-            <button id="btn-download-single-direct" class="ml-btn ml-btn-primary flex-1 py-2 text-xs">
-              <span>⚡</span> <span>Instant Download</span>
+            <button id="btn-download-single-direct" class="ml-btn ml-btn-primary flex-1 py-2 text-xs flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Instant Download</span>
             </button>
           </div>
 
@@ -368,7 +412,8 @@
         <div class="bg-zinc-950/80 border border-zinc-800/90 rounded-xl p-3 space-y-2.5 shadow-inner">
           <div class="flex items-center justify-between">
             <h2 class="font-semibold text-xs uppercase tracking-wider text-indigo-400 flex items-center gap-1.5">
-              <span>💿 Full Album & Playlist Downloader</span>
+              <svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+              <span>Full Album & Playlist Downloader</span>
             </h2>
             <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
               Playlists • Albums • Chapters
@@ -391,11 +436,13 @@
             </select>
           </div>
           <div class="flex gap-2">
-            <button id="btn-preview-album" class="ml-btn ml-btn-secondary flex-1 py-2 text-xs">
-              <span>🔍</span> <span>Preview Tracklist</span>
+            <button id="btn-preview-album" class="ml-btn ml-btn-secondary flex-1 py-2 text-xs flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span>Preview Tracklist</span>
             </button>
-            <button id="btn-download-album" class="ml-btn ml-btn-indigo flex-1 py-2 text-xs">
-              <span>⬇</span> <span>Download Album / Playlist</span>
+            <button id="btn-download-album" class="ml-btn ml-btn-indigo flex-1 py-2 text-xs flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Download Album / Playlist</span>
             </button>
           </div>
           <div id="dl-album-preview-list" class="max-h-64 overflow-y-auto ml-scroll space-y-1.5"></div>
@@ -403,7 +450,10 @@
 
         <!-- Card 3: Last.fm Top Tracks Extractor -->
         <div class="bg-zinc-950/80 border border-zinc-800/90 rounded-xl p-3 space-y-2.5">
-          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-300">📻 Last.fm Chart Extractor</h2>
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+            <svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>
+            <span>Last.fm Chart Extractor</span>
+          </h2>
           <div class="grid grid-cols-2 gap-2 text-xs">
             <input id="ext-username" type="text" placeholder="Last.fm Username" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5" />
             <select id="ext-period" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5">
@@ -562,9 +612,42 @@
 
       <!-- Tab Panel 4: Settings & Reverse Proxy -->
       <div id="tab-panel-settings" class="hidden flex-1 ml-card p-4 flex flex-col gap-4 min-h-0 overflow-y-auto ml-scroll">
+        <!-- Device AppData Storage & Library Path -->
+        <div class="space-y-3 bg-zinc-950/75 border border-emerald-500/35 rounded-xl p-3 text-xs shadow-inner">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+              <svg class="w-4 h-4 stroke-emerald-400 fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Device Storage & System AppData</span>
+            </h2>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">On-Device Storage</span>
+          </div>
+          <p class="text-[11px] text-zinc-400 leading-snug">
+            All downloaded tracks, album art, and synchronized lyrics are saved directly onto your device in AppData, rather than project folders, persisting permanently across builds and updates.
+          </p>
+          <div class="space-y-2">
+            <div>
+              <label class="block text-[10px] text-zinc-400 mb-1">Active Storage Directory</label>
+              <div class="flex items-center gap-2">
+                <input id="set-storage-path" type="text" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-zinc-200 select-all" value="Loading device path..." />
+                <button id="btn-open-storage-folder" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs shrink-0 flex items-center gap-1.5" title="Open device storage folder in File Explorer">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                  <span>Open Folder</span>
+                </button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between pt-1 text-[11px] text-zinc-400 border-t border-zinc-800/80">
+              <span id="storage-track-count">Indexed Tracks: 0</span>
+              <button id="btn-rescan-storage" class="text-emerald-400 hover:underline">↻ Rescan Device Storage</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Preferential Download & Audio Method Settings -->
         <div class="space-y-3 bg-zinc-950/75 border border-zinc-800/90 rounded-xl p-3 text-xs">
-          <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">⚡ Preferential Download & Audio Engine</h2>
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+            <svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <span>Preferential Download & Audio Engine</span>
+          </h2>
           <p class="text-[11px] text-zinc-400">
             Select your default preferred audio provider and target download fidelity across all extractions, single tracks, and album downloads.
           </p>
@@ -588,8 +671,9 @@
                 </select>
               </div>
               <div class="flex items-end">
-                <button id="btn-save-download-preferences" class="ml-btn ml-btn-primary w-full py-1.5 text-xs">
-                  Save Preferences
+                <button id="btn-save-download-preferences" class="ml-btn ml-btn-primary w-full py-1.5 text-xs flex items-center justify-center gap-1.5">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                  <span>Save Preferences</span>
                 </button>
               </div>
             </div>
@@ -597,7 +681,10 @@
         </div>
 
         <div class="space-y-3">
-          <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400">🔀 Built-in Reverse Proxy (`/v1`)</h2>
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+            <svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+            <span>Built-in Reverse Proxy (`/v1`)</span>
+          </h2>
           <p class="text-xs text-zinc-400">
             Forwards local calls (<code class="text-emerald-400">http://localhost:&lt;port&gt;/v1/...</code>) to an external target server URL with proxy password authentication.
           </p>
@@ -616,8 +703,9 @@
                 <input id="proxy-password" type="password" placeholder="Password required to call proxy" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs" />
               </div>
             </div>
-            <button id="btn-save-proxy-settings" class="ml-btn ml-btn-primary w-full py-1.5 text-xs">
-              Save Reverse Proxy
+            <button id="btn-save-proxy-settings" class="ml-btn ml-btn-primary w-full py-1.5 text-xs flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              <span>Save Reverse Proxy</span>
             </button>
           </div>
         </div>
@@ -625,59 +713,92 @@
         <!-- Saved Album Aliases CRUD List -->
         <div class="space-y-2.5 border-t border-zinc-800/80 pt-3">
           <div class="flex items-center justify-between">
-            <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">🗂 Album Aliases & Canonical Rules</h2>
-            <button id="btn-refresh-aliases" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[11px] text-emerald-400">↻ Refresh</button>
+            <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+              <span>Album Aliases & Canonical Rules</span>
+            </h2>
+            <button id="btn-refresh-aliases" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[11px] text-emerald-400 flex items-center gap-1">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              <span>Refresh</span>
+            </button>
           </div>
           <div id="settings-aliases-list" class="max-h-48 overflow-y-auto ml-scroll space-y-1.5 text-xs"></div>
         </div>
 
         <div class="space-y-3 border-t border-zinc-800/80 pt-3">
-          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400">Last.fm API Credentials</h2>
+          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>
+            <span>Last.fm API Credentials</span>
+          </h2>
           <input id="set-api-key" type="text" placeholder="Last.fm API Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
           <input id="set-api-secret" type="password" placeholder="Last.fm API Secret" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
           <input id="set-username" type="text" placeholder="Default Last.fm Username" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-          <button id="btn-save-settings" class="ml-btn ml-btn-secondary w-full py-2 text-xs">
-            Save Credentials
+          <button id="btn-save-settings" class="ml-btn ml-btn-secondary w-full py-2 text-xs flex items-center justify-center gap-1.5">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            <span>Save Credentials</span>
           </button>
         </div>
       </div>
     </section>
   </main>
 
-  <!-- Bottom Persistent Player Bar with Custom Styled Sliders & Randomizer Toggle -->
-  <footer class="border-t border-zinc-800/90 bg-zinc-900/95 backdrop-blur-md px-5 py-3 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
-    <div class="flex items-center gap-3 min-w-0 w-full sm:w-72">
-      <img id="np-cover" src="/icon.svg" alt="Cover" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 border border-zinc-700/60 shrink-0 shadow-md cursor-pointer hover:opacity-90 transition" title="Click to open Big Player & Synced Lyrics" />
-      <div class="min-w-0 flex-1 cursor-pointer" id="np-text-container" title="Click to open Big Player & Synced Lyrics">
-        <div id="np-title" class="font-semibold text-sm truncate hover:text-emerald-400 transition">Not Playing</div>
-        <div id="np-artist" class="text-xs text-zinc-400 truncate">Select a track or album</div>
+  <!-- Bottom Persistent Player Bar with Enhanced Tactile Visuals & Hero Dock -->
+  <footer class="ml-bottom-player px-6 sm:px-8 py-3.5 sm:py-4 flex flex-col md:flex-row items-center justify-between gap-4 shrink-0 relative z-30">
+    <!-- Left: Track Cover & Typography -->
+    <div class="flex items-center gap-3.5 min-w-0 w-full md:w-80">
+      <div class="relative group cursor-pointer shrink-0" id="np-cover-wrap" title="Click to open Big Player & Synced Lyrics">
+        <img id="np-cover" src="/icon.svg" alt="Cover" class="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl object-cover bg-zinc-900 border-2 border-zinc-700/80 shadow-lg group-hover:border-emerald-500/70 transition" />
+        <div class="absolute inset-0 bg-black/40 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+          <svg class="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        </div>
       </div>
-      <button id="btn-expand-player" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs shrink-0 rounded-lg text-zinc-300 hover:text-white" title="Maximize Big Player & Karaoke Lyrics">
-        ⛶ Big
+      <div class="min-w-0 flex-1 cursor-pointer" id="np-text-container" title="Click to open Big Player & Synced Lyrics">
+        <div id="np-title" class="font-bold text-sm sm:text-base truncate text-white hover:text-emerald-400 transition leading-snug">Not Playing</div>
+        <div id="np-artist" class="text-xs sm:text-sm text-zinc-400 truncate mt-0.5">Select a track or album</div>
+      </div>
+      <button id="btn-expand-player" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs shrink-0 rounded-xl text-zinc-300 hover:text-white flex items-center gap-1" title="Maximize Big Player & Karaoke Lyrics">
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        <span class="hidden sm:inline">Big</span>
       </button>
     </div>
 
-    <div class="flex flex-col items-center gap-2 flex-1 max-w-xl w-full">
-      <div class="flex items-center gap-2.5">
-        <button id="btn-prev" class="ml-btn ml-btn-secondary w-9 h-9 rounded-full text-xs font-bold" title="Previous Track">⏮</button>
-        <button id="btn-play" class="ml-btn ml-btn-hero-play" title="Play / Pause">▶</button>
-        <button id="btn-next" class="ml-btn ml-btn-secondary w-9 h-9 rounded-full text-xs font-bold" title="Next Track">⏭</button>
-        <button id="btn-shuffle" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-zinc-400 rounded-xl" title="Toggle Randomizer">
-          🔀 Shuffle
+    <!-- Center: Primary Hero Controls & Seek Bar -->
+    <div class="flex flex-col items-center gap-2 flex-1 max-w-2xl w-full">
+      <div class="flex items-center gap-3">
+        <button id="btn-shuffle" class="ml-btn ml-btn-secondary px-3.5 py-1.5 text-xs text-zinc-400 hover:text-zinc-100 rounded-xl flex items-center gap-1.5" title="Toggle Randomizer">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+          <span class="hidden sm:inline font-medium">Shuffle</span>
         </button>
-        <button id="btn-open-eq" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-emerald-400 font-bold rounded-xl flex items-center gap-1.5" title="Open Studio Audio Equalizer (DSP)">
-          <span>🎚</span> <span>EQ</span>
+        <button id="btn-prev" class="ml-btn ml-btn-secondary ml-btn-hero-skip text-zinc-200 hover:text-white" title="Previous Track">
+          <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><rect x="5" y="4" width="2.5" height="16" rx="1"/></svg>
+        </button>
+        <button id="btn-play" class="ml-btn ml-btn-hero-play" title="Play / Pause">
+          <svg class="w-6 h-6 ml-0.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+        </button>
+        <button id="btn-next" class="ml-btn ml-btn-secondary ml-btn-hero-skip text-zinc-200 hover:text-white" title="Next Track">
+          <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><rect x="16.5" y="4" width="2.5" height="16" rx="1"/></svg>
+        </button>
+        <button id="btn-open-eq" class="ml-btn ml-btn-secondary px-3.5 py-1.5 text-xs text-emerald-400 font-bold rounded-xl flex items-center gap-1.5" title="Open Studio Audio Equalizer (DSP)">
+          <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><circle cx="4" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="10" r="2" fill="currentColor"/><circle cx="20" cy="14" r="2" fill="currentColor"/></svg>
+          <span>EQ</span>
         </button>
       </div>
       <div class="flex items-center gap-3 w-full">
         <input id="seek-bar" type="range" min="0" max="1000" value="0" class="ml-slider flex-1" />
-        <span id="time-display" class="text-xs font-mono text-zinc-400 w-24 text-right">0:00 / 0:00</span>
+        <span id="time-display" class="text-xs sm:text-sm font-mono text-zinc-300 w-28 text-right font-medium">0:00 / 0:00</span>
       </div>
     </div>
 
-    <div class="hidden md:flex items-center gap-2.5 w-44">
-      <span class="text-xs text-zinc-400">🔊</span>
-      <input id="volume-bar" type="range" min="0" max="100" value="85" class="ml-slider flex-1" />
+    <!-- Right: Volume Slider & Device / Lyrics Quick Links -->
+    <div class="hidden md:flex items-center gap-3 w-64 justify-end">
+      <button id="btn-toggle-mute" class="text-zinc-400 hover:text-white p-1 transition" title="Toggle Mute">
+        <svg id="volume-icon" class="w-5 h-5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+      </button>
+      <input id="volume-bar" type="range" min="0" max="100" value="85" class="ml-slider w-28" />
+      <span id="volume-label" class="text-xs font-mono text-zinc-400 w-9 text-right">85%</span>
+      <button id="btn-bottom-lyrics" class="ml-btn ml-btn-secondary p-2 rounded-xl text-zinc-400 hover:text-emerald-400" title="View Synced Lyrics">
+        <svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+      </button>
     </div>
   </footer>
 
@@ -762,7 +883,10 @@
   <!-- High-Contrast Car Driving Mode Overlay -->
   <div id="car-mode-overlay" class="hidden fixed inset-0 bg-black z-50 flex flex-col justify-between p-8">
     <div class="flex justify-between items-center">
-      <span class="text-emerald-400 font-bold uppercase tracking-widest text-sm">🚗 Car Driving Mode (Wake-Lock Active)</span>
+      <span class="text-emerald-400 font-bold uppercase tracking-widest text-sm flex items-center gap-2">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="9" rx="2"/><path d="M5 11l2-6h10l2 6"/><circle cx="7.5" cy="15.5" r="1.5"/><circle cx="16.5" cy="15.5" r="1.5"/></svg>
+        <span>Car Driving Mode (Wake-Lock Active)</span>
+      </span>
       <button id="btn-exit-car" class="ml-btn ml-btn-secondary px-5 py-2.5 rounded-2xl text-white font-bold text-lg">Exit</button>
     </div>
     <div class="text-center my-auto space-y-3">
@@ -770,52 +894,71 @@
       <div id="car-artist" class="text-2xl sm:text-3xl text-emerald-400 font-semibold">—</div>
     </div>
     <div class="grid grid-cols-3 gap-6 h-36">
-      <button id="car-btn-prev" class="ml-btn ml-btn-secondary rounded-3xl text-3xl font-bold">⏮ PREV</button>
-      <button id="car-btn-play" class="ml-btn ml-btn-primary rounded-3xl text-4xl font-extrabold">▶ PLAY</button>
-      <button id="car-btn-next" class="ml-btn ml-btn-secondary rounded-3xl text-3xl font-bold">NEXT ⏭</button>
+      <button id="car-btn-prev" class="ml-btn ml-btn-secondary rounded-3xl text-2xl font-bold flex items-center justify-center gap-3">
+        <svg class="w-8 h-8 fill-current" viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><rect x="5" y="4" width="2.5" height="16" rx="1"/></svg>
+        <span>PREV</span>
+      </button>
+      <button id="car-btn-play" class="ml-btn ml-btn-primary rounded-3xl text-3xl font-extrabold flex items-center justify-center gap-3">
+        <svg class="w-9 h-9 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+        <span>PLAY</span>
+      </button>
+      <button id="car-btn-next" class="ml-btn ml-btn-secondary rounded-3xl text-2xl font-bold flex items-center justify-center gap-3">
+        <span>NEXT</span>
+        <svg class="w-8 h-8 fill-current" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><rect x="16.5" y="4" width="2.5" height="16" rx="1"/></svg>
+      </button>
     </div>
   </div>
 
   <!-- Android APK & Wi-Fi Server Pairing Modal -->
   <div id="sync-modal" class="hidden fixed inset-0 bg-black/75 z-40 flex items-center justify-center p-4 backdrop-blur-sm">
     <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
-      <h3 class="font-bold text-lg">📱 Android APK & Wi-Fi Server Pairing</h3>
+      <h3 class="font-bold text-lg text-white flex items-center gap-2">
+        <svg class="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+        <span>Android APK & Wi-Fi Server Pairing</span>
+      </h3>
       <p class="text-xs text-zinc-400">
         <b>On Desktop:</b> Copy or scan this LAN Pairing URL into your Android phone.<br/>
         <b>Inside the Android APK:</b> Paste your PC's Pairing URL below to stream and cache albums for 100% offline playback:
       </p>
       <div class="flex items-center gap-2">
         <div id="sync-pairing-url" class="flex-1 p-3 rounded-xl bg-zinc-950 border border-zinc-800 font-mono text-xs text-emerald-400 break-all"></div>
-        <button id="btn-copy-pairing-url" class="ml-btn ml-btn-secondary px-3 py-3 text-xs shrink-0" title="Copy Pairing URL">📋 Copy</button>
+        <button id="btn-copy-pairing-url" class="ml-btn ml-btn-secondary px-3 py-3 text-xs shrink-0 flex items-center gap-1.5" title="Copy Pairing URL">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <span>Copy</span>
+        </button>
       </div>
       <div class="space-y-1.5 text-xs">
         <label class="block text-zinc-400">Remote PC Server URL (for Native Android APK)</label>
-        <input id="apk-server-url-input" type="text" placeholder="http://192.168.1.50:8000/?pair_token=..." class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 font-mono text-xs" />
+        <input id="apk-server-url-input" type="text" placeholder="http://192.168.1.50:8000/?pair_token=..." class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 font-mono text-xs text-zinc-200" />
       </div>
       <div class="flex gap-2">
         <button onclick="document.getElementById('sync-modal').classList.add('hidden')" class="ml-btn ml-btn-secondary flex-1 py-2 text-xs">
           Close
         </button>
-        <button id="btn-save-apk-server" class="ml-btn ml-btn-primary flex-1 py-2 text-xs">
+        <button id="btn-save-apk-server" class="ml-btn ml-btn-primary flex-1 py-2 text-xs font-bold">
           Connect APK to Server
         </button>
       </div>
     </div>
+  </div>
+
   <!-- Dedicated Maximized Big Player & Large Karaoke Synced Lyrics Modal -->
   <div id="big-player-modal" class="hidden fixed inset-0 bg-zinc-950/98 z-50 flex flex-col p-4 sm:p-6 backdrop-blur-2xl transition-all duration-200">
     <!-- Top Bar -->
     <div class="flex items-center justify-between pb-3 border-b border-zinc-800/80 shrink-0">
       <div class="flex items-center gap-3">
         <button id="btn-close-big-player" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 text-zinc-300 hover:text-white">
-          <span>↓</span> <span>Minimize Player</span>
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>Minimize Player</span>
         </button>
         <div class="text-xs font-mono text-zinc-400">
           NOW PLAYING • <span id="big-player-source" class="text-emerald-400 font-semibold">MusicLinker Studio</span>
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <button id="btn-big-player-cache" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-sky-400 rounded-xl" title="Save this track directly on device storage">
-          ↓ Save on Device
+        <button id="btn-big-player-cache" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-sky-400 rounded-xl flex items-center gap-1.5" title="Save this track directly on device storage">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+          <span>Save on Device</span>
         </button>
       </div>
     </div>
@@ -826,8 +969,9 @@
       <div class="lg:col-span-5 flex flex-col items-center justify-center text-center p-2 min-h-0">
         <div class="relative group max-w-xs sm:max-w-sm w-full aspect-square mb-4">
           <img id="big-cover" src="/icon.svg" alt="Album Art" class="w-full h-full object-cover rounded-3xl shadow-2xl border border-zinc-700/60 ring-2 ring-emerald-500/20" />
-          <div id="big-offline-badge" class="hidden absolute top-3 right-3 bg-emerald-500/90 text-zinc-950 font-bold text-xs px-2.5 py-1 rounded-full shadow">
-            💾 On Device
+          <div id="big-offline-badge" class="hidden absolute top-3 right-3 bg-emerald-500/90 text-zinc-950 font-bold text-xs px-2.5 py-1 rounded-full shadow flex items-center gap-1">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>On Device</span>
           </div>
         </div>
         <div class="max-w-md w-full px-2">
@@ -844,9 +988,19 @@
 
       <!-- Right: Giant Synced Lyrics (7 cols) -->
       <div class="lg:col-span-7 bg-zinc-950/70 border border-zinc-800/80 rounded-3xl p-5 flex flex-col min-h-0 overflow-hidden relative shadow-inner">
-        <div class="flex items-center justify-between pb-2.5 border-b border-zinc-800/60 shrink-0">
-          <span class="text-xs font-semibold uppercase tracking-wider text-zinc-400">🎤 Synchronized Lyrics (Karaoke)</span>
-          <span id="big-lyrics-status" class="text-[11px] font-mono text-zinc-400">Checking...</span>
+        <div class="flex items-center justify-between pb-2.5 border-b border-zinc-800/60 shrink-0 flex-wrap gap-2">
+          <span class="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+            <svg class="w-4 h-4 text-emerald-400 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <span>Synchronized Lyrics</span>
+          </span>
+          <div class="flex items-center gap-1.5 text-xs">
+            <span id="big-lyrics-status" class="text-[11px] font-mono text-zinc-400">Checking...</span>
+            <span id="big-lyric-saved-status" class="text-[10px] font-mono text-emerald-400 font-semibold hidden">Saved permanently ✓</span>
+            <button id="btn-big-lyric-earlier" class="ml-btn ml-btn-secondary px-2.5 py-1 rounded-lg text-xs" title="Shift lyrics earlier by 0.5s and save permanently to file">-0.5s</button>
+            <span id="big-lyric-offset-label" class="font-mono text-zinc-300 px-1 font-semibold text-xs">+0.0s</span>
+            <button id="btn-big-lyric-later" class="ml-btn ml-btn-secondary px-2.5 py-1 rounded-lg text-xs" title="Shift lyrics later by 0.5s and save permanently to file">+0.5s</button>
+            <button id="btn-big-save-lyric" class="ml-btn ml-btn-secondary px-2.5 py-1 rounded-lg text-xs text-emerald-400 font-semibold" title="Permanently alter MP3 file & LRC file">Save ✓</button>
+          </div>
         </div>
         <div id="big-lyrics-container" class="flex-1 overflow-y-auto ml-scroll space-y-4 py-8 text-center scroll-smooth min-h-0">
           <p class="text-zinc-600 text-sm">No synchronized lyrics loaded.</p>
@@ -862,21 +1016,21 @@
         <span id="big-time-total" class="text-xs font-mono text-zinc-400 w-12 text-left">0:00</span>
       </div>
 
-      <div class="flex items-center justify-center gap-6 w-full">
-        <button id="btn-big-shuffle" class="ml-btn ml-btn-secondary p-3 rounded-full text-base text-zinc-400 hover:text-white" title="Toggle Shuffle">
-          🔀
+      <div class="flex items-center justify-center gap-5 sm:gap-7 w-full">
+        <button id="btn-big-shuffle" class="ml-btn ml-btn-secondary p-3.5 rounded-full text-zinc-400 hover:text-white" title="Toggle Shuffle">
+          <svg class="w-5 h-5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
         </button>
-        <button id="btn-big-prev" class="ml-btn ml-btn-secondary p-3.5 rounded-full text-xl" title="Previous Track">
-          ⏮
+        <button id="btn-big-prev" class="ml-btn ml-btn-secondary p-4 rounded-full text-zinc-200 hover:text-white" title="Previous Track">
+          <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><rect x="5" y="4" width="2.5" height="16" rx="1"/></svg>
         </button>
-        <button id="btn-big-play" class="ml-btn ml-btn-primary p-5 rounded-full text-2xl shadow-xl hover:scale-105 transition transform" title="Play / Pause">
-          ▶
+        <button id="btn-big-play" class="ml-btn ml-btn-hero-play !w-20 !h-20 text-3xl shadow-2xl hover:scale-105 transition transform" title="Play / Pause">
+          <svg class="w-8 h-8 ml-1 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
         </button>
-        <button id="btn-big-next" class="ml-btn ml-btn-secondary p-3.5 rounded-full text-xl" title="Next Track">
-          ⏭
+        <button id="btn-big-next" class="ml-btn ml-btn-secondary p-4 rounded-full text-zinc-200 hover:text-white" title="Next Track">
+          <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><rect x="16.5" y="4" width="2.5" height="16" rx="1"/></svg>
         </button>
-        <button id="btn-big-eq" class="ml-btn ml-btn-secondary p-3 rounded-full text-base text-emerald-400 hover:text-white" title="Open Audio Equalizer (DSP)">
-          🎚
+        <button id="btn-big-eq" class="ml-btn ml-btn-secondary p-3.5 rounded-full text-emerald-400 hover:text-white" title="Open Audio Equalizer (DSP)">
+          <svg class="w-5 h-5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><circle cx="4" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="10" r="2" fill="currentColor"/><circle cx="20" cy="14" r="2" fill="currentColor"/></svg>
         </button>
       </div>
     </div>

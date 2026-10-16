@@ -166,6 +166,20 @@ class AudioTagger:
         except Exception as exc:
             raise TaggingError(f"Failed updating ID3 tags on {mp3_path.name}: {exc}") from exc
 
+    def update_mp3_lyrics(self, mp3_path: Path, lyrics_text: str) -> None:
+        """Permanently alters the USLT ID3v2.4 frame in the MP3 file with updated synchronized/plain lyrics."""
+        try:
+            try:
+                tags = ID3(str(mp3_path))
+            except Exception:
+                tags = ID3()
+            tags.delall("USLT")
+            if lyrics_text.strip():
+                tags.add(USLT(encoding=3, lang="eng", desc="SyncedLyrics", text=lyrics_text))
+            tags.save(str(mp3_path), v2_version=4)
+        except Exception as exc:
+            raise TaggingError(f"Failed updating lyrics on {mp3_path.name}: {exc}") from exc
+
     def read_mp3_metadata(self, mp3_path: Path) -> dict[str, Any]:
         audio = MP3(str(mp3_path))
         duration = int(round(audio.info.length)) if audio.info else 0

@@ -1,5 +1,5 @@
 /**
- * Main UI controller for MusicLinker Studio & Android APK v3.0.8:
+ * Main UI controller for MusicLinker Studio & Android APK v3.0.9:
  *  - Single Track / Direct Link Downloader (Search query, YouTube/YTM URL, or Spotify Track URL)
  *  - Full Album & Playlist Downloader (Spotify Album/Playlist, YouTube Playlist/Chapters, MusicBrainz, Last.fm)
  *  - Play by Album (1..N track_number order), Randomizer (Shuffle), and Sort by Track # / Alphabetical / Plays
@@ -78,6 +78,13 @@ class MusicLinkerController {
     this.bindDOMEvents();
     this.initAllSliderFills();
     this.initEqualizerUI();
+    const volBar = document.getElementById("volume-bar");
+    if (volBar) {
+      const initVal = Number(volBar.value || 85);
+      const volLabel = document.getElementById("volume-label");
+      if (volLabel) volLabel.textContent = `${initVal}%`;
+      this.updateVolumeIcon(initVal);
+    }
     await this.refreshOfflineState();
     await this.loadSettingsIntoUI();
     await this.loadAlbums();
@@ -98,11 +105,16 @@ class MusicLinkerController {
         ? "bg-amber-950/95 border-amber-500/50 text-amber-200"
         : "bg-zinc-900/95 border-emerald-500/50 text-emerald-200";
 
-    const icon = type === "error" ? "⚠" : type === "warning" ? "⚡" : "✓";
+    const iconSvg =
+      type === "error"
+        ? `<svg class="w-4 h-4 stroke-current fill-none shrink-0" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`
+        : type === "warning"
+        ? `<svg class="w-4 h-4 stroke-current fill-none shrink-0" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`
+        : `<svg class="w-4 h-4 stroke-current fill-none shrink-0" viewBox="0 0 24 24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
     const toast = document.createElement("div");
     toast.className = `ml-toast pointer-events-auto flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-xl backdrop-blur-md text-xs font-medium ${colorClasses}`;
-    toast.innerHTML = `<span class="font-bold text-sm">${icon}</span><span class="leading-snug">${this.escape(message)}</span>`;
+    toast.innerHTML = `<span class="shrink-0">${iconSvg}</span><span class="leading-snug">${this.escape(message)}</span>`;
     container.appendChild(toast);
 
     setTimeout(() => {
@@ -298,9 +310,11 @@ class MusicLinkerController {
     if (!this.tracks.length) {
       container.innerHTML = `
         <div class="p-10 text-center text-zinc-400 space-y-2.5">
-          <div class="text-3xl">🎵</div>
+          <div class="w-12 h-12 mx-auto text-zinc-600 flex items-center justify-center">
+            <svg class="w-10 h-10 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          </div>
           <div class="text-sm font-medium text-zinc-300">No tracks match the current filter.</div>
-          <div class="text-xs text-zinc-500">Open the <b>⬇ Downloader</b> tab to grab any single song, Spotify/YouTube link, playlist, or full studio album.</div>
+          <div class="text-xs text-zinc-500">Open the <b>Downloader</b> tab to grab any single song, Spotify/YouTube link, playlist, or full studio album.</div>
         </div>`;
       return;
     }
@@ -335,7 +349,7 @@ class MusicLinkerController {
                 ${
                   coverSrc
                     ? `<img src="${coverSrc}" class="w-full h-full object-cover" alt="cover"/>`
-                    : `<span class="text-emerald-400 font-bold">♪</span>`
+                    : `<svg class="w-5 h-5 text-emerald-400 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`
                 }
               </div>
               <div class="min-w-0 flex-1">
@@ -358,24 +372,26 @@ class MusicLinkerController {
               <button
                 data-edit-idx="${idx}"
                 title="Edit Track, Track #, or Album Metadata"
-                class="ml-btn-icon w-7 h-7 text-xs">
-                ✎
+                class="ml-btn-icon w-7 h-7 text-xs flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
               </button>
               <button
                 data-delete-idx="${idx}"
                 title="Delete Track from Library & Disk"
-                class="ml-btn-icon w-7 h-7 text-xs hover:!text-red-300 hover:!border-red-500/50 hover:!bg-red-950/70">
-                🗑
+                class="ml-btn-icon w-7 h-7 text-xs flex items-center justify-center hover:!text-red-300 hover:!border-red-500/50 hover:!bg-red-950/70">
+                <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
               </button>
               <button
                 data-offline-idx="${idx}"
-                title="${isOffline ? "Saved for Offline (tap to remove)" : "Save for Offline (APK)"}"
-                class="ml-btn px-2.5 py-1 rounded-lg text-xs font-medium border ${
+                title="${isOffline ? "Saved for Offline (tap to remove)" : "Save for Offline (APK / Device Storage)"}"
+                class="ml-btn px-2 py-1 rounded-lg text-xs font-medium border flex items-center gap-1 ${
                   isOffline
                     ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300"
                     : "bg-zinc-800/80 border-zinc-700/80 text-zinc-300 hover:border-emerald-500/50 hover:text-emerald-300"
                 }">
-                ${isOffline ? "✓ Offline" : "↓"}
+                ${isOffline
+                  ? `<svg class="w-3.5 h-3.5 stroke-current fill-none text-emerald-400" viewBox="0 0 24 24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span class="text-[11px]">Offline</span>`
+                  : `<svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`}
               </button>
             </div>
           </div>
@@ -459,11 +475,11 @@ class MusicLinkerController {
       });
       await this.refreshOfflineState();
       this.renderTrackList();
-      if (btn) btn.textContent = "✓ Album Cached Offline";
+      if (btn) btn.innerHTML = `<svg class="w-3.5 h-3.5 stroke-current fill-none inline mr-1 text-emerald-400" viewBox="0 0 24 24" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg><span>Album Cached Offline</span>`;
       this.showToast(`Cached ${albumTracks.length} track(s) for offline playback.`);
     } catch (err) {
       this.showToast(`Failed caching album offline: ${err.message}`, "error");
-      if (btn) btn.textContent = "↓ Cache Offline (APK)";
+      if (btn) btn.innerHTML = `<svg class="w-3.5 h-3.5 stroke-current fill-none inline mr-1" viewBox="0 0 24 24" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Cache Offline</span>`;
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -735,7 +751,7 @@ class MusicLinkerController {
       });
       await this.refreshOfflineState();
       this.renderTrackList();
-      if (btn) btn.textContent = `✓ Cached ${selected.length}`;
+      if (btn) btn.innerHTML = `<svg class="w-3.5 h-3.5 stroke-current fill-none inline mr-1 text-emerald-400" viewBox="0 0 24 24" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg><span>Cached ${selected.length}</span>`;
       this.showToast(`Cached ${selected.length} track(s) offline.`);
     } catch (err) {
       this.showToast(`Offline cache error: ${err.message}`, "error");
@@ -795,14 +811,15 @@ class MusicLinkerController {
                 <div class="flex items-center gap-1.5 shrink-0">
                   <button
                     data-fill-single-idx="${idx}"
-                    class="ml-btn-icon w-7 h-7 text-xs"
+                    class="ml-btn-icon w-7 h-7 text-xs flex items-center justify-center"
                     title="Copy metadata into override fields">
-                    ✎
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
                   </button>
                   <button
                     data-dl-single-idx="${idx}"
-                    class="ml-btn ml-btn-primary px-2.5 py-1.5 text-xs">
-                    ⬇ Download
+                    class="ml-btn ml-btn-primary px-2.5 py-1.5 text-xs flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <span>Download</span>
                   </button>
                 </div>
               </div>
@@ -957,15 +974,16 @@ class MusicLinkerController {
               ${
                 res.cover_url
                   ? `<img src="${this.escapeAttr(res.cover_url)}" class="w-9 h-9 rounded-lg object-cover border border-zinc-700 shrink-0" alt="Cover" />`
-                  : `<div class="w-9 h-9 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-300 font-bold shrink-0">💿</div>`
+                  : `<div class="w-9 h-9 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-300 shrink-0"><svg class="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg></div>`
               }
               <div class="min-w-0">
                 <div class="font-semibold text-zinc-100 truncate">${this.escape(res.album || "Collection")}</div>
                 <div class="text-indigo-400 text-[10px] font-mono truncate">${this.escape(sourceLabel)} • ${this.escape(entityType)} • ${res.tracks.length} tracks</div>
               </div>
             </div>
-            <button id="btn-toggle-all-album-tracks" type="button" class="ml-btn ml-btn-secondary px-2 py-1 text-[10px] shrink-0">
-              ☑ Toggle All
+            <button id="btn-toggle-all-album-tracks" type="button" class="ml-btn ml-btn-secondary px-2 py-1 text-[10px] shrink-0 flex items-center gap-1">
+              <svg class="w-3 h-3 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+              <span>Toggle All</span>
             </button>
           </div>
         `;
@@ -1115,7 +1133,7 @@ class MusicLinkerController {
     if (banner) banner.classList.remove("hidden");
     if (pauseBtn) {
       pauseBtn.classList.remove("hidden");
-      pauseBtn.textContent = "⏸ Pause";
+      pauseBtn.innerHTML = `<svg class="w-3.5 h-3.5 fill-current inline mr-1" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg><span>Pause</span>`;
     }
     if (retryBtn) retryBtn.classList.add("hidden");
 
@@ -1126,7 +1144,9 @@ class MusicLinkerController {
       this.isJobPaused = Boolean(state.is_paused);
       this.isJobRunning = (state.status === "running" || state.status === "queued");
       if (pauseBtn) {
-        pauseBtn.textContent = this.isJobPaused ? "▶ Resume" : "⏸ Pause";
+        pauseBtn.innerHTML = this.isJobPaused
+          ? `<svg class="w-3.5 h-3.5 fill-current inline mr-1" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg><span>Resume</span>`
+          : `<svg class="w-3.5 h-3.5 fill-current inline mr-1" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg><span>Pause</span>`;
       }
 
       if (logBox) {
@@ -1152,12 +1172,19 @@ class MusicLinkerController {
       }
 
       // Progressive library population: appear one-by-one as downloaded
-      const currentTracksAdded = (state.tracks_added || []).length;
-      if (currentTracksAdded > this.jobTracksSeenCount) {
-        this.jobTracksSeenCount = currentTracksAdded;
+      const addedList = state.tracks_added || [];
+      if (addedList.length > this.jobTracksSeenCount) {
+        const newTracks = addedList.slice(this.jobTracksSeenCount);
+        this.jobTracksSeenCount = addedList.length;
         const searchVal = document.getElementById("search-input")?.value || "";
         this.loadLibrary(searchVal, true);
         this.loadAlbums();
+        // Automatically cache newly downloaded track on device storage (offlineStore)
+        for (const tr of newTracks) {
+          offlineStore.saveTrackForOffline(tr, api).then(() => {
+            this.refreshOfflineState().then(() => this.renderTrackList());
+          }).catch(() => {});
+        }
       }
 
       if (state.status === "completed") {
@@ -1165,6 +1192,11 @@ class MusicLinkerController {
         this.showToast(`Download job complete (${state.downloaded_count} track(s) added)!`);
         if (pauseBtn) pauseBtn.classList.add("hidden");
         if (retryBtn) retryBtn.classList.add("hidden");
+        // Ensure all downloaded tracks are in device storage
+        for (const tr of (state.tracks_added || [])) {
+          offlineStore.saveTrackForOffline(tr, api).catch(() => {});
+        }
+        await this.refreshOfflineState();
         this.loadAlbums();
         this.loadLibrary(document.getElementById("search-input")?.value || "", true);
         await this._checkAndTransitionNextFifoJob();
@@ -1641,15 +1673,17 @@ class MusicLinkerController {
               <span class="text-[10px] font-mono text-zinc-500 hidden sm:inline">${dur}</span>
               <button
                 data-pl-track-cache="${t.id}"
-                class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] ${isOffline ? "text-emerald-400 font-bold" : "text-zinc-400"}"
+                class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] flex items-center gap-1 ${isOffline ? "text-emerald-400 font-bold" : "text-zinc-400"}"
                 title="Save track on device storage">
-                ${isOffline ? "💾 Saved" : "↓ Device"}
+                ${isOffline
+                  ? `<svg class="w-3 h-3 stroke-current fill-none text-emerald-400" viewBox="0 0 24 24" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg><span>Saved</span>`
+                  : `<svg class="w-3 h-3 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Device</span>`}
               </button>
               <button
                 data-pl-track-remove="${t.id}"
-                class="ml-btn-icon w-6 h-6 text-xs hover:!bg-red-950 hover:!text-red-300"
+                class="ml-btn-icon w-6 h-6 text-xs flex items-center justify-center hover:!bg-red-950 hover:!text-red-300"
                 title="Remove from playlist">
-                ✕
+                <svg class="w-3 h-3 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
           </div>
@@ -1846,7 +1880,7 @@ class MusicLinkerController {
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = "↓ Save on Device";
+        btn.innerHTML = `<svg class="w-3.5 h-3.5 stroke-current fill-none inline mr-1" viewBox="0 0 24 24" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Save on Device</span>`;
       }
     }
   }
@@ -2264,18 +2298,70 @@ class MusicLinkerController {
     }
   }
 
-  adjustLyricOffset(deltaSec) {
-    this.lyricOffsetSec = Math.round((this.lyricOffsetSec + deltaSec) * 10) / 10;
-    this.updateLyricOffsetLabel();
-    this.lastActiveLyricIdx = -1;
+  async adjustLyricOffset(deltaSec) {
+    const track = this.playQueue[this.currentIndex];
+    if (!track) {
+      this.lyricOffsetSec = Math.round((this.lyricOffsetSec + deltaSec) * 10) / 10;
+      this.updateLyricOffsetLabel();
+      this.lastActiveLyricIdx = -1;
+      return;
+    }
+
+    try {
+      const res = await api.request(`/api/tracks/${track.id}/lyrics/offset`, {
+        method: "POST",
+        body: JSON.stringify({ delta_seconds: deltaSec }),
+      });
+      if (res && res.lyrics) {
+        this.lyricsData = res.lyrics;
+        this.lyricOffsetSec = 0.0;
+        this.updateLyricOffsetLabel();
+        this.lastActiveLyricIdx = -1;
+        this.renderLyrics();
+        // Update offline cached copy if track is saved in offlineStore
+        const offlineRec = await offlineStore.getOfflineTrackRecord(track.id);
+        if (offlineRec) {
+          await offlineStore.saveTrackForOffline({ ...track, offline_lyrics: res.lyrics }, api).catch(() => {});
+        }
+        this.flashLyricSavedStatus("Saved permanently ✓");
+      }
+    } catch (_err) {
+      // In offline APK mode or fallback, apply in-memory offset
+      this.lyricOffsetSec = Math.round((this.lyricOffsetSec + deltaSec) * 10) / 10;
+      this.updateLyricOffsetLabel();
+      this.lastActiveLyricIdx = -1;
+      this.flashLyricSavedStatus("Offset applied (local)");
+    }
+  }
+
+  flashLyricSavedStatus(text = "Saved permanently ✓") {
+    ["lyric-saved-status", "big-lyric-saved-status"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.textContent = text;
+        el.classList.remove("hidden");
+        setTimeout(() => el.classList.add("hidden"), 3000);
+      }
+    });
+  }
+
+  async saveCurrentLyricOffsetPermanently() {
+    const track = this.playQueue[this.currentIndex];
+    if (!track) return;
+    if (this.lyricOffsetSec !== 0) {
+      await this.adjustLyricOffset(this.lyricOffsetSec);
+    } else {
+      this.flashLyricSavedStatus("Saved permanently ✓");
+    }
   }
 
   updateLyricOffsetLabel() {
+    const sign = this.lyricOffsetSec >= 0 ? "+" : "";
+    const text = `${sign}${this.lyricOffsetSec.toFixed(1)}s`;
     const el = document.getElementById("lyric-offset-label");
-    if (el) {
-      const sign = this.lyricOffsetSec >= 0 ? "+" : "";
-      el.textContent = `${sign}${this.lyricOffsetSec.toFixed(1)}s`;
-    }
+    const bigEl = document.getElementById("big-lyric-offset-label");
+    if (el) el.textContent = text;
+    if (bigEl) bigEl.textContent = text;
   }
 
   updateNowPlayingBar(track) {
@@ -2335,10 +2421,24 @@ class MusicLinkerController {
     const btn = document.getElementById("btn-play");
     const carBtn = document.getElementById("car-btn-play");
     const bigBtn = document.getElementById("btn-big-play");
-    const label = playing ? "⏸" : "▶";
-    if (btn) btn.textContent = label;
-    if (carBtn) carBtn.textContent = playing ? "⏸ PAUSE" : "▶ PLAY";
-    if (bigBtn) bigBtn.textContent = label;
+
+    if (btn) {
+      btn.innerHTML = playing
+        ? `<svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
+        : `<svg class="w-6 h-6 fill-current ml-0.5" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>`;
+      btn.title = playing ? "Pause" : "Play";
+    }
+    if (bigBtn) {
+      bigBtn.innerHTML = playing
+        ? `<svg class="w-9 h-9 fill-current" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
+        : `<svg class="w-9 h-9 fill-current ml-1" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>`;
+      bigBtn.title = playing ? "Pause" : "Play";
+    }
+    if (carBtn) {
+      carBtn.innerHTML = playing
+        ? `<svg class="w-8 h-8 fill-current" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg><span>PAUSE</span>`
+        : `<svg class="w-8 h-8 fill-current ml-1" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg><span>PLAY</span>`;
+    }
   }
 
   // ---- Studio Right-Column Tabs ----
@@ -2542,7 +2642,7 @@ class MusicLinkerController {
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.innerHTML = `<span>Execute</span> <span>⚡</span>`;
+        btn.innerHTML = `<span>Execute</span> <svg class="w-3.5 h-3.5 stroke-current fill-none inline ml-1" viewBox="0 0 24 24" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`;
       }
     }
   }
@@ -2551,7 +2651,7 @@ class MusicLinkerController {
     const listEl = document.getElementById("curator-actions-list");
     if (!listEl) return;
     if (!this.proposedCurationActions.length) {
-      listEl.innerHTML = `<div class="p-4 text-xs text-zinc-400 text-center">✓ No pending actions. Type an instruction above for the AI agent!</div>`;
+      listEl.innerHTML = `<div class="p-4 text-xs text-zinc-400 text-center flex items-center justify-center gap-1.5"><svg class="w-3.5 h-3.5 stroke-current fill-none text-emerald-400" viewBox="0 0 24 24" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg><span>No pending actions. Type an instruction above for the AI agent!</span></div>`;
       return;
     }
 
@@ -2560,17 +2660,23 @@ class MusicLinkerController {
         const isDup = act.action_type === "duplicate_remove";
         const isBulk = act.action_type === "bulk_album_rename";
         const badgeColor = isDup ? "text-rose-400" : isBulk ? "text-cyan-400" : "text-emerald-400";
-        const badgeLabel = isDup
-          ? "🗑 Remove Duplicate Version"
+        const badgeIcon = isDup
+          ? `<svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`
           : isBulk
-          ? "💿 Bulk Album Rename"
-          : "✨ Rename Track / Canonicalize Album";
+          ? `<svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`
+          : `<svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`;
+        const badgeLabel = isDup
+          ? "Remove Duplicate Version"
+          : isBulk
+          ? "Bulk Album Rename"
+          : "Rename Track / Canonicalize Album";
 
         return `
           <label class="flex items-start gap-2.5 p-2.5 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs cursor-pointer hover:border-zinc-700">
             <input type="checkbox" data-curate-idx="${idx}" checked class="mt-0.5 accent-emerald-500" />
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-1.5 font-semibold ${badgeColor}">
+                ${badgeIcon}
                 <span>${badgeLabel}</span>
               </div>
               ${
@@ -2651,7 +2757,72 @@ class MusicLinkerController {
       setVal("ext-method", cfg.preferred_download_method || "auto");
       setVal("ext-bitrate", cfg.default_bitrate_kbps || "320");
       await this.loadAlbumAliases();
+      try {
+        const storageInfo = await api.request("/api/system/storage-info");
+        const storageInput = document.getElementById("set-storage-path");
+        if (storageInput && storageInfo.downloads_dir) {
+          storageInput.value = storageInfo.downloads_dir;
+        }
+      } catch (_e) {}
     } catch (_err) {}
+  }
+
+  async openStorageFolder() {
+    try {
+      const res = await api.request("/api/system/open-storage", { method: "POST" });
+      this.showToast(res.message || "Opened storage folder.");
+    } catch (err) {
+      this.showToast(`Failed opening storage folder: ${err.message}`, "error");
+    }
+  }
+
+  toggleMute() {
+    const volBar = document.getElementById("volume-bar");
+    const volLabel = document.getElementById("volume-label");
+    if (!volBar) return;
+
+    const currentVal = Number(volBar.value || 0);
+    if (currentVal > 0) {
+      this.lastVolumeBeforeMute = currentVal;
+      volBar.value = "0";
+      this.engine.setBaseVolume(0);
+      this.updateSliderFill(volBar);
+      if (volLabel) volLabel.textContent = "0%";
+      this.updateVolumeIcon(0);
+    } else {
+      const restoreVal = this.lastVolumeBeforeMute || 85;
+      volBar.value = String(restoreVal);
+      this.engine.setBaseVolume(restoreVal / 100.0);
+      this.updateSliderFill(volBar);
+      if (volLabel) volLabel.textContent = `${restoreVal}%`;
+      this.updateVolumeIcon(restoreVal);
+    }
+  }
+
+  updateVolumeIcon(val) {
+    const iconBtn = document.getElementById("btn-toggle-mute");
+    if (!iconBtn) return;
+    if (val === 0) {
+      iconBtn.innerHTML = `
+        <svg id="volume-icon" class="w-5 h-5 stroke-current fill-none text-red-400" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/>
+          <line x1="23" y1="9" x2="17" y2="15"/>
+          <line x1="17" y1="9" x2="23" y2="15"/>
+        </svg>`;
+    } else if (val < 50) {
+      iconBtn.innerHTML = `
+        <svg id="volume-icon" class="w-5 h-5 stroke-current fill-none text-zinc-300" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>`;
+    } else {
+      iconBtn.innerHTML = `
+        <svg id="volume-icon" class="w-5 h-5 stroke-current fill-none text-zinc-300" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+        </svg>`;
+    }
   }
 
   async saveSettings(silent = false) {
@@ -2814,8 +2985,14 @@ class MusicLinkerController {
     });
     document.getElementById("volume-bar")?.addEventListener("input", (e) => {
       this.updateSliderFill(e.target);
-      this.engine.setBaseVolume(Number(e.target.value) / 100.0);
+      const val = Number(e.target.value);
+      this.engine.setBaseVolume(val / 100.0);
+      const label = document.getElementById("volume-label");
+      if (label) label.textContent = `${Math.round(val)}%`;
+      this.updateVolumeIcon(val);
     });
+    document.getElementById("btn-toggle-mute")?.addEventListener("click", () => this.toggleMute());
+    document.getElementById("btn-bottom-lyrics")?.addEventListener("click", () => this.toggleBigPlayer(true));
 
     // Pause Lyric Auto-Scroll on manual interaction
     const lyricsBox = document.getElementById("lyrics-container");
@@ -2830,6 +3007,11 @@ class MusicLinkerController {
 
     document.getElementById("btn-lyric-earlier")?.addEventListener("click", () => this.adjustLyricOffset(-0.5));
     document.getElementById("btn-lyric-later")?.addEventListener("click", () => this.adjustLyricOffset(0.5));
+    document.getElementById("btn-save-lyric-offset")?.addEventListener("click", () => this.saveCurrentLyricOffsetPermanently());
+    document.getElementById("btn-big-lyric-earlier")?.addEventListener("click", () => this.adjustLyricOffset(-0.5));
+    document.getElementById("btn-big-lyric-later")?.addEventListener("click", () => this.adjustLyricOffset(0.5));
+    document.getElementById("btn-big-save-lyric")?.addEventListener("click", () => this.saveCurrentLyricOffsetPermanently());
+    document.getElementById("btn-open-storage-folder")?.addEventListener("click", () => this.openStorageFolder());
 
     // Studio Right-Hand Navigation Tabs
     ["lyrics", "extractor", "curator", "settings"].forEach((tab) => {

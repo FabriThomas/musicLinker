@@ -659,4 +659,85 @@ def test_resolve_best_audio_match_accuracy():
             assert match["title"] == "Pink Floyd - Money (Official Audio)"
 
 
+def test_shift_lrc_timestamps():
+    from musiclinker.infrastructure.lyrics_client import lyrics_client
+
+    sample_lrc = (
+        "[x-ml-sync-mode:exact_lrc]\n"
+        "[00:01.00] First line\n"
+        "[01:23.45] Middle line\n"
+        "[02:00.00] Last line\n"
+    )
+
+    # Positive shift (+0.5s)
+    shifted_pos = lyrics_client.shift_lrc_timestamps(sample_lrc, 0.5)
+    assert "[00:01.50] First line" in shifted_pos
+    assert "[01:23.95] Middle line" in shifted_pos
+    assert "[02:00.50] Last line" in shifted_pos
+    assert "[x-ml-sync-mode:exact_lrc]" in shifted_pos
+
+    # Negative shift (-0.5s)
+    shifted_neg = lyrics_client.shift_lrc_timestamps(sample_lrc, -0.5)
+    assert "[00:00.50] First line" in shifted_neg
+    assert "[01:22.95] Middle line" in shifted_neg
+    assert "[01:59.50] Last line" in shifted_neg
+
+    # Clamp at 0.0s
+    shifted_clamp = lyrics_client.shift_lrc_timestamps(sample_lrc, -5.0)
+    assert "[00:00.00] First line" in shifted_clamp
+
+
+def test_permanently_shift_track_lyrics(tmp_path):
+    from unittest.mock import patch, MagicMock
+    from musiclinker.services.library_service import LibraryService
+    from musiclinker.domain.models import TrackEntity
+
+    fake_lrc = tmp_path / "song.lrc"
+    fake_lrc.write_text("[00:10.00] Hello world\n[00:20.00] Second line\n", encoding="utf-8")
+    fake_mp3 = tmp_path / "song.mp3"
+    fake_mp3.write_bytes(b"fake-mp3-bytes")
+
+    mock_track = TrackEntity(
+        id=99,
+        track_hash="abcdef1234567890",
+        title="Test Song",
+        artist_display="Test Artist",
+        artists=["Test Artist"],
+        album_artist="Test Artist",
+        album="Test Album",
+        track_number=1,
+        release_year="2024",
+        original_year="2024",
+        duration=180,
+        file_path=str(fake_mp3),
+        lrc_path=str(fake_lrc),
+        lyric_sync_mode="exact_lrc",
+        cover_mime="image/jpeg",
+        has_cover=False,
+        lastfm_playcount=0,
+        local_playcount=0,
+        replaygain_db=0.0,
+        bitrate_kbps=320,
+    )
+
+    mock_repo = MagicMock()
+    mock_repo.get_track.return_value = mock_track
+
+    with patch("musiclinker.services.library_service.audio_tagger.update_mp3_lyrics") as mock_tagger:
+        service = LibraryService(repo=mock_repo)
+        result = service.permanently_shift_track_lyrics(99, 1.5)
+        assert result["permanently_saved"] is True
+        assert result["shift_applied"] == 1.5
+        assert result["lines"][0]["time"] == 11.5
+        assert result["lines"][1]["time"] == 21.5
+
+        # Check LRC file was updated on disk
+        updated_lrc_content = fake_lrc.read_text(encoding="utf-8")
+        assert "[00:11.50] Hello world" in updated_lrc_content
+        assert "[00:21.50] Second line" in updated_lrc_content
+
+        # Verify ID3 tagger was called with new shifted lyrics
+        mock_tagger.assert_called_once_with(fake_mp3, updated_lrc_content)
+
+
 

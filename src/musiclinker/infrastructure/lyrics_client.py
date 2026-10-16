@@ -154,5 +154,31 @@ class LyricsClient:
 
         return {"synced": False, "sync_mode": "none", "lines": []}
 
+    @classmethod
+    def shift_lrc_timestamps(cls, raw_lrc: str, delta_seconds: float) -> str:
+        """Permanently shifts all timestamped lines in raw_lrc by delta_seconds."""
+        if not raw_lrc.strip():
+            return raw_lrc
+
+        output_lines: list[str] = []
+        for raw_line in raw_lrc.splitlines():
+            line = raw_line.strip()
+            if not line:
+                output_lines.append(raw_line)
+                continue
+            match = _LRC_LINE_RE.match(line)
+            if match:
+                minutes = int(match.group(1))
+                seconds = float(match.group(2))
+                text = match.group(3)
+                total_sec = max(0.0, minutes * 60.0 + seconds + delta_seconds)
+                new_min = int(total_sec // 60)
+                new_sec = total_sec % 60.0
+                output_lines.append(f"[{new_min:02d}:{new_sec:05.2f}]{text}")
+            else:
+                output_lines.append(raw_line)
+
+        return "\n".join(output_lines)
+
 
 lyrics_client = LyricsClient()

@@ -335,6 +335,39 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Track not found.")
         return library_service.get_track_lyrics(track)
 
+    @app.post("/api/tracks/{track_id}/lyrics/offset", dependencies=[Depends(require_paired_client)])
+    def adjust_track_lyrics_offset(track_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        shift_sec = float(payload.get("shift_seconds", 0.0))
+        if abs(shift_sec) < 0.001:
+            return {"status": "noop", "message": "Zero shift requested"}
+        return library_service.permanently_shift_track_lyrics(track_id, shift_sec)
+
+    @app.get("/api/system/storage-info", dependencies=[Depends(require_paired_client)])
+    def get_storage_info() -> dict[str, Any]:
+        return {
+            "downloads_dir": str(PATHS.downloads_dir.resolve()),
+            "app_data_dir": str(PATHS.app_data_dir.resolve()),
+            "root_dir": str(PATHS.root_dir.resolve()),
+            "total_tracks": len(db_repo.list_tracks()),
+        }
+
+    @app.post("/api/system/open-storage", dependencies=[Depends(require_paired_client)])
+    def open_storage_folder() -> dict[str, Any]:
+        try:
+            target = PATHS.downloads_dir
+            target.mkdir(parents=True, exist_ok=True)
+            if os.name == "nt":
+                os.startfile(str(target))
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", str(target)])
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", str(target)])
+            return {"success": True, "opened_path": str(target)}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
     # ---- Player, Scrobbling & Custom Transitions ----
 
     @app.post("/api/player/now-playing", dependencies=[Depends(require_paired_client)])

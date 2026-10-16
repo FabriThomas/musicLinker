@@ -39,46 +39,59 @@ class LibraryService:
         pruned = self.repo.remove_missing_files()
         indexed = 0
 
-        for mp3_path in PATHS.downloads_dir.rglob("*.mp3"):
-            if ".staging" in mp3_path.parts:
-                continue
-            try:
-                meta = audio_tagger.read_mp3_metadata(mp3_path)
-                canonical_album = self.repo.resolve_album_alias(
-                    meta["album_artist"], meta["album"], meta["title"]
-                )
-                lrc_candidate = mp3_path.with_suffix(".lrc")
-                lrc_path = str(lrc_candidate.resolve()) if lrc_candidate.exists() else ""
-                sync_mode = "none"
-                if lrc_candidate.exists():
-                    parsed_lrc = lyrics_client.parse_lrc_content(
-                        lrc_candidate.read_text(encoding="utf-8", errors="replace"),
-                        fallback_duration=meta["duration"],
-                    )
-                    sync_mode = str(parsed_lrc.get("sync_mode", "exact_lrc"))
+        scan_dirs = [PATHS.downloads_dir]
+        legacy_dir = getattr(PATHS, "legacy_downloads_dir", None)
+        if legacy_dir and legacy_dir.exists() and legacy_dir.resolve() != PATHS.downloads_dir.resolve():
+            scan_dirs.append(legacy_dir)
 
-                self.repo.upsert_track(
-                    track_hash=meta["track_hash"],
-                    title=meta["title"],
-                    artist_display=meta["artist_display"],
-                    artists=meta["artists"],
-                    album_artist=meta["album_artist"],
-                    album=canonical_album,
-                    track_number=int(meta.get("track_number") or 0),
-                    release_year=meta["release_year"],
-                    original_year=meta["original_year"],
-                    duration=meta["duration"],
-                    file_path=str(mp3_path.resolve()),
-                    lrc_path=lrc_path,
-                    lyric_sync_mode=sync_mode,
-                    cover_mime=meta["cover_mime"],
-                    has_cover=meta["has_cover"],
-                    replaygain_db=meta["replaygain_db"],
-                    bitrate_kbps=meta["bitrate_kbps"],
-                )
-                indexed += 1
-            except Exception as exc:
-                logger.warning("Skipping unreadable MP3 %s: %s", mp3_path, exc)
+        seen_paths: set[str] = set()
+        for sdir in scan_dirs:
+            if not sdir.exists():
+                continue
+            for mp3_path in sdir.rglob("*.mp3"):
+                if ".staging" in mp3_path.parts:
+                    continue
+                resolved_str = str(mp3_path.resolve())
+                if resolved_str in seen_paths:
+                    continue
+                seen_paths.add(resolved_str)
+                try:
+                    meta = audio_tagger.read_mp3_metadata(mp3_path)
+                    canonical_album = self.repo.resolve_album_alias(
+                        meta["album_artist"], meta["album"], meta["title"]
+                    )
+                    lrc_candidate = mp3_path.with_suffix(".lrc")
+                    lrc_path = str(lrc_candidate.resolve()) if lrc_candidate.exists() else ""
+                    sync_mode = "none"
+                    if lrc_candidate.exists():
+                        parsed_lrc = lyrics_client.parse_lrc_content(
+                            lrc_candidate.read_text(encoding="utf-8", errors="replace"),
+                            fallback_duration=meta["duration"],
+                        )
+                        sync_mode = str(parsed_lrc.get("sync_mode", "exact_lrc"))
+
+                    self.repo.upsert_track(
+                        track_hash=meta["track_hash"],
+                        title=meta["title"],
+                        artist_display=meta["artist_display"],
+                        artists=meta["artists"],
+                        album_artist=meta["album_artist"],
+                        album=canonical_album,
+                        track_number=int(meta.get("track_number") or 0),
+                        release_year=meta["release_year"],
+                        original_year=meta["original_year"],
+                        duration=meta["duration"],
+                        file_path=resolved_str,
+                        lrc_path=lrc_path,
+                        lyric_sync_mode=sync_mode,
+                        cover_mime=meta["cover_mime"],
+                        has_cover=meta["has_cover"],
+                        replaygain_db=meta["replaygain_db"],
+                        bitrate_kbps=meta["bitrate_kbps"],
+                    )
+                    indexed += 1
+                except Exception as exc:
+                    logger.warning("Skipping unreadable MP3 %s: %s", mp3_path, exc)
 
         logger.info("Library sync complete: %d track(s) indexed, %d missing entry(s) pruned", indexed, pruned)
         return {"indexed": indexed, "pruned": pruned}
@@ -363,6 +376,55 @@ class LibraryService:
             )
             return lyrics_client.parse_lrc_content(fetched_text, fallback_duration=track.duration)
         return {"synced": False, "sync_mode": "none", "lines": []}
+
+    def permanently_shift_track_lyrics(self, track_id: int, delta_seconds: float) -> dict[str, Any]:
+        """Permanently alters the LRC file and embedded ID3 USLT frame for a track by delta_seconds."""
+        track = self.repo.get_track(track_id)
+        if not track:
+            raise ValueError(f"Track ID {track_id} not found")
+
+        lrc_path: Path | None = None
+        if track.lrc_path and Path(track.lrc_path).exists():
+            lrc_path = Path(track.lrc_path)
+        else:
+            mp3_cand = Path(track.file_path).with_suffix(".lrc")
+            if mp3_cand.exists():
+                lrc_path = mp3_cand
+
+        raw_lrc = ""
+        if lrc_path and lrc_path.exists():
+            raw_lrc = lrc_path.read_text(encoding="utf-8", errors="replace")
+        else:
+            # Try fetching if not present yet
+            self.get_track_lyrics(track)
+            refreshed = self.repo.get_track(track_id) or track
+            if refreshed.lrc_path and Path(refreshed.lrc_path).exists():
+                lrc_path = Path(refreshed.lrc_path)
+                raw_lrc = lrc_path.read_text(encoding="utf-8", errors="replace")
+            else:
+                lrc_cand = Path(track.file_path).with_suffix(".lrc")
+                if lrc_cand.exists():
+                    lrc_path = lrc_cand
+                    raw_lrc = lrc_path.read_text(encoding="utf-8", errors="replace")
+
+        if not raw_lrc or not lrc_path:
+            return {"synced": False, "sync_mode": "none", "lines": [], "message": "No lyrics file found to alter"}
+
+        shifted_lrc = lyrics_client.shift_lrc_timestamps(raw_lrc, delta_seconds)
+        lrc_path.write_text(shifted_lrc, encoding="utf-8")
+
+        # Permanently alter MP3 file ID3 tag
+        mp3_file = Path(track.file_path)
+        if mp3_file.exists():
+            try:
+                audio_tagger.update_mp3_lyrics(mp3_file, shifted_lrc)
+            except Exception as exc:
+                logger.warning("Could not rewrite ID3 USLT tag on %s: %s", mp3_file.name, exc)
+
+        parsed = lyrics_client.parse_lrc_content(shifted_lrc, fallback_duration=track.duration)
+        parsed["permanently_saved"] = True
+        parsed["shift_applied"] = delta_seconds
+        return parsed
 
     def resolve_next_transition(self, current_track_id: int) -> dict[str, Any] | None:
         rules = self.repo.get_transitions_for_track(current_track_id)
