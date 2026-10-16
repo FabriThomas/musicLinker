@@ -23,6 +23,7 @@ class LastFMPeriod(str, Enum):
 class JobStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -259,6 +260,22 @@ class BatchScrobblePayload(BaseModel):
     """Batch of offline scrobbles flushed from the Android APK/PWA IndexedDB outbox."""
 
     scrobbles: list[ScrobblePayload]
+
+
+class PlaylistCreatePayload(BaseModel):
+    """Payload to create a new customizable playlist with optional track IDs."""
+
+    name: str = Field(..., min_length=1)
+    description: str = Field(default="")
+    track_ids: list[int] = Field(default_factory=list)
+
+
+class PlaylistUpdatePayload(BaseModel):
+    """Payload to edit playlist name, description, or track ordering."""
+
+    name: str | None = None
+    description: str | None = None
+    track_ids: list[int] | None = None
 
 
 class TransitionRulePayload(BaseModel):

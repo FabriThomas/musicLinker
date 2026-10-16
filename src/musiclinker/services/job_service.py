@@ -37,6 +37,9 @@ from musiclinker.services.curation_service import curation_service
 from musiclinker.services.library_service import library_service, sanitize_filename
 
 
+import queue
+
+
 @dataclass
 class JobRecord:
     """In-memory state of an active or historical extraction, track download, or full album download job."""
@@ -51,11 +54,17 @@ class JobRecord:
     total_candidates: int = 0
     downloaded_count: int = 0
     skipped_seen_count: int = 0
+    failed_count: int = 0
     excess_saved_path: str = ""
     logs: list[str] = field(default_factory=list)
     tracks_added: list[dict[str, Any]] = field(default_factory=list)
     cancel_requested: bool = False
+    pause_requested: bool = False
     created_at: int = field(default_factory=lambda: int(time.time()))
+
+    def __post_init__(self) -> None:
+        self._pause_event = threading.Event()
+        self._pause_event.set()
 
     def append_log(self, message: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
@@ -63,6 +72,28 @@ class JobRecord:
         if len(self.logs) > 250:
             self.logs = self.logs[-250:]
         self.current_step = message
+
+    def pause(self) -> None:
+        if self.status == JobStatus.RUNNING:
+            self.pause_requested = True
+            self.status = JobStatus.PAUSED
+            self._pause_event.clear()
+            self.append_log("Download job paused by user.")
+
+    def resume(self) -> None:
+        if self.status == JobStatus.PAUSED:
+            self.pause_requested = False
+            self.status = JobStatus.RUNNING
+            self._pause_event.set()
+            self.append_log("Download job resumed.")
+
+    def check_paused_or_cancelled(self) -> None:
+        if self.cancel_requested:
+            raise JobCancelledError("Job cancelled by user.")
+        while self.pause_requested and not self.cancel_requested:
+            time.sleep(0.3)
+        if self.cancel_requested:
+            raise JobCancelledError("Job cancelled by user.")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,21 +107,49 @@ class JobRecord:
             "total_candidates": self.total_candidates,
             "downloaded_count": self.downloaded_count,
             "skipped_seen_count": self.skipped_seen_count,
+            "failed_count": self.failed_count,
             "excess_saved_path": self.excess_saved_path,
             "logs": self.logs[-60:],
             "tracks_added": self.tracks_added,
+            "is_paused": self.status == JobStatus.PAUSED,
             "created_at": self.created_at,
         }
 
 
 class JobService:
-    """Executes Last.fm extraction, single track downloads, and Full Album Downloads with atomic staging."""
+    """Executes Last.fm extraction, single track downloads, and Full Album Downloads in a strict FIFO sequential queue."""
 
     def __init__(self, repo: DatabaseRepository = db_repo) -> None:
         self.repo = repo
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ml_job")
         self._jobs: dict[str, JobRecord] = {}
+        self._job_requests: dict[str, Any] = {}
+        self._fifo_queue: queue.Queue[tuple[JobRecord, Any]] = queue.Queue()
         self._lock = threading.Lock()
+        self._worker_thread = threading.Thread(target=self._fifo_worker_loop, daemon=True, name="ml_fifo_worker")
+        self._worker_thread.start()
+
+    def _fifo_worker_loop(self) -> None:
+        """Sequential single-worker FIFO loop executing jobs one after another without collisions."""
+        while True:
+            try:
+                record, req = self._fifo_queue.get()
+                if record.cancel_requested:
+                    record.status = JobStatus.CANCELLED
+                    record.current_stage = "cancelled"
+                    record.append_log("Cancelled before execution started.")
+                    self._fifo_queue.task_done()
+                    continue
+
+                if record.job_type == "lastfm_extract":
+                    self._run_extraction_pipeline(record, req)
+                elif record.job_type == "direct_download":
+                    self._run_direct_download(record, req)
+                elif record.job_type == "album_download":
+                    self._run_album_download_pipeline(record, req)
+                self._fifo_queue.task_done()
+            except Exception as exc:
+                logger.error("Error in FIFO worker loop: %s", exc)
+                time.sleep(1)
 
     def get_job(self, job_id: str) -> JobRecord | None:
         return self._jobs.get(job_id)
@@ -103,7 +162,38 @@ class JobService:
         if not job:
             return False
         job.cancel_requested = True
+        job.resume()  # Unblock if paused
         job.append_log("Cancellation requested by user...")
+        return True
+
+    def pause_job(self, job_id: str) -> bool:
+        job = self._jobs.get(job_id)
+        if not job or job.status != JobStatus.RUNNING:
+            return False
+        job.pause()
+        return True
+
+    def resume_job(self, job_id: str) -> bool:
+        job = self._jobs.get(job_id)
+        if not job or job.status != JobStatus.PAUSED:
+            return False
+        job.resume()
+        return True
+
+    def retry_job(self, job_id: str) -> bool:
+        """Retry a failed or completed job from where it left off, re-enqueuing into FIFO queue."""
+        job = self._jobs.get(job_id)
+        req = self._job_requests.get(job_id)
+        if not job or not req:
+            return False
+        if job.status in (JobStatus.RUNNING, JobStatus.QUEUED, JobStatus.PAUSED):
+            return False  # Already active or queued
+        job.status = JobStatus.QUEUED
+        job.cancel_requested = False
+        job.pause_requested = False
+        job.current_stage = "requeued"
+        job.append_log("Job re-enqueued for retry connection.")
+        self._fifo_queue.put((job, req))
         return True
 
     def start_lastfm_extraction_job(self, req: ExtractionJobRequest) -> JobRecord:
@@ -111,7 +201,8 @@ class JobService:
         record = JobRecord(job_id=job_id, job_type="lastfm_extract")
         with self._lock:
             self._jobs[job_id] = record
-        self._executor.submit(self._run_extraction_pipeline, record, req)
+            self._job_requests[job_id] = req
+        self._fifo_queue.put((record, req))
         return record
 
     def start_direct_download_job(self, req: DirectDownloadRequest) -> JobRecord:
@@ -119,16 +210,18 @@ class JobService:
         record = JobRecord(job_id=job_id, job_type="direct_download")
         with self._lock:
             self._jobs[job_id] = record
-        self._executor.submit(self._run_direct_download, record, req)
+            self._job_requests[job_id] = req
+        self._fifo_queue.put((record, req))
         return record
 
     def start_album_download_job(self, req: AlbumDownloadRequest) -> JobRecord:
-        """Start a background job that resolves and downloads an entire album in track # order (`1..N`)."""
+        """Start a background job that resolves and downloads an entire album in track # order (`1..N`) via FIFO queue."""
         job_id = uuid.uuid4().hex[:10]
         record = JobRecord(job_id=job_id, job_type="album_download")
         with self._lock:
             self._jobs[job_id] = record
-        self._executor.submit(self._run_album_download_pipeline, record, req)
+            self._job_requests[job_id] = req
+        self._fifo_queue.put((record, req))
         return record
 
     def _run_album_download_pipeline(self, job: JobRecord, req: AlbumDownloadRequest) -> None:
@@ -173,6 +266,8 @@ class JobService:
             job.append_log(f"Album '{canonical_album}' by '{album_artist}' resolved: {len(tracks_to_dl)} track(s) queued.")
 
             album_cover_bytes, album_cover_mime = None, "image/jpeg"
+            album_release_year = str(lookup.get("release_year") or "").strip()
+
             if lookup and lookup.get("cover_url"):
                 album_cover_bytes, album_cover_mime = spotify_client.fetch_cover_bytes(lookup["cover_url"])
                 if album_cover_bytes:
@@ -182,6 +277,8 @@ class JobService:
                 try:
                     sp_target = raw_album_name if spotify_client.is_spotify_url(raw_album_name) else album_artist
                     sp_meta = spotify_client.fetch_spotify_metadata(sp_target)
+                    if sp_meta.get("release_year") and not album_release_year:
+                        album_release_year = str(sp_meta["release_year"]).strip()
                     if sp_meta.get("cover_url"):
                         album_cover_bytes, album_cover_mime = spotify_client.fetch_cover_bytes(sp_meta["cover_url"])
                         if album_cover_bytes:
@@ -194,12 +291,20 @@ class JobService:
                 if album_cover_bytes:
                     job.append_log(f"Cached verified album artwork from MusicBrainz for '{canonical_album}' ({len(album_cover_bytes)} bytes).")
 
+            if not album_release_year and album_artist:
+                try:
+                    mb_tracklist = musicbrainz_client.fetch_album_tracklist(album_artist, canonical_album)
+                    if mb_tracklist and mb_tracklist.get("release_year"):
+                        album_release_year = str(mb_tracklist["release_year"]).strip()
+                except Exception as exc:
+                    logger.debug("Failed resolving MusicBrainz release year: %s", exc)
 
+            if album_release_year:
+                job.append_log(f"Verified canonical album release year: {album_release_year}")
 
             total = len(tracks_to_dl)
             for idx, item in enumerate(tracks_to_dl, start=1):
-                if job.cancel_requested:
-                    raise JobCancelledError("Album download cancelled by user.")
+                job.check_paused_or_cancelled()
 
                 thash = compute_track_hash(item.artist, item.title)
                 if req.skip_existing and self.repo.is_hash_seen(thash):
@@ -219,6 +324,7 @@ class JobService:
                         track_number_hint=item.track_number,
                         album_cover_override=album_cover_bytes,
                         album_cover_mime=album_cover_mime,
+                        album_year_override=album_release_year or None,
                         query_or_url=item.youtube_url,
                         playcount=0,
                         bitrate_kbps=req.bitrate_kbps,
@@ -231,10 +337,11 @@ class JobService:
                     job.downloaded_count += 1
                     job.tracks_added.append(entity.to_dict())
                     job.append_log(
-                        f"Indexed #{entity.track_number:02d}: {entity.title} [{entity.album} | Lyrics: {entity.lyric_sync_mode}]"
+                        f"Indexed #{entity.track_number:02d}: {entity.title} [{entity.album} | Year: {entity.release_year or 'N/A'} | Lyrics: {entity.lyric_sync_mode}]"
                     )
                 except Exception as track_exc:
                     logger.warning("Album track download failed (%s): %s", item.title, track_exc)
+                    job.failed_count += 1
                     job.append_log(f"Skipped #{item.track_number:02d} '{item.title}': {track_exc}")
 
             job.progress_pct = 100.0
@@ -324,8 +431,7 @@ class JobService:
 
             total_to_dl = len(selected)
             for idx, cand in enumerate(selected, start=1):
-                if job.cancel_requested:
-                    raise JobCancelledError("Job cancelled by user.")
+                job.check_paused_or_cancelled()
                 base_pct = ((idx - 1) / total_to_dl) * 100.0
                 job.progress_pct = base_pct
                 job.append_log(f"[{idx}/{total_to_dl}] Downloading: {cand.artist} - {cand.title} ({cand.playcount} plays)")
@@ -459,6 +565,7 @@ class JobService:
         track_number_hint: int = 0,
         album_cover_override: bytes | None = None,
         album_cover_mime: str = "image/jpeg",
+        album_year_override: str | None = None,
         query_or_url: str,
         playcount: int,
         bitrate_kbps: int,
@@ -466,6 +573,7 @@ class JobService:
         staging_dir: Path,
         progress_cb: Any = None,
     ) -> TrackEntity:
+        job.check_paused_or_cancelled()
         job.current_stage = "youtube_audio_and_captions"
         job.lyric_sync_status = "Checking YouTube stream & subtitle cues..."
         if not query_or_url:
@@ -569,6 +677,9 @@ class JobService:
         except (TypeError, ValueError):
             replaygain_val = -1.5
 
+        final_release_year = str(album_year_override or mb_meta.release_year or "").strip()
+        final_original_year = str(album_year_override or mb_meta.original_year or final_release_year).strip()
+
         duration, actual_bitrate = audio_tagger.write_id3v24_tags(
             staged_mp3,
             title=clean_title,
@@ -576,8 +687,8 @@ class JobService:
             album_artist=album_artist,
             album=final_album,
             track_number=final_track_num,
-            release_year=mb_meta.release_year,
-            original_year=mb_meta.original_year,
+            release_year=final_release_year,
+            original_year=final_original_year,
             lastfm_playcount=playcount,
             replaygain_db=replaygain_val,
             lyrics_text=lyrics_text,
@@ -595,8 +706,8 @@ class JobService:
             album_artist=album_artist,
             album=final_album,
             track_number=final_track_num,
-            release_year=mb_meta.release_year,
-            original_year=mb_meta.original_year,
+            release_year=final_release_year,
+            original_year=final_original_year,
             duration=duration or approx_duration,
             file_path=str(final_mp3_path.resolve()),
             lrc_path=str(final_lrc_path.resolve()) if final_lrc_path.exists() else "",

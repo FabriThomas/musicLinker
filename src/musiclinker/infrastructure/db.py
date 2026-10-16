@@ -35,7 +35,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "proxy_server_url": os.environ.get("PROXY_SERVER_URL", ""),
     "proxy_password": os.environ.get("PROXY_PASSWORD", ""),
     "lan_pair_token": generate_pair_token(),
-    "preferred_download_method": "auto",
+    "preferred_download_method": "spotify_match",
 }
 
 
@@ -140,6 +140,25 @@ class DatabaseRepository:
                     key TEXT PRIMARY KEY,
                     value_json TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS playlists (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS playlist_tracks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    playlist_id INTEGER NOT NULL,
+                    track_id INTEGER NOT NULL,
+                    position INTEGER NOT NULL DEFAULT 1,
+                    added_at INTEGER NOT NULL,
+                    UNIQUE(playlist_id, track_id),
+                    FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+                    FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
+                );
                 """
             )
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracks)").fetchall()}
@@ -147,6 +166,7 @@ class DatabaseRepository:
                 conn.execute("ALTER TABLE tracks ADD COLUMN lyric_sync_mode TEXT NOT NULL DEFAULT 'none'")
             if "track_number" not in cols:
                 conn.execute("ALTER TABLE tracks ADD COLUMN track_number INTEGER NOT NULL DEFAULT 0")
+
 
             for key, default_val in DEFAULT_SETTINGS.items():
                 conn.execute(
@@ -628,6 +648,129 @@ class DatabaseRepository:
         with self._write_lock:
             conn = self._get_conn()
             conn.execute("DELETE FROM transitions WHERE id = ?", (transition_id,))
+            conn.commit()
+
+    # ---- Playlist CRUD & Track Management ----
+
+    def list_playlists(self) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
+                   COUNT(pt.id) AS track_count
+            FROM playlists p
+            LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+            GROUP BY p.id
+            ORDER BY p.name COLLATE NOCASE ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_playlist(self, playlist_id: int) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT id, name, description, created_at, updated_at FROM playlists WHERE id = ?",
+            (playlist_id,),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        track_rows = conn.execute(
+            """
+            SELECT t.*, pt.position, pt.added_at AS playlist_added_at
+            FROM playlist_tracks pt
+            JOIN tracks t ON t.id = pt.track_id
+            WHERE pt.playlist_id = ?
+            ORDER BY pt.position ASC, pt.id ASC
+            """,
+            (playlist_id,),
+        ).fetchall()
+        data["tracks"] = [self._row_to_track(r).to_dict() for r in track_rows]
+        data["track_count"] = len(data["tracks"])
+        return data
+
+    def create_playlist(self, name: str, description: str = "", track_ids: list[int] | None = None) -> dict[str, Any]:
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Playlist name cannot be empty.")
+        now = int(time.time())
+        with self._write_lock:
+            conn = self._get_conn()
+            cursor = conn.execute(
+                "INSERT INTO playlists (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (clean_name, description.strip(), now, now),
+            )
+            playlist_id = int(cursor.lastrowid)
+            if track_ids:
+                for pos, tid in enumerate(track_ids, start=1):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (?, ?, ?, ?)",
+                        (playlist_id, tid, pos, now),
+                    )
+            conn.commit()
+            return self.get_playlist(playlist_id) or {"id": playlist_id, "name": clean_name}
+
+    def update_playlist(self, playlist_id: int, name: str | None = None, description: str | None = None, track_ids: list[int] | None = None) -> dict[str, Any]:
+        with self._write_lock:
+            conn = self._get_conn()
+            now = int(time.time())
+            if name is not None and name.strip():
+                conn.execute(
+                    "UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?",
+                    (name.strip(), now, playlist_id),
+                )
+            if description is not None:
+                conn.execute(
+                    "UPDATE playlists SET description = ?, updated_at = ? WHERE id = ?",
+                    (description.strip(), now, playlist_id),
+                )
+            if track_ids is not None:
+                conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,))
+                for pos, tid in enumerate(track_ids, start=1):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (?, ?, ?, ?)",
+                        (playlist_id, tid, pos, now),
+                    )
+                conn.execute("UPDATE playlists SET updated_at = ? WHERE id = ?", (now, playlist_id))
+            conn.commit()
+            updated = self.get_playlist(playlist_id)
+            if not updated:
+                raise ValueError(f"Playlist ID {playlist_id} not found.")
+            return updated
+
+    def add_tracks_to_playlist(self, playlist_id: int, track_ids: list[int]) -> dict[str, Any]:
+        with self._write_lock:
+            conn = self._get_conn()
+            now = int(time.time())
+            max_pos_row = conn.execute(
+                "SELECT COALESCE(MAX(position), 0) AS max_pos FROM playlist_tracks WHERE playlist_id = ?",
+                (playlist_id,),
+            ).fetchone()
+            current_pos = int(max_pos_row["max_pos"]) if max_pos_row else 0
+            for tid in track_ids:
+                current_pos += 1
+                conn.execute(
+                    "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (?, ?, ?, ?)",
+                    (playlist_id, tid, current_pos, now),
+                )
+            conn.execute("UPDATE playlists SET updated_at = ? WHERE id = ?", (now, playlist_id))
+            conn.commit()
+            return self.get_playlist(playlist_id) or {"id": playlist_id}
+
+    def remove_track_from_playlist(self, playlist_id: int, track_id: int) -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                (playlist_id, track_id),
+            )
+            conn.execute("UPDATE playlists SET updated_at = ? WHERE id = ?", (int(time.time()), playlist_id))
+            conn.commit()
+
+    def delete_playlist(self, playlist_id: int) -> None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
             conn.commit()
 
     @staticmethod

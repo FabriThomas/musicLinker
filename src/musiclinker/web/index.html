@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>MusicLinker Studio & APK v3.0.6 — Track, Playlist & Album Downloader + AI Curator</title>
+  <title>MusicLinker Studio & APK v3.0.7 — Track, Playlist & Album Downloader + AI Curator</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/styles.css" />
@@ -18,7 +18,7 @@
       <div>
         <div class="flex items-center gap-2">
           <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker</h1>
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.0.6 APK + Studio</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.0.7 APK + Studio</span>
         </div>
         <p class="text-[11px] text-zinc-400 hidden sm:block">Track, Playlist & Album Downloader • 3-Layer Selector • Synced Lyrics • AI Curator</p>
       </div>
@@ -60,6 +60,9 @@
           </button>
           <button id="btn-view-layered" class="ml-btn px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200">
             🗂 3-Layer Selector
+          </button>
+          <button id="btn-view-playlists" class="ml-btn px-3 py-1 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200">
+            📑 Playlists
           </button>
         </div>
 
@@ -116,10 +119,16 @@
               ▶ Play Selected
             </button>
             <button id="btn-layer-shuffle" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-emerald-300">
-              🎲 Shuffle Selected
+              🎲 Shuffle
             </button>
-            <button id="btn-layer-cache-offline" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs">
-              ↓ Offline
+            <button id="btn-layer-save-playlist" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-amber-300" title="Save current funnel selection as a custom playlist">
+              + Save Playlist
+            </button>
+            <button id="btn-layer-export-modal" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-sky-300" title="Export tracklist as TXT, M3U or JSON">
+              ⤓ Export
+            </button>
+            <button id="btn-layer-cache-offline" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs" title="Cache selected tracks directly onto device storage">
+              ↓ Save on Device
             </button>
             <button id="btn-layer-delete-selected" class="ml-btn ml-btn-danger px-2.5 py-1 text-xs" title="Delete selected tracks from library">
               🗑 Delete
@@ -153,6 +162,75 @@
           </div>
         </div>
       </div>
+
+      <!-- View 3: Customizable Playlists View -->
+      <div id="playlists-view" class="hidden flex-1 flex flex-col min-h-0 overflow-hidden gap-3">
+        <div class="flex items-center justify-between gap-2 shrink-0">
+          <div class="flex items-center gap-2">
+            <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-300">📑 Custom Playlists</h2>
+            <span id="playlist-summary-badge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400">0 Playlists</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="btn-create-playlist" class="ml-btn ml-btn-primary px-3 py-1 text-xs">
+              + New Playlist
+            </button>
+            <button id="btn-refresh-playlists" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 grid grid-cols-1 md:grid-cols-12 gap-3 min-h-0 overflow-hidden">
+          <!-- Left: Playlists List (4 cols) -->
+          <div class="md:col-span-4 bg-zinc-950/50 border border-zinc-800/80 rounded-xl p-2.5 flex flex-col min-h-0 overflow-hidden">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2 shrink-0">
+              All Playlists
+            </div>
+            <div id="playlists-list-container" class="flex-1 overflow-y-auto ml-scroll space-y-1.5 pr-1 min-h-0">
+              <!-- Rendered playlists items -->
+            </div>
+          </div>
+
+          <!-- Right: Selected Playlist Detail & Tracks (8 cols) -->
+          <div class="md:col-span-8 bg-zinc-950/50 border border-zinc-800/80 rounded-xl p-3 flex flex-col min-h-0 overflow-hidden">
+            <div id="playlist-detail-empty" class="my-auto text-center text-xs text-zinc-500 py-12">
+              Select or create a playlist to view tracks and playback controls.
+            </div>
+            <div id="playlist-detail-content" class="hidden flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div class="flex items-start justify-between gap-2 pb-2.5 border-b border-zinc-800 shrink-0">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <h3 id="pl-detail-title" class="text-sm font-bold truncate text-white">Playlist Title</h3>
+                    <button id="btn-pl-edit-meta" class="text-xs text-zinc-400 hover:text-white" title="Edit Name & Description">✎</button>
+                  </div>
+                  <p id="pl-detail-desc" class="text-xs text-zinc-400 truncate mt-0.5">Description</p>
+                  <span id="pl-detail-count" class="text-[10px] font-mono text-emerald-400">0 track(s)</span>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                  <button id="btn-pl-play" class="ml-btn ml-btn-primary px-3 py-1 text-xs">
+                    ▶ Play
+                  </button>
+                  <button id="btn-pl-shuffle" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-emerald-300">
+                    🎲 Shuffle
+                  </button>
+                  <button id="btn-pl-export" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs" title="Export as M3U / TXT / JSON">
+                    ⤓ Export
+                  </button>
+                  <button id="btn-pl-cache-offline" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs text-sky-400" title="Cache all tracks on device storage">
+                    ↓ Save on Device
+                  </button>
+                  <button id="btn-pl-delete" class="ml-btn ml-btn-danger px-2.5 py-1 text-xs" title="Delete this playlist">
+                    🗑 Delete
+                  </button>
+                </div>
+              </div>
+              <div id="pl-tracks-container" class="flex-1 overflow-y-auto ml-scroll space-y-1.5 pr-1 mt-2.5 min-h-0">
+                <!-- Tracks inside playlist -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Right Column: Pinned Live Download Telemetry + Tabbed Studio Workspace (5 cols) -->
@@ -164,9 +242,15 @@
             <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             Active Download & Lyric Sync
           </span>
-          <div class="flex items-center gap-2 min-w-0">
-            <span id="banner-lyric-status" class="text-[11px] text-zinc-300 font-mono truncate max-w-[180px]">Waiting...</span>
-            <button id="btn-cancel-job" class="ml-btn ml-btn-danger px-2 py-0.5 text-[10px] rounded-md" title="Cancel active download job">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span id="banner-lyric-status" class="text-[11px] text-zinc-300 font-mono truncate max-w-[140px]">Waiting...</span>
+            <button id="btn-pause-job" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] rounded-md" title="Pause / Resume active download job">
+              ⏸ Pause
+            </button>
+            <button id="btn-retry-job" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] rounded-md hidden" title="Retry dropped / failed connection">
+              ↻ Retry
+            </button>
+            <button id="btn-cancel-job" class="ml-btn ml-btn-danger px-2 py-0.5 text-[10px] rounded-md" title="Cancel download job">
               ✕ Cancel
             </button>
           </div>
@@ -243,10 +327,10 @@
           </div>
           <div class="grid grid-cols-2 gap-2 text-xs">
             <select id="dl-single-method" class="bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200">
+              <option value="spotify_match" selected>Source: Spotify Matched</option>
               <option value="auto">Source: Auto (YTM + Smart Fallback)</option>
               <option value="youtube_music">Source: YouTube Music Studio</option>
               <option value="youtube_video">Source: YouTube Video</option>
-              <option value="spotify_match">Source: Spotify Matched</option>
             </select>
             <select id="dl-single-bitrate" class="bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200">
               <option value="320">320 kbps MP3 (Studio CBR)</option>
@@ -300,10 +384,10 @@
           <div class="flex items-center gap-2 text-xs">
             <label class="text-[11px] text-zinc-400 shrink-0">Audio Source:</label>
             <select id="dl-album-method" class="flex-1 bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200">
+              <option value="spotify_match" selected>Spotify Matched (Match Official Album Streams)</option>
               <option value="auto">Auto (YouTube Music Studio Catalog + Smart Fallback)</option>
               <option value="youtube_music">YouTube Music Only (Pure Studio Releases)</option>
               <option value="youtube_video">YouTube Video (Standard / Official Videos)</option>
-              <option value="spotify_match">Spotify Matched (Match Official Album Streams)</option>
             </select>
           </div>
           <div class="flex gap-2">
@@ -337,10 +421,10 @@
               <option value="192">192 kbps MP3 (Compact Mobile)</option>
             </select>
             <select id="ext-method" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5">
+              <option value="spotify_match" selected>Method: Spotify Matched</option>
               <option value="auto">Method: Auto (YTM + Fallback)</option>
               <option value="youtube_music">Method: YouTube Music Only</option>
               <option value="youtube_video">Method: YouTube Video</option>
-              <option value="spotify_match">Method: Spotify Matched</option>
             </select>
           </div>
           <label class="flex items-center gap-2 text-xs cursor-pointer">
@@ -488,10 +572,10 @@
             <div>
               <label class="block text-[10px] text-zinc-400 mb-1">Preferential Audio Source Strategy</label>
               <select id="set-preferred-download-method" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200">
+                <option value="spotify_match" selected>Spotify Matched (Match Official Album Metadata to High-Fidelity Audio)</option>
                 <option value="auto">Auto (YouTube Music Studio Catalog + Smart Topic Fallback)</option>
                 <option value="youtube_music">YouTube Music Only (Pure Official Studio Releases, No Video Skits)</option>
                 <option value="youtube_video">YouTube Video (Official Music Videos & Standard Audio)</option>
-                <option value="spotify_match">Spotify Matched (Match Official Album Metadata to High-Fidelity Audio)</option>
               </select>
             </div>
             <div class="grid grid-cols-2 gap-2">
@@ -562,12 +646,15 @@
 
   <!-- Bottom Persistent Player Bar with Custom Styled Sliders & Randomizer Toggle -->
   <footer class="border-t border-zinc-800/90 bg-zinc-900/95 backdrop-blur-md px-5 py-3 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
-    <div class="flex items-center gap-3 min-w-0 w-full sm:w-64">
-      <img id="np-cover" src="/icon.svg" alt="Cover" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 border border-zinc-700/60 shrink-0 shadow-md" />
-      <div class="min-w-0">
-        <div id="np-title" class="font-semibold text-sm truncate">Not Playing</div>
+    <div class="flex items-center gap-3 min-w-0 w-full sm:w-72">
+      <img id="np-cover" src="/icon.svg" alt="Cover" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 border border-zinc-700/60 shrink-0 shadow-md cursor-pointer hover:opacity-90 transition" title="Click to open Big Player & Synced Lyrics" />
+      <div class="min-w-0 flex-1 cursor-pointer" id="np-text-container" title="Click to open Big Player & Synced Lyrics">
+        <div id="np-title" class="font-semibold text-sm truncate hover:text-emerald-400 transition">Not Playing</div>
         <div id="np-artist" class="text-xs text-zinc-400 truncate">Select a track or album</div>
       </div>
+      <button id="btn-expand-player" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs shrink-0 rounded-lg text-zinc-300 hover:text-white" title="Maximize Big Player & Karaoke Lyrics">
+        ⛶ Big
+      </button>
     </div>
 
     <div class="flex flex-col items-center gap-2 flex-1 max-w-xl w-full">
@@ -708,6 +795,164 @@
         </button>
         <button id="btn-save-apk-server" class="ml-btn ml-btn-primary flex-1 py-2 text-xs">
           Connect APK to Server
+        </button>
+      </div>
+    </div>
+  <!-- Dedicated Maximized Big Player & Large Karaoke Synced Lyrics Modal -->
+  <div id="big-player-modal" class="hidden fixed inset-0 bg-zinc-950/98 z-50 flex flex-col p-4 sm:p-6 backdrop-blur-2xl transition-all duration-200">
+    <!-- Top Bar -->
+    <div class="flex items-center justify-between pb-3 border-b border-zinc-800/80 shrink-0">
+      <div class="flex items-center gap-3">
+        <button id="btn-close-big-player" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 text-zinc-300 hover:text-white">
+          <span>↓</span> <span>Minimize Player</span>
+        </button>
+        <div class="text-xs font-mono text-zinc-400">
+          NOW PLAYING • <span id="big-player-source" class="text-emerald-400 font-semibold">MusicLinker Studio</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="btn-big-player-cache" class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs text-sky-400 rounded-xl" title="Save this track directly on device storage">
+          ↓ Save on Device
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Content: Split Art/Info & Giant Karaoke Synced Lyrics -->
+    <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-0 py-4 overflow-hidden">
+      <!-- Left: Artwork & Details (5 cols) -->
+      <div class="lg:col-span-5 flex flex-col items-center justify-center text-center p-2 min-h-0">
+        <div class="relative group max-w-xs sm:max-w-sm w-full aspect-square mb-4">
+          <img id="big-cover" src="/icon.svg" alt="Album Art" class="w-full h-full object-cover rounded-3xl shadow-2xl border border-zinc-700/60 ring-2 ring-emerald-500/20" />
+          <div id="big-offline-badge" class="hidden absolute top-3 right-3 bg-emerald-500/90 text-zinc-950 font-bold text-xs px-2.5 py-1 rounded-full shadow">
+            💾 On Device
+          </div>
+        </div>
+        <div class="max-w-md w-full px-2">
+          <h2 id="big-title" class="text-xl sm:text-2xl lg:text-3xl font-extrabold text-white truncate">Not Playing</h2>
+          <p id="big-artist" class="text-sm sm:text-base text-emerald-400 font-medium truncate mt-1">Select a track</p>
+          <p id="big-album" class="text-xs sm:text-sm text-zinc-400 truncate mt-0.5">—</p>
+          <div class="flex items-center justify-center gap-2 mt-3 flex-wrap">
+            <span id="big-meta-year" class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-300"></span>
+            <span id="big-meta-bitrate" class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-300">320 kbps</span>
+            <span id="big-meta-sync" class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-emerald-400">Synced LRC</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Giant Synced Lyrics (7 cols) -->
+      <div class="lg:col-span-7 bg-zinc-950/70 border border-zinc-800/80 rounded-3xl p-5 flex flex-col min-h-0 overflow-hidden relative shadow-inner">
+        <div class="flex items-center justify-between pb-2.5 border-b border-zinc-800/60 shrink-0">
+          <span class="text-xs font-semibold uppercase tracking-wider text-zinc-400">🎤 Synchronized Lyrics (Karaoke)</span>
+          <span id="big-lyrics-status" class="text-[11px] font-mono text-zinc-400">Checking...</span>
+        </div>
+        <div id="big-lyrics-container" class="flex-1 overflow-y-auto ml-scroll space-y-4 py-8 text-center scroll-smooth min-h-0">
+          <p class="text-zinc-600 text-sm">No synchronized lyrics loaded.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Giant Controls & Seek Slider -->
+    <div class="pt-3 border-t border-zinc-800/80 flex flex-col items-center gap-2.5 shrink-0 max-w-2xl mx-auto w-full">
+      <div class="flex items-center gap-3 w-full">
+        <span id="big-time-current" class="text-xs font-mono text-zinc-400 w-12 text-right">0:00</span>
+        <input id="big-seek-bar" type="range" min="0" max="1000" value="0" class="ml-slider flex-1 h-2.5" />
+        <span id="big-time-total" class="text-xs font-mono text-zinc-400 w-12 text-left">0:00</span>
+      </div>
+
+      <div class="flex items-center justify-center gap-6 w-full">
+        <button id="btn-big-shuffle" class="ml-btn ml-btn-secondary p-3 rounded-full text-base text-zinc-400 hover:text-white" title="Toggle Shuffle">
+          🔀
+        </button>
+        <button id="btn-big-prev" class="ml-btn ml-btn-secondary p-3.5 rounded-full text-xl" title="Previous Track">
+          ⏮
+        </button>
+        <button id="btn-big-play" class="ml-btn ml-btn-primary p-5 rounded-full text-2xl shadow-xl hover:scale-105 transition transform" title="Play / Pause">
+          ▶
+        </button>
+        <button id="btn-big-next" class="ml-btn ml-btn-secondary p-3.5 rounded-full text-xl" title="Next Track">
+          ⏭
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export Tracklist / Queue Modal -->
+  <div id="export-list-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <h3 class="font-bold text-base text-white">⤓ Export Tracklist / Queue</h3>
+        <button onclick="document.getElementById('export-list-modal').classList.add('hidden')" class="text-zinc-400 hover:text-white text-sm">✕</button>
+      </div>
+      <p class="text-xs text-zinc-400">
+        Export tracks from your selection, playlist or queue to download as MP3/M3U playlist or JSON settings/queue:
+      </p>
+
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-semibold text-zinc-300 mb-1">Target Source</label>
+          <select id="export-source-select" class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-zinc-200">
+            <option value="funnel">Current 3-Layer Selection</option>
+            <option value="playlist">Active Custom Playlist</option>
+            <option value="library">Full Library Tracklist</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-zinc-300 mb-1">Export Format</label>
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" id="btn-fmt-m3u" class="export-fmt-btn border border-emerald-500 bg-emerald-500/10 text-emerald-300 rounded-xl p-2.5 text-center text-xs font-bold">
+              .M3U<br/><span class="text-[10px] font-normal text-zinc-400">Audio Playlist</span>
+            </button>
+            <button type="button" id="btn-fmt-txt" class="export-fmt-btn border border-zinc-700 bg-zinc-950 text-zinc-300 rounded-xl p-2.5 text-center text-xs font-bold">
+              .TXT<br/><span class="text-[10px] font-normal text-zinc-400">Artist - Title</span>
+            </button>
+            <button type="button" id="btn-fmt-json" class="export-fmt-btn border border-zinc-700 bg-zinc-950 text-zinc-300 rounded-xl p-2.5 text-center text-xs font-bold">
+              .JSON<br/><span class="text-[10px] font-normal text-zinc-400">Full Metadata</span>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-zinc-300 mb-1">File Name</label>
+          <input id="export-filename-input" type="text" value="musiclinker_tracks" class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-zinc-200 font-mono" />
+        </div>
+      </div>
+
+      <div class="flex gap-2 pt-2">
+        <button onclick="document.getElementById('export-list-modal').classList.add('hidden')" class="ml-btn ml-btn-secondary flex-1 py-2 text-xs">
+          Cancel
+        </button>
+        <button id="btn-do-export-download" class="ml-btn ml-btn-primary flex-1 py-2 text-xs font-bold">
+          Download Export File
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create / Edit Playlist Modal -->
+  <div id="playlist-edit-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <h3 id="playlist-modal-heading" class="font-bold text-base text-white">Create New Playlist</h3>
+        <button onclick="document.getElementById('playlist-edit-modal').classList.add('hidden')" class="text-zinc-400 hover:text-white text-sm">✕</button>
+      </div>
+      <input id="playlist-edit-id" type="hidden" />
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-zinc-400 mb-1">Playlist Name</label>
+          <input id="playlist-input-name" type="text" placeholder="e.g. Synthwave Night Drive" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-200" />
+        </div>
+        <div>
+          <label class="block text-zinc-400 mb-1">Description (Optional)</label>
+          <textarea id="playlist-input-desc" rows="2" placeholder="Notes, mood or genre details..." class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200"></textarea>
+        </div>
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button onclick="document.getElementById('playlist-edit-modal').classList.add('hidden')" class="ml-btn ml-btn-secondary flex-1 py-2 text-xs">
+          Cancel
+        </button>
+        <button id="btn-save-playlist-submit" class="ml-btn ml-btn-primary flex-1 py-2 text-xs font-bold">
+          Save Playlist
         </button>
       </div>
     </div>

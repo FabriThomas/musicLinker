@@ -28,6 +28,8 @@ from musiclinker.domain.models import (
     ExtractionJobRequest,
     JobStatus,
     LLMCurationApplyPayload,
+    PlaylistCreatePayload,
+    PlaylistUpdatePayload,
     ScrobblePayload,
     SettingsUpdatePayload,
     TrackMetadataUpdatePayload,
@@ -370,6 +372,57 @@ def create_app() -> FastAPI:
         resolved = library_service.resolve_next_transition(track_id)
         return {"transition": resolved}
 
+    # ---- Customizable Playlists ----
+
+    @app.get("/api/playlists", dependencies=[Depends(require_paired_client)])
+    async def get_playlists() -> dict[str, Any]:
+        return {"playlists": db_repo.list_playlists()}
+
+    @app.post("/api/playlists", dependencies=[Depends(require_paired_client)])
+    async def create_new_playlist(payload: PlaylistCreatePayload) -> dict[str, Any]:
+        try:
+            return db_repo.create_playlist(
+                name=payload.name,
+                description=payload.description,
+                track_ids=payload.track_ids,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/playlists/{playlist_id}", dependencies=[Depends(require_paired_client)])
+    async def get_playlist_details(playlist_id: int) -> dict[str, Any]:
+        pl = db_repo.get_playlist(playlist_id)
+        if not pl:
+            raise HTTPException(status_code=404, detail="Playlist not found.")
+        return pl
+
+    @app.put("/api/playlists/{playlist_id}", dependencies=[Depends(require_paired_client)])
+    async def update_playlist_details(playlist_id: int, payload: PlaylistUpdatePayload) -> dict[str, Any]:
+        try:
+            return db_repo.update_playlist(
+                playlist_id=playlist_id,
+                name=payload.name,
+                description=payload.description,
+                track_ids=payload.track_ids,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/playlists/{playlist_id}", dependencies=[Depends(require_paired_client)])
+    async def delete_playlist_by_id(playlist_id: int) -> dict[str, str]:
+        db_repo.delete_playlist(playlist_id)
+        return {"status": "deleted"}
+
+    @app.post("/api/playlists/{playlist_id}/tracks", dependencies=[Depends(require_paired_client)])
+    async def add_tracks_to_playlist_route(playlist_id: int, payload: dict[str, list[int]]) -> dict[str, Any]:
+        track_ids = payload.get("track_ids", [])
+        return db_repo.add_tracks_to_playlist(playlist_id, track_ids)
+
+    @app.delete("/api/playlists/{playlist_id}/tracks/{track_id}", dependencies=[Depends(require_paired_client)])
+    async def remove_track_from_playlist_route(playlist_id: int, track_id: int) -> dict[str, Any]:
+        db_repo.remove_track_from_playlist(playlist_id, track_id)
+        return db_repo.get_playlist(playlist_id) or {"status": "removed"}
+
     # ---- YouTube / Spotify / Direct Link Search, Last.fm Extraction & Full Album Download Jobs ----
 
     @app.get("/api/youtube/search", dependencies=[Depends(require_paired_client)])
@@ -417,6 +470,24 @@ def create_app() -> FastAPI:
         if not job_service.cancel_job(job_id):
             raise HTTPException(status_code=404, detail="Job not found.")
         return {"status": "cancelling"}
+
+    @app.post("/api/jobs/{job_id}/pause", dependencies=[Depends(require_paired_client)])
+    async def pause_job(job_id: str) -> dict[str, Any]:
+        if not job_service.pause_job(job_id):
+            raise HTTPException(status_code=400, detail="Job cannot be paused.")
+        return {"status": "paused"}
+
+    @app.post("/api/jobs/{job_id}/resume", dependencies=[Depends(require_paired_client)])
+    async def resume_job(job_id: str) -> dict[str, Any]:
+        if not job_service.resume_job(job_id):
+            raise HTTPException(status_code=400, detail="Job cannot be resumed.")
+        return {"status": "resumed"}
+
+    @app.post("/api/jobs/{job_id}/retry", dependencies=[Depends(require_paired_client)])
+    async def retry_job(job_id: str) -> dict[str, Any]:
+        if not job_service.retry_job(job_id):
+            raise HTTPException(status_code=400, detail="Job cannot be retried.")
+        return {"status": "requeued"}
 
     @app.get("/api/jobs/{job_id}/events", dependencies=[Depends(require_paired_client)])
     async def stream_job_events(job_id: str) -> StreamingResponse:
