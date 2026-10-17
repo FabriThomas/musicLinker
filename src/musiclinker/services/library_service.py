@@ -699,7 +699,7 @@ class LibraryService:
 
             # 4. Tag the new MP3 with all track metadata and preserved original cover art
             artists_list = [a.strip() for a in track.artist_display.split(",") if a.strip()] or [track.artist_display]
-            audio_tagger.tag_mp3(
+            calc_dur, calc_bitrate = audio_tagger.write_id3v24_tags(
                 mp3_path=final_mp3_path,
                 title=track.title,
                 artists=artists_list,
@@ -711,7 +711,15 @@ class LibraryService:
                 cover_bytes=existing_cover,
             )
 
-            new_duration = int(info.get("duration") or 0)
+            target_lrc = target_mp3.with_suffix(".lrc")
+            final_lrc = final_mp3_path.with_suffix(".lrc")
+            if target_lrc.exists() and final_mp3_path != target_mp3:
+                try:
+                    shutil.copy2(target_lrc, final_lrc)
+                except Exception:
+                    pass
+
+            new_duration = int(info.get("duration") or 0) or calc_dur
             if not new_duration:
                 from mutagen.mp3 import MP3
                 try:
@@ -723,7 +731,7 @@ class LibraryService:
             updated_track = self.repo.update_track_audio_info(
                 track_id=track_id,
                 duration=new_duration,
-                bitrate_kbps=bitrate_kbps,
+                bitrate_kbps=bitrate_kbps or calc_bitrate,
                 file_path=str(final_mp3_path) if final_mp3_path != target_mp3 else None,
             )
 
@@ -906,6 +914,8 @@ class LibraryService:
         canonical_track_id_for_cover: int | None = None,
         canonical_year: str = "",
         canonical_album_artist: str = "",
+        custom_cover_b64: str | None = None,
+        custom_cover_url: str | None = None,
     ) -> dict[str, Any]:
         """
         Unify and synchronize all tracks in an album with the chosen canonical cover, year, and album artist.
@@ -920,7 +930,24 @@ class LibraryService:
 
         master_cover_bytes = None
         master_cover_mime = "image/jpeg"
-        if canonical_track_id_for_cover:
+        if custom_cover_b64:
+            import base64
+            try:
+                raw_b64 = custom_cover_b64.split(",")[-1] if "," in custom_cover_b64 else custom_cover_b64
+                master_cover_bytes = base64.b64decode(raw_b64)
+                master_cover_mime = "image/png" if "image/png" in custom_cover_b64 else "image/jpeg"
+            except Exception as exc:
+                logger.warning("Failed decoding custom cover base64: %s", exc)
+        elif custom_cover_url:
+            try:
+                from musiclinker.infrastructure.spotify_client import spotify_client
+                c_bytes, c_mime = spotify_client.fetch_cover_bytes(custom_cover_url)
+                if c_bytes:
+                    master_cover_bytes = c_bytes
+                    master_cover_mime = c_mime
+            except Exception as exc:
+                logger.warning("Failed downloading custom cover URL: %s", exc)
+        elif canonical_track_id_for_cover:
             master_track = self.repo.get_track(canonical_track_id_for_cover)
             if master_track and Path(master_track.file_path).exists():
                 c_bytes, c_mime = audio_tagger.extract_cover_bytes(Path(master_track.file_path))

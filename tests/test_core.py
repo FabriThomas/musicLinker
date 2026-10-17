@@ -1065,3 +1065,57 @@ def test_v313_auto_fix_and_album_inconsistencies_and_swap_status(tmp_path):
     assert updated_t1.release_year == "2021"
     assert updated_t2.release_year == "2021"
 
+    # Test custom cover base64 resolution
+    import base64
+    from unittest.mock import patch
+    fake_b64 = "data:image/jpeg;base64," + base64.b64encode(b"FAKE_ALBUM_COVER_BYTES").decode("ascii")
+    with patch("musiclinker.infrastructure.tagger.audio_tagger.set_mp3_cover") as mock_set_cov:
+        res_cov = client.post("/api/albums/resolve-inconsistency", json={
+            "album": "Inconsistent Album",
+            "artist": "Conflict Band",
+            "canonical_year": "2021",
+            "custom_cover_b64": fake_b64,
+        })
+        assert res_cov.status_code == 200
+        assert mock_set_cov.call_count >= 1
+        called_bytes = mock_set_cov.call_args[0][1]
+        assert called_bytes == b"FAKE_ALBUM_COVER_BYTES"
+
+
+def test_replace_track_audio_complete_flow(tmp_path):
+    from unittest.mock import patch
+    from musiclinker.infrastructure.db import db_repo
+    from musiclinker.services.library_service import library_service
+
+    orig_mp3 = tmp_path / "orig_song.mp3"
+    orig_mp3.write_bytes(b"ORIGINAL_AUDIO_CONTENT")
+    staged_mp3 = tmp_path / "staged_new.mp3"
+    staged_mp3.write_bytes(b"NEW_REPLACED_AUDIO_CONTENT")
+
+    t = db_repo.upsert_track(
+        track_hash="hash_swap_test_1",
+        title="Swap Test Song",
+        artist_display="Swap Artist",
+        artists=["Swap Artist"],
+        album="Swap Album",
+        album_artist="Swap Artist",
+        track_number=1,
+        duration=120,
+        file_path=str(orig_mp3),
+        bitrate_kbps=192,
+    )
+
+    with patch("musiclinker.infrastructure.youtube_client.youtube_client.download_mp3_to_staging") as mock_dl, \
+         patch("musiclinker.infrastructure.tagger.audio_tagger.write_id3v24_tags") as mock_write_tags:
+        mock_dl.return_value = (staged_mp3, {"duration": 215, "title": "New Version"}, "")
+        mock_write_tags.return_value = (215, 320)
+
+        updated = library_service.replace_track_audio(t.id, "https://youtube.com/watch?v=mockswap", bitrate_kbps=320)
+
+        assert updated.duration == 215
+        assert updated.bitrate_kbps == 320
+        # Verify original file was replaced with staged content
+        assert orig_mp3.exists()
+        assert orig_mp3.read_bytes() == b"NEW_REPLACED_AUDIO_CONTENT"
+
+

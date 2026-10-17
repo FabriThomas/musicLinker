@@ -49,7 +49,12 @@ class AudioTagger:
         try:
             try:
                 tags = ID3(str(mp3_path))
-            except ID3NoHeaderError:
+            except Exception:
+                try:
+                    from mutagen.id3 import delete
+                    delete(str(mp3_path))
+                except Exception:
+                    pass
                 tags = ID3()
 
             tags.delall("TIT2")
@@ -120,6 +125,8 @@ class AudioTagger:
         except Exception as exc:
             raise TaggingError(f"Failed to write ID3v2.4 tags to {mp3_path.name}: {exc}") from exc
 
+    tag_mp3 = write_id3v24_tags
+
     def update_existing_mp3_tags(
         self,
         mp3_path: Path,
@@ -135,7 +142,12 @@ class AudioTagger:
         try:
             try:
                 tags = ID3(str(mp3_path))
-            except ID3NoHeaderError:
+            except Exception:
+                try:
+                    from mutagen.id3 import delete
+                    delete(str(mp3_path))
+                except Exception:
+                    pass
                 tags = ID3()
 
             tags.delall("TIT2")
@@ -162,7 +174,15 @@ class AudioTagger:
                 tags.delall("TDOR")
                 tags.add(TDOR(encoding=3, text=[str(original_year)]))
 
-            tags.save(str(mp3_path), v2_version=4)
+            try:
+                tags.save(str(mp3_path), v2_version=4)
+            except Exception:
+                try:
+                    from mutagen.id3 import delete
+                    delete(str(mp3_path))
+                    tags.save(str(mp3_path), v2_version=4)
+                except Exception:
+                    pass
         except Exception as exc:
             raise TaggingError(f"Failed updating ID3 tags on {mp3_path.name}: {exc}") from exc
 
@@ -172,11 +192,24 @@ class AudioTagger:
             try:
                 tags = ID3(str(mp3_path))
             except Exception:
+                try:
+                    from mutagen.id3 import delete
+                    delete(str(mp3_path))
+                except Exception:
+                    pass
                 tags = ID3()
             tags.delall("USLT")
             if lyrics_text.strip():
                 tags.add(USLT(encoding=3, lang="eng", desc="SyncedLyrics", text=lyrics_text))
-            tags.save(str(mp3_path), v2_version=4)
+            try:
+                tags.save(str(mp3_path), v2_version=4)
+            except Exception:
+                try:
+                    from mutagen.id3 import delete
+                    delete(str(mp3_path))
+                    tags.save(str(mp3_path), v2_version=4)
+                except Exception:
+                    pass
         except Exception as exc:
             raise TaggingError(f"Failed updating lyrics on {mp3_path.name}: {exc}") from exc
 
@@ -185,7 +218,12 @@ class AudioTagger:
         try:
             try:
                 tags = ID3(str(mp3_path))
-            except ID3NoHeaderError:
+            except Exception:
+                try:
+                    from mutagen.id3 import delete
+                    delete(str(mp3_path))
+                except Exception:
+                    pass
                 tags = ID3()
             tags.delall("APIC")
             tags.add(
@@ -197,7 +235,15 @@ class AudioTagger:
                     data=cover_bytes,
                 )
             )
-            tags.save(str(mp3_path), v2_version=4)
+            try:
+                tags.save(str(mp3_path), v2_version=4)
+            except Exception:
+                try:
+                    from mutagen.id3 import delete
+                    delete(str(mp3_path))
+                    tags.save(str(mp3_path), v2_version=4)
+                except Exception:
+                    pass
         except Exception as exc:
             raise TaggingError(f"Failed updating cover art on {mp3_path.name}: {exc}") from exc
 

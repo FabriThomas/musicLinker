@@ -317,12 +317,17 @@ export class AudioEngine {
       this.audio.src = offlineBlobUrl;
     } else {
       this.audio.crossOrigin = "anonymous";
-      const baseStreamUrl = apiClient.resolveUrl(track.stream_url);
+      let fullUrl = apiClient.resolveUrl(track.stream_url);
+      if (!fullUrl.includes("v=")) {
+        const sep1 = fullUrl.includes("?") ? "&" : "?";
+        fullUrl = `${fullUrl}${sep1}v=${Date.now()}`;
+      }
       const pairToken = apiClient.getPairToken();
-      const sep = baseStreamUrl.includes("?") ? "&" : "?";
-      this.audio.src = pairToken
-        ? `${baseStreamUrl}${sep}pair_token=${encodeURIComponent(pairToken)}`
-        : baseStreamUrl;
+      if (pairToken) {
+        const sep2 = fullUrl.includes("?") ? "&" : "?";
+        fullUrl = `${fullUrl}${sep2}pair_token=${encodeURIComponent(pairToken)}`;
+      }
+      this.audio.src = fullUrl;
     }
 
     await this.audio.play();

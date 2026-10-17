@@ -71,7 +71,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="3.1.4",
+        version="3.1.5",
         lifespan=lifespan,
     )
 
@@ -241,6 +241,8 @@ def create_app() -> FastAPI:
                 canonical_track_id_for_cover=payload.canonical_track_id_for_cover,
                 canonical_year=payload.canonical_year,
                 canonical_album_artist=payload.canonical_album_artist,
+                custom_cover_b64=payload.custom_cover_b64,
+                custom_cover_url=payload.custom_cover_url,
             )
         except Exception as exc:
             logger.error("Failed to resolve album inconsistency for '%s': %s", payload.album, exc)
@@ -396,7 +398,11 @@ def create_app() -> FastAPI:
             return FileResponse(
                 path=str(file_path),
                 media_type="audio/mpeg",
-                headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)},
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(file_size),
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                },
             )
 
         try:
@@ -426,7 +432,7 @@ def create_app() -> FastAPI:
             "Content-Range": f"bytes {start}-{end}/{file_size}",
             "Accept-Ranges": "bytes",
             "Content-Length": str(chunk_length),
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
         }
         return StreamingResponse(
             _file_iterator(file_path, start, chunk_length),
@@ -444,17 +450,26 @@ def create_app() -> FastAPI:
             path=track.file_path,
             media_type="audio/mpeg",
             filename=Path(track.file_path).name,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
     @app.get("/api/tracks/{track_id}/cover")
-    async def get_track_cover(track_id: int) -> Response:
+    async def get_track_cover(track_id: int, request: Request) -> Response:
         track = db_repo.get_track(track_id)
         if not track or not Path(track.file_path).exists():
             raise HTTPException(status_code=404, detail="Track not found.")
         cover_bytes, mime = audio_tagger.extract_cover_bytes(Path(track.file_path))
         if not cover_bytes:
             raise HTTPException(status_code=404, detail="No embedded cover art.")
-        return Response(content=cover_bytes, media_type=mime, headers={"Cache-Control": "public, max-age=86400"})
+        etag = f'"{hashlib.md5(cover_bytes).hexdigest()}"'
+        if_none_match = request.headers.get("if-none-match")
+        if if_none_match and if_none_match == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"})
+        return Response(
+            content=cover_bytes,
+            media_type=mime,
+            headers={"Cache-Control": "no-cache, must-revalidate", "ETag": etag},
+        )
 
     @app.get("/api/tracks/{track_id}/lyrics", dependencies=[Depends(require_paired_client)])
     def get_track_lyrics(track_id: int) -> dict[str, Any]:

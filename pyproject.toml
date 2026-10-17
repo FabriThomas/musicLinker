@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "musiclinker"
-version = "3.1.4"
+version = "3.1.5"
 
 
 description = "Offline-first Last.fm extractor, full album downloader, ID3v2.4 multi-artist tagger, LLM curator, and Windows/Android APK personal music ecosystem"

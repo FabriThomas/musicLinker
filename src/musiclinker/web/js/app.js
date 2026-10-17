@@ -3263,8 +3263,23 @@ class MusicLinkerController {
       const curIdx = this.tracks.findIndex((t) => t.id === trackId);
       if (curIdx !== -1) this.tracks[curIdx] = updatedTrack;
 
+      // Update playQueue if this track is in the queue
+      const qIdx = this.playQueue.findIndex((t) => t.id === trackId);
+      if (qIdx !== -1) this.playQueue[qIdx] = updatedTrack;
+
+      // Update audio engine currentTrack reference
+      if (this.engine.currentTrack?.id === trackId) {
+        this.engine.currentTrack = updatedTrack;
+      }
+
+      // If stored offline, refresh offline storage with new audio
+      if (this.offlineIds.has(trackId)) {
+        await offlineStore.removeOfflineTrack(trackId).catch(() => {});
+        await offlineStore.saveTrackForOffline(updatedTrack, api).catch(() => {});
+        await this.refreshOfflineState();
+      }
+
       if (wasCurrentPlaying) {
-        this.playQueue[this.currentIndex] = updatedTrack;
         this.updateNowPlayingBar(updatedTrack);
         await this.playByIndex(this.currentIndex);
       }
@@ -3361,6 +3376,9 @@ class MusicLinkerController {
       return;
     }
     this.activeInconsistencyIdx = 0;
+    this.selectedCanonicalCoverTrackId = null;
+    this.selectedCanonicalYear = null;
+    this.selectedCustomCoverB64 = null;
     const modal = document.getElementById("album-inconsistency-modal");
     if (modal) modal.classList.remove("hidden");
     this.renderInconsistencyView();
@@ -3389,42 +3407,85 @@ class MusicLinkerController {
       navEl.querySelectorAll("[data-inconsistency-idx]").forEach((btn) => {
         btn.addEventListener("click", () => {
           this.activeInconsistencyIdx = Number(btn.dataset.inconsistencyIdx);
+          this.selectedCanonicalCoverTrackId = null;
+          this.selectedCanonicalYear = null;
+          this.selectedCustomCoverB64 = null;
           this.renderInconsistencyView();
         });
       });
     }
 
     const validCovers = (item.distinct_covers || []).filter((c) => c.has_cover);
-    this.selectedCanonicalCoverTrackId = validCovers.length > 0 ? validCovers[0].track_id : null;
-    this.selectedCanonicalYear = (item.years || [])[0] || "";
+    if (this.selectedCanonicalCoverTrackId === null || this.selectedCanonicalCoverTrackId === undefined) {
+      this.selectedCanonicalCoverTrackId = validCovers.length > 0 ? validCovers[0].track_id : null;
+    }
+    if (this.selectedCanonicalYear === null || this.selectedCanonicalYear === undefined) {
+      this.selectedCanonicalYear = (item.years || [])[0] || "";
+    }
 
     const coversEl = document.getElementById("inconsistency-covers-list");
     if (coversEl) {
-      if (!item.distinct_covers || !item.distinct_covers.length) {
-        coversEl.innerHTML = `<div class="text-xs text-zinc-500">No cover art detected across these tracks.</div>`;
-      } else {
-        coversEl.innerHTML = item.distinct_covers
-          .map((c) => {
-            const isSelected = this.selectedCanonicalCoverTrackId === c.track_id;
-            const borderCls = isSelected
-              ? "ring-2 ring-emerald-500 border-emerald-500 bg-emerald-500/10"
-              : "border-zinc-800 bg-zinc-950 hover:border-zinc-700";
-            return `
-              <div class="inconsistency-cover-card p-2.5 rounded-2xl border ${borderCls} cursor-pointer transition flex flex-col items-center text-center" data-cover-track-id="${c.track_id}">
-                <img src="${api.resolveUrl(c.cover_url)}" alt="" class="w-20 h-20 sm:w-24 sm:h-24 object-cover rounded-xl shadow-md border border-zinc-700/60 mb-2" onerror="this.onerror=null; this.src='/icon.svg';" />
-                <span class="text-[11px] font-semibold text-zinc-200 truncate w-full">${c.has_cover ? `${c.track_count} track(s)` : "Missing Cover"}</span>
-                <span class="text-[10px] text-zinc-500 font-mono">${c.has_cover ? "Embedded Cover" : "No art"}</span>
-                <span class="mt-1 text-[10px] px-2 py-0.5 rounded-full ${isSelected ? 'bg-emerald-500 text-zinc-950 font-bold' : 'bg-zinc-800 text-zinc-400'}">${isSelected ? 'Canonical Choice' : 'Select'}</span>
-              </div>
-            `;
-          })
-          .join("");
+      const distinctCards = (item.distinct_covers || []).map((c) => {
+        const isSelected = !this.selectedCustomCoverB64 && this.selectedCanonicalCoverTrackId === c.track_id;
+        const borderCls = isSelected
+          ? "ring-2 ring-emerald-500 border-emerald-500 bg-emerald-500/10"
+          : "border-zinc-800 bg-zinc-950 hover:border-zinc-700";
+        return `
+          <div class="inconsistency-cover-card p-2.5 rounded-2xl border ${borderCls} cursor-pointer transition flex flex-col items-center text-center" data-cover-track-id="${c.track_id}">
+            <img src="${api.resolveUrl(c.cover_url)}" alt="" class="w-20 h-20 sm:w-24 sm:h-24 object-cover rounded-xl shadow-md border border-zinc-700/60 mb-2" onerror="this.onerror=null; this.src='/icon.svg';" />
+            <span class="text-[11px] font-semibold text-zinc-200 truncate w-full">${c.has_cover ? `${c.track_count} track(s)` : "Missing Cover"}</span>
+            <span class="text-[10px] text-zinc-500 font-mono">${c.has_cover ? "Embedded Cover" : "No art"}</span>
+            <span class="mt-1 text-[10px] px-2 py-0.5 rounded-full ${isSelected ? 'bg-emerald-500 text-zinc-950 font-bold' : 'bg-zinc-800 text-zinc-400'}">${isSelected ? 'Canonical Choice' : 'Select'}</span>
+          </div>
+        `;
+      }).join("");
 
-        coversEl.querySelectorAll("[data-cover-track-id]").forEach((card) => {
-          card.addEventListener("click", () => {
-            this.selectedCanonicalCoverTrackId = Number(card.dataset.coverTrackId);
+      const isCustomSelected = Boolean(this.selectedCustomCoverB64);
+      const customBorderCls = isCustomSelected
+        ? "ring-2 ring-emerald-500 border-emerald-500 bg-emerald-500/10"
+        : "border-dashed border-zinc-700 bg-zinc-950/60 hover:border-emerald-500/60";
+
+      const customCard = `
+        <div id="inconsistency-custom-cover-card" class="inconsistency-cover-card p-2.5 rounded-2xl border ${customBorderCls} cursor-pointer transition flex flex-col items-center text-center justify-between min-w-[100px]">
+          <input type="file" id="inconsistency-custom-file-input" accept="image/*" class="hidden" />
+          ${
+            this.selectedCustomCoverB64
+              ? `<img src="${this.selectedCustomCoverB64}" class="w-20 h-20 sm:w-24 sm:h-24 object-cover rounded-xl shadow-md border border-emerald-500/60 mb-2" />`
+              : `<div class="w-20 h-20 sm:w-24 sm:h-24 rounded-xl border border-zinc-800 bg-zinc-900/80 flex flex-col items-center justify-center text-zinc-400 mb-2">
+                   <svg class="w-6 h-6 stroke-current fill-none mb-1 text-emerald-400" viewBox="0 0 24 24" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                   <span class="text-[9px] font-semibold">Custom File</span>
+                 </div>`
+          }
+          <span class="text-[11px] font-semibold text-zinc-200 truncate w-full">${isCustomSelected ? "Custom Image" : "Upload Image"}</span>
+          <span class="text-[10px] text-zinc-500 font-mono">PNG / JPEG</span>
+          <span class="mt-1 text-[10px] px-2 py-0.5 rounded-full ${isCustomSelected ? 'bg-emerald-500 text-zinc-950 font-bold' : 'bg-zinc-800 text-zinc-400'}">${isCustomSelected ? 'Canonical Choice' : 'Upload'}</span>
+        </div>
+      `;
+
+      coversEl.innerHTML = distinctCards + customCard;
+
+      coversEl.querySelectorAll("[data-cover-track-id]").forEach((card) => {
+        card.addEventListener("click", () => {
+          this.selectedCustomCoverB64 = null;
+          this.selectedCanonicalCoverTrackId = Number(card.dataset.coverTrackId);
+          this.renderInconsistencyView();
+        });
+      });
+
+      const customCardEl = document.getElementById("inconsistency-custom-cover-card");
+      const customFileInput = document.getElementById("inconsistency-custom-file-input");
+      if (customCardEl && customFileInput) {
+        customCardEl.addEventListener("click", () => customFileInput.click());
+        customFileInput.addEventListener("change", (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (re) => {
+            this.selectedCustomCoverB64 = re.target.result;
+            this.selectedCanonicalCoverTrackId = "custom";
             this.renderInconsistencyView();
-          });
+          };
+          reader.readAsDataURL(file);
         });
       }
     }
@@ -3434,9 +3495,9 @@ class MusicLinkerController {
       const yearOpts = item.years && item.years.length ? item.years : ["Unknown"];
       yearsEl.innerHTML = yearOpts
         .map((yr) => {
-          const isSelected = this.selectedCanonicalYear === yr;
+          const isSelected = String(this.selectedCanonicalYear) === String(yr);
           const cls = isSelected
-            ? "bg-emerald-500 text-zinc-950 font-bold shadow-md"
+            ? "bg-emerald-500 text-zinc-950 font-bold shadow-md ring-2 ring-emerald-400"
             : "bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800";
           return `
             <button class="px-3.5 py-1.5 rounded-xl text-xs font-mono transition cursor-pointer ${cls}" data-year-val="${this.escapeAttr(yr)}">
@@ -3493,20 +3554,44 @@ class MusicLinkerController {
     }
 
     try {
-      const res = await api.resolveAlbumInconsistency({
+      const payload = {
         album: item.album,
         artist: item.artist,
-        canonical_track_id_for_cover: this.selectedCanonicalCoverTrackId,
         canonical_year: this.selectedCanonicalYear,
         canonical_album_artist: canonicalArtist,
-      });
+      };
+      if (this.selectedCustomCoverB64) {
+        payload.custom_cover_b64 = this.selectedCustomCoverB64;
+      } else if (this.selectedCanonicalCoverTrackId && this.selectedCanonicalCoverTrackId !== "custom") {
+        payload.canonical_track_id_for_cover = Number(this.selectedCanonicalCoverTrackId);
+      }
+
+      const res = await api.resolveAlbumInconsistency(payload);
 
       this.showToast(res.message || `Album "${item.album}" unified successfully!`);
       document.getElementById("album-inconsistency-modal")?.classList.add("hidden");
 
+      // Invalidate and bust memory track caches immediately
+      const now = Date.now();
+      const albumLower = (item.album || "").trim().toLowerCase();
+      this.allTracks.forEach((t) => {
+        if ((t.album || "").trim().toLowerCase() === albumLower) {
+          t.cover_url = `/api/tracks/${t.id}/cover?v=${now}`;
+          if (this.selectedCanonicalYear) t.release_year = this.selectedCanonicalYear;
+          if (canonicalArtist) t.album_artist = canonicalArtist;
+        }
+      });
+      this.tracks.forEach((t) => {
+        if ((t.album || "").trim().toLowerCase() === albumLower) {
+          t.cover_url = `/api/tracks/${t.id}/cover?v=${now}`;
+          if (this.selectedCanonicalYear) t.release_year = this.selectedCanonicalYear;
+          if (canonicalArtist) t.album_artist = canonicalArtist;
+        }
+      });
+
       await this.checkAlbumInconsistencies();
       await this.loadAlbums();
-      await this.loadLibrary("", true);
+      this.renderTrackList();
     } catch (err) {
       this.showToast(`Failed unifying album: ${err.message}`, "error");
     } finally {
