@@ -157,6 +157,26 @@ class MusicLinkerAPI {
     });
   }
 
+  async getSwapStatus(trackId) {
+    return this.request(`/api/tracks/${trackId}/swap-status`);
+  }
+
+  async autoFixDatabase() {
+    return this.request("/api/library/auto-fix", { method: "POST" });
+  }
+
+  async getAlbumInconsistencies() {
+    return this.request("/api/albums/inconsistencies");
+  }
+
+  async resolveAlbumInconsistency(payload) {
+    return this.request("/api/albums/resolve-inconsistency", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+
   // ---- Last.fm Imbued Scrobbler Methods ----
 
   async startLastFmAuth() {

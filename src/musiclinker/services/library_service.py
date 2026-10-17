@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import random
 import re
+import threading
 from typing import Any
 
 from musiclinker.core.logging_config import logger
@@ -34,6 +35,12 @@ class LibraryService:
 
     def __init__(self, repo: DatabaseRepository = db_repo) -> None:
         self.repo = repo
+        self._active_swaps: dict[int, dict[str, Any]] = {}
+        self._swap_lock = threading.Lock()
+
+    def get_swap_status(self, track_id: int) -> dict[str, Any]:
+        with self._swap_lock:
+            return dict(self._active_swaps.get(track_id, {"status": "idle", "progress": 0.0, "message": "No active replacement"}))
 
     def scan_and_sync_downloads(self) -> dict[str, int]:
         pruned = self.repo.remove_missing_files()
@@ -604,87 +611,375 @@ class LibraryService:
         staging_dir = PATHS.app_data_dir / "swap_staging"
         staging_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Extract cover art BEFORE overwriting the original MP3
-        existing_cover = None
-        if target_mp3.exists():
+        with self._swap_lock:
+            self._active_swaps[track_id] = {
+                "status": "starting",
+                "progress": 5.0,
+                "message": "Connecting to YouTube stream...",
+                "track_id": track_id,
+            }
+
+        def _on_dl_progress(pct: float) -> None:
+            mapped = min(75.0, max(5.0, 5.0 + pct * 0.70))
+            with self._swap_lock:
+                self._active_swaps[track_id] = {
+                    "status": "downloading",
+                    "progress": round(mapped, 1),
+                    "download_pct": round(pct, 1),
+                    "message": f"Downloading audio ({round(pct)}%)...",
+                    "track_id": track_id,
+                }
+
+        try:
+            # 1. Extract cover art BEFORE overwriting the original MP3
+            existing_cover = None
+            if target_mp3.exists():
+                try:
+                    existing_cover, _ = audio_tagger.extract_cover_bytes(target_mp3)
+                except Exception as cov_exc:
+                    logger.debug("Could not pre-extract cover from target MP3: %s", cov_exc)
+
+            # 2. Download replacement audio from YouTube into staging
+            staged_mp3, info, _ = youtube_client.download_mp3_to_staging(
+                url_or_query=youtube_url,
+                staging_dir=staging_dir,
+                stem_name=f"swap_{track_id}_{random.randint(1000, 9999)}",
+                bitrate_kbps=bitrate_kbps,
+                progress_cb=_on_dl_progress,
+            )
+
+            with self._swap_lock:
+                self._active_swaps[track_id] = {
+                    "status": "extracting",
+                    "progress": 80.0,
+                    "message": "Extracting audio stream...",
+                    "track_id": track_id,
+                }
+
+            # 3. Safely replace the file on disk (resilient against Windows locks)
+            final_mp3_path = target_mp3
+            replaced_in_place = False
+
+            for attempt in range(4):
+                try:
+                    if target_mp3.exists() and not backup_mp3.exists():
+                        shutil.copy2(target_mp3, backup_mp3)
+                    shutil.move(str(staged_mp3), str(target_mp3))
+                    replaced_in_place = True
+                    break
+                except (PermissionError, OSError) as exc:
+                    gc.collect()
+                    time.sleep(0.35)
+                    if attempt == 3:
+                        logger.warning("Target MP3 '%s' locked on Windows (%s); writing versioned audio file", target_mp3, exc)
+
+            if not replaced_in_place:
+                version_stem = f"{target_mp3.stem}_v{int(time.time()) % 10000}"
+                version_mp3 = target_mp3.with_name(f"{version_stem}.mp3")
+                shutil.move(str(staged_mp3), str(version_mp3))
+                final_mp3_path = version_mp3
+                try:
+                    target_mp3.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            if backup_mp3.exists():
+                try:
+                    backup_mp3.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            with self._swap_lock:
+                self._active_swaps[track_id] = {
+                    "status": "tagging",
+                    "progress": 92.0,
+                    "message": "Preserving cover art & writing ID3 metadata...",
+                    "track_id": track_id,
+                }
+
+            # 4. Tag the new MP3 with all track metadata and preserved original cover art
+            artists_list = [a.strip() for a in track.artist_display.split(",") if a.strip()] or [track.artist_display]
+            audio_tagger.tag_mp3(
+                mp3_path=final_mp3_path,
+                title=track.title,
+                artists=artists_list,
+                album_artist=track.album_artist,
+                album=track.album,
+                track_number=track.track_number,
+                release_year=track.release_year,
+                original_year=track.original_year,
+                cover_bytes=existing_cover,
+            )
+
+            new_duration = int(info.get("duration") or 0)
+            if not new_duration:
+                from mutagen.mp3 import MP3
+                try:
+                    audio = MP3(str(final_mp3_path))
+                    new_duration = int(audio.info.length)
+                except Exception:
+                    new_duration = track.duration
+
+            updated_track = self.repo.update_track_audio_info(
+                track_id=track_id,
+                duration=new_duration,
+                bitrate_kbps=bitrate_kbps,
+                file_path=str(final_mp3_path) if final_mp3_path != target_mp3 else None,
+            )
+
+            result_track = updated_track or track
+            with self._swap_lock:
+                self._active_swaps[track_id] = {
+                    "status": "completed",
+                    "progress": 100.0,
+                    "message": "Replacement complete!",
+                    "track_id": track_id,
+                    "track": result_track.to_dict(),
+                }
+            return result_track
+        except Exception as exc:
+            with self._swap_lock:
+                self._active_swaps[track_id] = {
+                    "status": "error",
+                    "progress": 0.0,
+                    "error": str(exc),
+                    "message": f"Audio replacement failed: {exc}",
+                    "track_id": track_id,
+                }
+            raise
+
+    def auto_fix_database(self) -> dict[str, Any]:
+        """
+        Deep database health repair & auto-fix:
+        1. Prune orphaned track entries whose files were deleted from disk.
+        2. Scan download directories and index any missing or updated MP3s.
+        3. Repair zero / missing durations and bitrates directly from MP3 headers using Mutagen.
+        4. Auto-link missing LRC files if an .lrc with same name exists beside the .mp3.
+        5. Clean up stray whitespace in artist and album names.
+        6. Optimize SQLite database with VACUUM & PRAGMA optimize.
+        """
+        pruned = self.repo.remove_missing_files()
+        sync_res = self.scan_and_sync_downloads()
+        indexed = sync_res.get("indexed", 0)
+
+        fixed_durations = 0
+        linked_lyrics = 0
+        cleaned_tags = 0
+
+        with self.repo._write_lock:
+            conn = self.repo._get_conn()
+            tracks = conn.execute("SELECT id, file_path, duration, lrc_path, album, artist_display, bitrate_kbps FROM tracks").fetchall()
+            for row in tracks:
+                t_id = row["id"]
+                f_path = Path(row["file_path"])
+                if not f_path.exists():
+                    continue
+
+                dur = row["duration"] or 0
+                bitrate = row["bitrate_kbps"] or 0
+                needs_update = False
+                if dur <= 0 or bitrate <= 0:
+                    try:
+                        from mutagen.mp3 import MP3
+                        audio = MP3(str(f_path))
+                        dur = int(round(audio.info.length))
+                        bitrate = int(round((audio.info.bitrate or 320000) / 1000))
+                        needs_update = True
+                        fixed_durations += 1
+                    except Exception:
+                        pass
+
+                if needs_update:
+                    conn.execute("UPDATE tracks SET duration = ?, bitrate_kbps = ? WHERE id = ?", (dur, bitrate, t_id))
+
+                lrc_path = row["lrc_path"] or ""
+                if not lrc_path or not Path(lrc_path).exists():
+                    candidate_lrc = f_path.with_suffix(".lrc")
+                    if candidate_lrc.exists():
+                        conn.execute("UPDATE tracks SET lrc_path = ?, lyric_sync_mode = 'exact_lrc' WHERE id = ?", (str(candidate_lrc.resolve()), t_id))
+                        linked_lyrics += 1
+
+                album = row["album"] or ""
+                artist = row["artist_display"] or ""
+                if album != album.strip() or artist != artist.strip():
+                    conn.execute("UPDATE tracks SET album = ?, artist_display = ? WHERE id = ?", (album.strip(), artist.strip(), t_id))
+                    cleaned_tags += 1
+
+            conn.commit()
             try:
-                existing_cover, _ = audio_tagger.extract_cover_bytes(target_mp3)
-            except Exception as cov_exc:
-                logger.debug("Could not pre-extract cover from target MP3: %s", cov_exc)
-
-        # 2. Download replacement audio from YouTube into staging
-        staged_mp3, info, _ = youtube_client.download_mp3_to_staging(
-            url_or_query=youtube_url,
-            staging_dir=staging_dir,
-            stem_name=f"swap_{track_id}_{random.randint(1000, 9999)}",
-            bitrate_kbps=bitrate_kbps,
-        )
-
-        # 3. Safely replace the file on disk (resilient against Windows locks)
-        final_mp3_path = target_mp3
-        replaced_in_place = False
-
-        for attempt in range(4):
-            try:
-                if target_mp3.exists() and not backup_mp3.exists():
-                    shutil.copy2(target_mp3, backup_mp3)
-                shutil.move(str(staged_mp3), str(target_mp3))
-                replaced_in_place = True
-                break
-            except (PermissionError, OSError) as exc:
-                gc.collect()
-                time.sleep(0.35)
-                if attempt == 3:
-                    logger.warning("Target MP3 '%s' locked on Windows (%s); writing versioned audio file", target_mp3, exc)
-
-        if not replaced_in_place:
-            # Fallback for Windows file locks: write to a versioned filename in same folder
-            version_stem = f"{target_mp3.stem}_v{int(time.time()) % 10000}"
-            version_mp3 = target_mp3.with_name(f"{version_stem}.mp3")
-            shutil.move(str(staged_mp3), str(version_mp3))
-            final_mp3_path = version_mp3
-            try:
-                # Attempt to remove locked file if lock released
-                target_mp3.unlink(missing_ok=True)
+                conn.execute("PRAGMA optimize")
             except Exception:
                 pass
 
-        if backup_mp3.exists():
-            try:
-                backup_mp3.unlink(missing_ok=True)
-            except Exception:
-                pass
+        return {
+            "status": "success",
+            "pruned_missing": pruned,
+            "indexed_new": indexed,
+            "fixed_durations": fixed_durations,
+            "linked_lyrics": linked_lyrics,
+            "cleaned_tags": cleaned_tags,
+            "message": f"Database auto-repaired! Pruned {pruned} missing file(s), indexed {indexed} track(s), repaired {fixed_durations} duration(s), and auto-linked {linked_lyrics} lyric file(s).",
+        }
 
-        # 4. Tag the new MP3 with all track metadata and preserved original cover art
-        artists_list = [a.strip() for a in track.artist_display.split(",") if a.strip()] or [track.artist_display]
-        audio_tagger.tag_mp3(
-            mp3_path=final_mp3_path,
-            title=track.title,
-            artists=artists_list,
-            album_artist=track.album_artist,
-            album=track.album,
-            track_number=track.track_number,
-            release_year=track.release_year,
-            original_year=track.original_year,
-            cover_bytes=existing_cover,
-        )
+    def find_album_inconsistencies(self) -> list[dict[str, Any]]:
+        """
+        Scan all tracks in the database to detect albums with conflicting metadata:
+        - Tracks sharing the same album name, but having different cover art / thumbnails.
+        - Tracks sharing the same album name, but having different release years (e.g. 2013 vs 2021).
+        - Tracks sharing the same album name, but having different album artist variations.
+        """
+        import hashlib
+        all_tracks = self.repo.list_tracks()
+        albums_map: dict[str, list[TrackEntity]] = {}
+        for t in all_tracks:
+            album_clean = (t.album or "").strip()
+            if not album_clean or album_clean.lower() in ("singles", "downloaded album", "unknown album"):
+                continue
+            key = album_clean.lower()
+            albums_map.setdefault(key, []).append(t)
 
-        new_duration = int(info.get("duration") or 0)
-        if not new_duration:
-            from mutagen.mp3 import MP3
-            try:
-                audio = MP3(str(final_mp3_path))
-                new_duration = int(audio.info.length)
-            except Exception:
-                new_duration = track.duration
+        inconsistencies: list[dict[str, Any]] = []
 
-        updated_track = self.repo.update_track_audio_info(
-            track_id=track_id,
-            duration=new_duration,
-            bitrate_kbps=bitrate_kbps,
-            file_path=str(final_mp3_path) if final_mp3_path != target_mp3 else None,
-        )
-        return updated_track or track
+        for _, tracks in albums_map.items():
+            if len(tracks) < 2:
+                continue
+
+            album_name = tracks[0].album
+            artist_name = tracks[0].album_artist or tracks[0].artist_display
+
+            # 1. Check release years
+            years = {str(t.release_year).strip() for t in tracks if str(t.release_year).strip() and str(t.release_year).strip() != "0"}
+            year_conflict = len(years) > 1
+
+            # 2. Check cover art consistency
+            cover_groups: dict[str, list[TrackEntity]] = {}
+            for t in tracks:
+                mp3_p = Path(t.file_path)
+                fingerprint = "none"
+                if mp3_p.exists() and t.has_cover:
+                    try:
+                        c_bytes, _ = audio_tagger.extract_cover_bytes(mp3_p)
+                        if c_bytes:
+                            fingerprint = hashlib.md5(c_bytes[:2048]).hexdigest()
+                    except Exception:
+                        pass
+                cover_groups.setdefault(fingerprint, []).append(t)
+
+            has_covers = [k for k in cover_groups.keys() if k != "none"]
+            cover_conflict = len(has_covers) > 1 or (len(has_covers) >= 1 and "none" in cover_groups)
+
+            artists = {str(t.album_artist or t.artist_display).strip() for t in tracks if str(t.album_artist or t.artist_display).strip()}
+            artist_conflict = len(artists) > 1
+
+            if year_conflict or cover_conflict or artist_conflict:
+                distinct_covers = []
+                for fp, grp in cover_groups.items():
+                    sample = grp[0]
+                    distinct_covers.append({
+                        "fingerprint": fp,
+                        "track_id": sample.id,
+                        "sample_title": sample.title,
+                        "cover_url": f"/api/tracks/{sample.id}/cover" if sample.has_cover else "/icon.svg",
+                        "has_cover": sample.has_cover,
+                        "track_count": len(grp),
+                    })
+
+                inconsistencies.append({
+                    "album": album_name,
+                    "artist": artist_name,
+                    "total_tracks": len(tracks),
+                    "track_ids": [t.id for t in tracks],
+                    "year_conflict": year_conflict,
+                    "years": sorted(list(years)),
+                    "cover_conflict": cover_conflict,
+                    "distinct_covers": distinct_covers,
+                    "artist_conflict": artist_conflict,
+                    "album_artists": sorted(list(artists)),
+                })
+
+        return inconsistencies
+
+    def resolve_album_inconsistency(
+        self,
+        album: str,
+        artist: str = "",
+        canonical_track_id_for_cover: int | None = None,
+        canonical_year: str = "",
+        canonical_album_artist: str = "",
+    ) -> dict[str, Any]:
+        """
+        Unify and synchronize all tracks in an album with the chosen canonical cover, year, and album artist.
+        Rewrites ID3 tags on disk and updates SQLite.
+        """
+        all_tracks = self.repo.list_tracks(album=album)
+        if not all_tracks:
+            all_tracks = [t for t in self.repo.list_tracks() if (t.album or "").strip().lower() == album.strip().lower()]
+
+        if not all_tracks:
+            raise ValueError(f"No tracks found for album '{album}'.")
+
+        master_cover_bytes = None
+        master_cover_mime = "image/jpeg"
+        if canonical_track_id_for_cover:
+            master_track = self.repo.get_track(canonical_track_id_for_cover)
+            if master_track and Path(master_track.file_path).exists():
+                c_bytes, c_mime = audio_tagger.extract_cover_bytes(Path(master_track.file_path))
+                if c_bytes:
+                    master_cover_bytes = c_bytes
+                    master_cover_mime = c_mime
+
+        year_str = str(canonical_year).strip()
+        album_artist_str = str(canonical_album_artist).strip() or artist or all_tracks[0].album_artist
+
+        updated_count = 0
+        with self.repo._write_lock:
+            conn = self.repo._get_conn()
+            for t in all_tracks:
+                mp3_p = Path(t.file_path)
+                has_cover = t.has_cover
+
+                if mp3_p.exists():
+                    try:
+                        artists_list = [a.strip() for a in t.artist_display.split(",") if a.strip()] or [t.artist_display]
+                        audio_tagger.update_existing_mp3_tags(
+                            mp3_path=mp3_p,
+                            title=t.title,
+                            artists=artists_list,
+                            album_artist=album_artist_str,
+                            album=album,
+                            track_number=t.track_number,
+                            release_year=year_str if year_str else t.release_year,
+                        )
+                        if master_cover_bytes:
+                            audio_tagger.set_mp3_cover(mp3_p, master_cover_bytes, master_cover_mime)
+                            has_cover = True
+                    except Exception as tag_err:
+                        logger.warning("Could not update tags for track %d: %s", t.id, tag_err)
+
+                conn.execute(
+                    """
+                    UPDATE tracks
+                    SET album = ?, album_artist = ?, release_year = ?, has_cover = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        album,
+                        album_artist_str,
+                        year_str if year_str else t.release_year,
+                        1 if has_cover else 0,
+                        t.id,
+                    ),
+                )
+                updated_count += 1
+
+            conn.commit()
+
+        return {
+            "status": "success",
+            "album": album,
+            "tracks_updated": updated_count,
+            "message": f"Successfully unified {updated_count} track(s) for album '{album}'!",
+        }
 
     def match_tracks_to_album(self, album: str, artist: str, track_ids: list[int]) -> dict[str, Any]:
         import difflib

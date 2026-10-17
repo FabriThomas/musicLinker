@@ -334,3 +334,13 @@ class BulkAssignAlbumPayload(BaseModel):
     release_year: int = Field(default=0)
     cover_url: str | None = None
     track_assignments: list[dict[str, Any]] = Field(..., min_length=1)
+
+
+class AlbumResolveInconsistencyPayload(BaseModel):
+    """Payload to unify conflicting cover art, release year, or album artist across all tracks in an album."""
+
+    album: str = Field(..., min_length=1)
+    artist: str = Field(default="")
+    canonical_track_id_for_cover: int | None = Field(default=None)
+    canonical_year: str = Field(default="")
+    canonical_album_artist: str = Field(default="")

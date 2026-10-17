@@ -971,3 +971,97 @@ def test_v312_lastfm_polling_and_candidate_album(tmp_path):
         assert len(cands) == 1
         assert cands[0]["album"] == "Discovery"
         assert cands[0]["thumbnail"] == "https://img.youtube.com/vi/yt_vid_1/0.jpg"
+
+
+def test_v313_auto_fix_and_album_inconsistencies_and_swap_status(tmp_path):
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.infrastructure.db import db_repo
+    from musiclinker.services.library_service import library_service
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    # 1. Test swap status endpoint
+    res_swap = client.get("/api/tracks/12345/swap-status")
+    assert res_swap.status_code == 200
+    assert res_swap.json()["status"] == "idle"
+
+    # 2. Test auto-fix database endpoint and service
+    # Create an orphan track whose file does not exist
+    missing_path = tmp_path / "deleted_file.mp3"
+    db_repo.upsert_track(
+        track_hash="hash_orphan_test",
+        title="Orphan Track",
+        artist_display="Ghost Artist",
+        artists=["Ghost Artist"],
+        album="Ghost Album",
+        album_artist="Ghost Artist",
+        duration=180,
+        file_path=str(missing_path),
+    )
+
+    res_fix = client.post("/api/library/auto-fix")
+    assert res_fix.status_code == 200
+    data_fix = res_fix.json()
+    assert data_fix["status"] == "success"
+    assert data_fix["pruned_missing"] >= 1
+
+    # Verify orphan was pruned
+    tracks = db_repo.list_tracks(search="Orphan Track")
+    assert len(tracks) == 0
+
+    # 3. Test find_album_inconsistencies and resolve_album_inconsistency
+    f1 = tmp_path / "track1.mp3"
+    f2 = tmp_path / "track2.mp3"
+    f1.write_bytes(b"ID3" + b"\x00" * 50)
+    f2.write_bytes(b"ID3" + b"\x00" * 50)
+
+    t1 = db_repo.upsert_track(
+        track_hash="hash_inc_1",
+        title="Conflict Song 1",
+        artist_display="Conflict Band",
+        artists=["Conflict Band"],
+        album="Inconsistent Album",
+        album_artist="Conflict Band",
+        release_year="2010",
+        duration=180,
+        file_path=str(f1),
+    )
+    t2 = db_repo.upsert_track(
+        track_hash="hash_inc_2",
+        title="Conflict Song 2",
+        artist_display="Conflict Band",
+        artists=["Conflict Band"],
+        album="Inconsistent Album",
+        album_artist="Conflict Band",
+        release_year="2021",
+        duration=200,
+        file_path=str(f2),
+    )
+
+    # Detect inconsistencies via API endpoint
+    res_inc = client.get("/api/albums/inconsistencies")
+    assert res_inc.status_code == 200
+    inconsistencies = res_inc.json()["inconsistencies"]
+    matched = [inc for inc in inconsistencies if inc["album"] == "Inconsistent Album"]
+    assert len(matched) == 1
+    assert matched[0]["year_conflict"] is True
+    assert "2010" in matched[0]["years"]
+    assert "2021" in matched[0]["years"]
+
+    # Resolve inconsistency via API endpoint to canonical year 2021
+    res_resolve = client.post("/api/albums/resolve-inconsistency", json={
+        "album": "Inconsistent Album",
+        "artist": "Conflict Band",
+        "canonical_year": "2021",
+        "canonical_album_artist": "Conflict Band",
+    })
+    assert res_resolve.status_code == 200
+    assert res_resolve.json()["status"] == "success"
+
+    # Verify both tracks in SQLite have been unified to year 2021
+    updated_t1 = db_repo.get_track(t1.id)
+    updated_t2 = db_repo.get_track(t2.id)
+    assert updated_t1.release_year == "2021"
+    assert updated_t2.release_year == "2021"
+

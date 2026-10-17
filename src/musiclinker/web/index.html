@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>MusicLinker Studio & APK v3.1.0 — Track, Playlist & Album Downloader + 5-Band DSP</title>
+  <title>MusicLinker Studio & APK v3.1.3 — Track, Playlist & Album Downloader + 5-Band DSP</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/styles.css" />
@@ -18,7 +18,7 @@
       <div>
         <div class="flex items-center gap-2">
           <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker</h1>
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.1.0 APK + Studio</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.1.3 APK + Studio</span>
         </div>
         <p class="text-[11px] text-zinc-400 hidden sm:block">Track, Playlist & Album Downloader • Synced Lyrics • On-Device AppData • 5-Band DSP</p>
       </div>
@@ -37,6 +37,10 @@
       <button id="btn-rescan-library" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs flex items-center gap-1.5" title="Rescan downloads folder & sync SQLite">
         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
         <span class="hidden md:inline">Rescan</span>
+      </button>
+      <button id="btn-album-inconsistencies-pill" class="hidden ml-btn px-2.5 py-1.5 text-xs rounded-xl border border-amber-500/40 bg-amber-500/20 text-amber-300 flex items-center gap-1.5 transition cursor-pointer hover:bg-amber-500/30 animate-pulse" title="Click to review and unify conflicting album covers or years">
+        <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span id="album-inconsistencies-label">0 Conflicts</span>
       </button>
       <button id="btn-randomize-now" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs flex items-center gap-1.5" title="Randomize & Play Queue">
         <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
@@ -668,7 +672,13 @@
             </div>
             <div class="flex items-center justify-between pt-1 text-[11px] text-zinc-400 border-t border-zinc-800/80">
               <span id="storage-track-count">Indexed Tracks: 0</span>
-              <button id="btn-rescan-storage" class="text-emerald-400 hover:underline">↻ Rescan Device Storage</button>
+              <div class="flex items-center gap-3">
+                <button id="btn-auto-fix-db" class="ml-btn ml-btn-secondary px-2.5 py-1 text-[11px] text-emerald-400 flex items-center gap-1.5" title="Deep database repair: prune missing files, repair 0 durations/bitrates, auto-link LRCs, clean whitespace">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                  <span>Auto-Fix DB</span>
+                </button>
+                <button id="btn-rescan-storage" class="text-emerald-400 hover:underline">↻ Rescan</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1232,7 +1242,13 @@
           <svg class="w-5 h-5 text-emerald-400 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
           <h3 class="font-bold text-base text-white">Change Audio Version</h3>
         </div>
-        <button id="btn-close-swap-modal" class="text-zinc-400 hover:text-white p-1 rounded-lg">✕</button>
+        <div class="flex items-center gap-2">
+          <button id="btn-minimize-swap-modal" class="ml-btn ml-btn-secondary px-2.5 py-1 text-xs rounded-lg text-zinc-300 hover:text-white flex items-center gap-1" title="Minimize and run replacement in background">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span class="hidden sm:inline">Minimize</span>
+          </button>
+          <button id="btn-close-swap-modal" class="text-zinc-400 hover:text-white p-1 rounded-lg">✕</button>
+        </div>
       </div>
 
       <input id="swap-track-id" type="hidden" />
@@ -1247,6 +1263,24 @@
         <div class="text-right shrink-0">
           <span class="text-[10px] font-mono text-zinc-500 block">Duration</span>
           <span id="swap-target-duration" class="text-xs font-mono font-bold text-emerald-400">0:00</span>
+        </div>
+      </div>
+
+      <!-- Live Swap Real-Time Progress Bar & Background Action -->
+      <div id="swap-progress-container" class="hidden bg-zinc-950/90 border border-emerald-500/40 rounded-xl p-3 space-y-2 shrink-0 animate-fade-in shadow-md">
+        <div class="flex items-center justify-between text-xs">
+          <span id="swap-progress-stage" class="font-semibold text-emerald-400 flex items-center gap-1.5">
+            <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            Replacing Audio Track...
+          </span>
+          <span id="swap-progress-pct" class="font-mono text-zinc-300 font-bold">0%</span>
+        </div>
+        <div class="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
+          <div id="swap-progress-fill" class="bg-emerald-500 h-full w-0 transition-all duration-300"></div>
+        </div>
+        <div class="flex items-center justify-between text-[11px] text-zinc-400">
+          <span id="swap-progress-detail" class="truncate font-mono">Initializing download pipeline...</span>
+          <button id="btn-swap-run-bg" type="button" class="ml-btn ml-btn-secondary px-2.5 py-0.5 text-[10px] text-zinc-300">Run in Background</button>
         </div>
       </div>
 
@@ -1501,6 +1535,84 @@
         <button id="btn-complete-lastfm-auth" class="ml-btn flex-1 py-2 text-xs font-bold bg-red-600 hover:bg-red-500 text-white rounded-xl flex items-center justify-center gap-1.5">
           <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           <span>Check Now</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Mini-Dock Pill for Background Track Replacement -->
+  <div id="floating-swap-pill" class="hidden fixed bottom-20 right-4 z-40 bg-zinc-900/95 border border-emerald-500/50 shadow-2xl rounded-2xl p-3 flex items-center gap-3 backdrop-blur-md cursor-pointer hover:border-emerald-400 transition-all">
+    <div class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shrink-0"></div>
+    <div class="min-w-0 max-w-[200px]">
+      <div class="flex items-center justify-between text-xs font-bold text-white gap-2">
+        <span class="truncate">Replacing Audio</span>
+        <span id="floating-swap-pct" class="text-emerald-400 font-mono text-[11px]">0%</span>
+      </div>
+      <div id="floating-swap-title" class="text-[10px] text-zinc-400 truncate">Song Title</div>
+      <div class="w-full bg-zinc-800 h-1 rounded-full overflow-hidden mt-1">
+        <div id="floating-swap-bar" class="bg-emerald-500 h-full w-0 transition-all duration-300"></div>
+      </div>
+    </div>
+    <button id="btn-floating-swap-expand" class="p-1 text-zinc-400 hover:text-white" title="Re-open Swap Modal">
+      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    </button>
+  </div>
+
+  <!-- Album Inconsistency Resolver Modal -->
+  <div id="album-inconsistency-modal" class="hidden fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-md">
+    <div class="bg-zinc-900/95 border border-zinc-700/90 rounded-2xl p-5 max-w-2xl w-full space-y-4 shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-800 shrink-0">
+        <div class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-amber-400 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <div>
+            <h3 class="font-bold text-base text-white">Album Inconsistency Resolver</h3>
+            <p class="text-[11px] text-zinc-400">Multiple tracks share the same album with conflicting cover art, year, or artist</p>
+          </div>
+        </div>
+        <button id="btn-close-inconsistency-modal" class="text-zinc-400 hover:text-white p-1 rounded-lg">✕</button>
+      </div>
+
+      <!-- Inconsistency Selector / Navigation Tabs if multiple albums conflict -->
+      <div id="inconsistency-album-nav" class="flex items-center gap-2 overflow-x-auto ml-scroll pb-1 shrink-0"></div>
+
+      <!-- Inconsistency Details Card -->
+      <div id="inconsistency-detail-view" class="flex-1 flex flex-col min-h-0 overflow-y-auto ml-scroll space-y-4 p-1">
+        <!-- Canonical Cover Art Selection -->
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+            1. Select Canonical Album Cover Art
+          </label>
+          <div id="inconsistency-covers-list" class="grid grid-cols-2 sm:grid-cols-3 gap-3"></div>
+        </div>
+
+        <!-- Canonical Release Year Selection -->
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+            2. Choose Canonical Release Year
+          </label>
+          <div id="inconsistency-years-list" class="flex flex-wrap items-center gap-2"></div>
+        </div>
+
+        <!-- Canonical Album Artist -->
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+            3. Canonical Album Artist
+          </label>
+          <input id="inconsistency-artist-input" type="text" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500" />
+        </div>
+
+        <!-- Conflict Summary Info -->
+        <div id="inconsistency-summary-note" class="p-3 bg-zinc-950/70 border border-zinc-800 rounded-xl text-xs text-zinc-300 space-y-1"></div>
+      </div>
+
+      <!-- Action Footer -->
+      <div class="flex items-center justify-between pt-3 border-t border-zinc-800 shrink-0 gap-2">
+        <button id="btn-cancel-inconsistency-modal" class="ml-btn ml-btn-secondary px-4 py-2 text-xs">
+          Cancel
+        </button>
+        <button id="btn-apply-inconsistency-resolve" class="ml-btn ml-btn-primary px-5 py-2 text-xs font-bold flex items-center gap-1.5">
+          <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><polygon points="20 6 9 17 4 12"/></svg>
+          <span>Unify All Tracks in Album</span>
         </button>
       </div>
     </div>

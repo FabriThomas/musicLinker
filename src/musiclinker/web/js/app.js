@@ -64,6 +64,12 @@ class MusicLinkerController {
     this.activePreviewVideoId = null;
     this.swapCurrentTrack = null;
     this.bulkMatchData = null;
+    this.activeSwapTrackId = null;
+    this.activeSwapInterval = null;
+    this.albumInconsistencies = [];
+    this.activeInconsistencyIdx = 0;
+    this.selectedCanonicalCoverTrackId = null;
+    this.selectedCanonicalYear = "";
 
     this.engine = new AudioEngine({
       onTimeUpdate: (cur, dur) => this.handleTimeUpdate(cur, dur),
@@ -106,6 +112,7 @@ class MusicLinkerController {
     await this.loadSettingsIntoUI();
     await this.loadAlbums();
     await this.loadLibrary("", true);
+    await this.checkAlbumInconsistencies();
     offlineStore.flushOfflineScrobbles(api).catch(() => {});
   }
 
@@ -319,6 +326,7 @@ class MusicLinkerController {
     if (countBadge) countBadge.textContent = `${this.tracks.length} tracks`;
     this.renderTrackList();
     this.renderLayeredSelector();
+    this.checkAlbumInconsistencies().catch(() => {});
   }
 
   renderTrackList() {
@@ -3161,7 +3169,25 @@ class MusicLinkerController {
   async confirmReplaceAudio(trackId, youtubeUrl, btnEl) {
     this.stopCandidatePreview();
 
+    const progressContainer = document.getElementById("swap-progress-container");
+    const progressFill = document.getElementById("swap-progress-fill");
+    const progressPct = document.getElementById("swap-progress-pct");
+    const progressDetail = document.getElementById("swap-progress-detail");
     const statusEl = document.getElementById("swap-status-text");
+    const floatingPill = document.getElementById("floating-swap-pill");
+    const floatingBar = document.getElementById("floating-swap-bar");
+    const floatingPct = document.getElementById("floating-swap-pct");
+    const floatingTitle = document.getElementById("floating-swap-title");
+
+    const track = this.allTracks.find((t) => t.id === trackId) || this.swapCurrentTrack;
+    const trackTitle = track ? track.title : `Track #${trackId}`;
+
+    if (floatingTitle) floatingTitle.textContent = trackTitle;
+    if (progressContainer) progressContainer.classList.remove("hidden");
+    if (progressFill) progressFill.style.width = "5%";
+    if (progressPct) progressPct.textContent = "5%";
+    if (progressDetail) progressDetail.textContent = "Connecting to audio stream...";
+
     const allButtons = document.querySelectorAll("#swap-candidates-list button");
     allButtons.forEach((b) => (b.disabled = true));
 
@@ -3172,42 +3198,83 @@ class MusicLinkerController {
       statusEl.innerHTML = `<span class="text-emerald-400 font-semibold flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>Downloading audio & replacing file on disk...</span>`;
     }
 
-    this.showToast("Starting audio swap. Downloading high quality stream...", "info");
+    this.showToast(`Starting audio swap for "${trackTitle}"...`, "info");
 
     const wasCurrentPlaying = this.currentIndex >= 0 && this.playQueue[this.currentIndex]?.id === trackId;
     if (wasCurrentPlaying) {
       this.engine.pause();
-      // Free Windows file lock by clearing media source temporarily
       if (this.engine.audio) {
         this.engine.audio.src = "";
         this.engine.audio.load();
       }
     }
 
+    this.activeSwapTrackId = trackId;
+
+    if (this.activeSwapInterval) clearInterval(this.activeSwapInterval);
+    this.activeSwapInterval = setInterval(async () => {
+      if (!this.activeSwapTrackId) {
+        clearInterval(this.activeSwapInterval);
+        return;
+      }
+      try {
+        const st = await api.getSwapStatus(trackId);
+        if (st && st.progress !== undefined) {
+          const pct = Math.max(0, Math.min(100, Math.round(st.progress)));
+          const msg = st.message || `Processing (${pct}%)...`;
+          if (progressFill) progressFill.style.width = `${pct}%`;
+          if (progressPct) progressPct.textContent = `${pct}%`;
+          if (progressDetail) progressDetail.textContent = msg;
+
+          if (floatingBar) floatingBar.style.width = `${pct}%`;
+          if (floatingPct) floatingPct.textContent = `${pct}%`;
+        }
+      } catch (_e) {}
+    }, 500);
+
     try {
       const res = await api.replaceTrackAudio(trackId, youtubeUrl, 320);
       const updatedTrack = res.track;
+
+      if (this.activeSwapInterval) clearInterval(this.activeSwapInterval);
+      this.activeSwapTrackId = null;
+
+      if (progressFill) progressFill.style.width = "100%";
+      if (progressPct) progressPct.textContent = "100%";
+      if (progressDetail) progressDetail.textContent = "Replacement complete!";
+
       this.showToast(`Audio replaced successfully for "${updatedTrack.title}"!`);
 
-      // Update in memory
+      // Update in memory & cache bust stream_url
+      if (updatedTrack.stream_url) {
+        updatedTrack.stream_url = `${updatedTrack.stream_url.split("?")[0]}?v=${Date.now()}`;
+      }
       const allIdx = this.allTracks.findIndex((t) => t.id === trackId);
       if (allIdx !== -1) this.allTracks[allIdx] = updatedTrack;
       const curIdx = this.tracks.findIndex((t) => t.id === trackId);
       if (curIdx !== -1) this.tracks[curIdx] = updatedTrack;
 
-      // If active track, update UI and reload track audio
       if (wasCurrentPlaying) {
         this.playQueue[this.currentIndex] = updatedTrack;
         this.updateNowPlayingBar(updatedTrack);
-        this.loadTrack(updatedTrack, false);
+        await this.playByIndex(this.currentIndex);
       }
 
       this.renderTrackList();
-      document.getElementById("swap-audio-modal")?.classList.add("hidden");
+      setTimeout(() => {
+        document.getElementById("swap-audio-modal")?.classList.add("hidden");
+        if (progressContainer) progressContainer.classList.add("hidden");
+        if (floatingPill) floatingPill.classList.add("hidden");
+      }, 700);
     } catch (err) {
+      if (this.activeSwapInterval) clearInterval(this.activeSwapInterval);
+      this.activeSwapTrackId = null;
+      if (floatingPill) floatingPill.classList.add("hidden");
+      if (progressContainer) progressContainer.classList.add("hidden");
+
       this.showToast(`Audio replacement failed: ${err.message}`, "error");
       if (wasCurrentPlaying && this.playQueue[this.currentIndex]) {
-        this.loadTrack(this.playQueue[this.currentIndex], false);
+        await this.playByIndex(this.currentIndex);
       }
     } finally {
       allButtons.forEach((b) => (b.disabled = false));
@@ -3219,6 +3286,228 @@ class MusicLinkerController {
       }
     }
   }
+
+  minimizeSwapModal() {
+    this.stopCandidatePreview();
+    document.getElementById("swap-audio-modal")?.classList.add("hidden");
+    const floatingPill = document.getElementById("floating-swap-pill");
+    if (this.activeSwapTrackId && floatingPill) {
+      floatingPill.classList.remove("hidden");
+    }
+  }
+
+  restoreSwapModal() {
+    const floatingPill = document.getElementById("floating-swap-pill");
+    if (floatingPill) floatingPill.classList.add("hidden");
+    const modal = document.getElementById("swap-audio-modal");
+    if (modal) modal.classList.remove("hidden");
+  }
+
+  async runAutoDbFix() {
+    const btn = document.getElementById("btn-auto-fix-db");
+    const origHtml = btn ? btn.innerHTML : "";
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<span class="w-3 h-3 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></span><span>Repairing...</span>`;
+    }
+    this.showToast("Running deep database repair & auto-fix...", "info");
+    try {
+      const res = await api.autoFixDatabase();
+      this.showToast(res.message || "Database auto-repair completed successfully!");
+      await this.loadAlbums();
+      await this.loadLibrary("", true);
+      await this.checkAlbumInconsistencies();
+    } catch (err) {
+      this.showToast(`Database auto-fix failed: ${err.message}`, "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+  }
+
+  async checkAlbumInconsistencies() {
+    try {
+      const res = await api.getAlbumInconsistencies();
+      this.albumInconsistencies = res.inconsistencies || [];
+      const pill = document.getElementById("btn-album-inconsistencies-pill");
+      const label = document.getElementById("album-inconsistencies-label");
+      if (pill && label) {
+        if (this.albumInconsistencies.length > 0) {
+          label.textContent = `${this.albumInconsistencies.length} Conflict${this.albumInconsistencies.length > 1 ? "s" : ""}`;
+          pill.classList.remove("hidden");
+        } else {
+          pill.classList.add("hidden");
+        }
+      }
+    } catch (err) {
+      console.debug("Could not check album inconsistencies:", err);
+    }
+  }
+
+  openAlbumInconsistencyModal() {
+    if (!this.albumInconsistencies.length) {
+      this.showToast("No album conflicts detected in your library!", "info");
+      return;
+    }
+    this.activeInconsistencyIdx = 0;
+    const modal = document.getElementById("album-inconsistency-modal");
+    if (modal) modal.classList.remove("hidden");
+    this.renderInconsistencyView();
+  }
+
+  renderInconsistencyView() {
+    const item = this.albumInconsistencies[this.activeInconsistencyIdx];
+    if (!item) return;
+
+    const navEl = document.getElementById("inconsistency-album-nav");
+    if (navEl) {
+      navEl.innerHTML = this.albumInconsistencies
+        .map((inc, idx) => {
+          const active = idx === this.activeInconsistencyIdx;
+          const cls = active
+            ? "bg-amber-500/25 border-amber-500 text-amber-300 font-bold"
+            : "bg-zinc-950/70 border-zinc-800 text-zinc-400 hover:text-zinc-200";
+          return `
+            <button class="px-3 py-1.5 rounded-xl border text-xs whitespace-nowrap transition cursor-pointer ${cls}" data-inconsistency-idx="${idx}">
+              ${this.escape(inc.album)} (${inc.total_tracks} tracks)
+            </button>
+          `;
+        })
+        .join("");
+
+      navEl.querySelectorAll("[data-inconsistency-idx]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          this.activeInconsistencyIdx = Number(btn.dataset.inconsistencyIdx);
+          this.renderInconsistencyView();
+        });
+      });
+    }
+
+    const validCovers = (item.distinct_covers || []).filter((c) => c.has_cover);
+    this.selectedCanonicalCoverTrackId = validCovers.length > 0 ? validCovers[0].track_id : null;
+    this.selectedCanonicalYear = (item.years || [])[0] || "";
+
+    const coversEl = document.getElementById("inconsistency-covers-list");
+    if (coversEl) {
+      if (!item.distinct_covers || !item.distinct_covers.length) {
+        coversEl.innerHTML = `<div class="text-xs text-zinc-500">No cover art detected across these tracks.</div>`;
+      } else {
+        coversEl.innerHTML = item.distinct_covers
+          .map((c) => {
+            const isSelected = this.selectedCanonicalCoverTrackId === c.track_id;
+            const borderCls = isSelected
+              ? "ring-2 ring-emerald-500 border-emerald-500 bg-emerald-500/10"
+              : "border-zinc-800 bg-zinc-950 hover:border-zinc-700";
+            return `
+              <div class="inconsistency-cover-card p-2.5 rounded-2xl border ${borderCls} cursor-pointer transition flex flex-col items-center text-center" data-cover-track-id="${c.track_id}">
+                <img src="${api.resolveUrl(c.cover_url)}" alt="" class="w-20 h-20 sm:w-24 sm:h-24 object-cover rounded-xl shadow-md border border-zinc-700/60 mb-2" onerror="this.onerror=null; this.src='/icon.svg';" />
+                <span class="text-[11px] font-semibold text-zinc-200 truncate w-full">${c.has_cover ? `${c.track_count} track(s)` : "Missing Cover"}</span>
+                <span class="text-[10px] text-zinc-500 font-mono">${c.has_cover ? "Embedded Cover" : "No art"}</span>
+                <span class="mt-1 text-[10px] px-2 py-0.5 rounded-full ${isSelected ? 'bg-emerald-500 text-zinc-950 font-bold' : 'bg-zinc-800 text-zinc-400'}">${isSelected ? 'Canonical Choice' : 'Select'}</span>
+              </div>
+            `;
+          })
+          .join("");
+
+        coversEl.querySelectorAll("[data-cover-track-id]").forEach((card) => {
+          card.addEventListener("click", () => {
+            this.selectedCanonicalCoverTrackId = Number(card.dataset.coverTrackId);
+            this.renderInconsistencyView();
+          });
+        });
+      }
+    }
+
+    const yearsEl = document.getElementById("inconsistency-years-list");
+    if (yearsEl) {
+      const yearOpts = item.years && item.years.length ? item.years : ["Unknown"];
+      yearsEl.innerHTML = yearOpts
+        .map((yr) => {
+          const isSelected = this.selectedCanonicalYear === yr;
+          const cls = isSelected
+            ? "bg-emerald-500 text-zinc-950 font-bold shadow-md"
+            : "bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800";
+          return `
+            <button class="px-3.5 py-1.5 rounded-xl text-xs font-mono transition cursor-pointer ${cls}" data-year-val="${this.escapeAttr(yr)}">
+              ${this.escape(yr)}
+            </button>
+          `;
+        })
+        .join("");
+
+      yearsEl.querySelectorAll("[data-year-val]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          this.selectedCanonicalYear = btn.dataset.yearVal;
+          this.renderInconsistencyView();
+        });
+      });
+    }
+
+    const artistInput = document.getElementById("inconsistency-artist-input");
+    if (artistInput) {
+      artistInput.value = item.artist || (item.album_artists || [])[0] || "";
+    }
+
+    const summaryEl = document.getElementById("inconsistency-summary-note");
+    if (summaryEl) {
+      const issues = [];
+      if (item.cover_conflict) issues.push(`Conflicting or missing cover art across ${item.distinct_covers?.length || 0} track variations`);
+      if (item.year_conflict) issues.push(`Conflicting release years: ${(item.years || []).join(", ")}`);
+      if (item.artist_conflict) issues.push(`Mismatched artist tags: ${(item.album_artists || []).join(", ")}`);
+
+      summaryEl.innerHTML = `
+        <div class="font-bold text-amber-300 flex items-center gap-1.5">
+          <span>⚠️ Detected Inconsistencies for "${this.escape(item.album)}" (${item.total_tracks} tracks):</span>
+        </div>
+        <ul class="list-disc list-inside text-zinc-300 space-y-0.5 pt-1">
+          ${issues.map((i) => `<li>${this.escape(i)}</li>`).join("")}
+        </ul>
+        <div class="text-[11px] text-zinc-400 pt-1 border-t border-zinc-800/80">
+          Clicking "Unify All Tracks" will re-tag all ${item.total_tracks} MP3 files with the chosen master cover art, year, and artist.
+        </div>
+      `;
+    }
+  }
+
+  async applyResolveInconsistency() {
+    const item = this.albumInconsistencies[this.activeInconsistencyIdx];
+    if (!item) return;
+
+    const artistInput = document.getElementById("inconsistency-artist-input");
+    const canonicalArtist = artistInput ? artistInput.value.trim() : item.artist;
+    const submitBtn = document.getElementById("btn-apply-inconsistency-resolve");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<span>Unifying ID3 tags across ${item.total_tracks} tracks...</span>`;
+    }
+
+    try {
+      const res = await api.resolveAlbumInconsistency({
+        album: item.album,
+        artist: item.artist,
+        canonical_track_id_for_cover: this.selectedCanonicalCoverTrackId,
+        canonical_year: this.selectedCanonicalYear,
+        canonical_album_artist: canonicalArtist,
+      });
+
+      this.showToast(res.message || `Album "${item.album}" unified successfully!`);
+      document.getElementById("album-inconsistency-modal")?.classList.add("hidden");
+
+      await this.checkAlbumInconsistencies();
+      await this.loadAlbums();
+      await this.loadLibrary("", true);
+    } catch (err) {
+      this.showToast(`Failed unifying album: ${err.message}`, "error");
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `<svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><polygon points="20 6 9 17 4 12"/></svg><span>Unify All Tracks in Album</span>`;
+      }
+    }
+  }
+
 
   // ---- Extraction Job ----
 
@@ -4000,12 +4289,32 @@ class MusicLinkerController {
 
     document.getElementById("btn-close-swap-modal")?.addEventListener("click", () => {
       this.stopCandidatePreview();
-      document.getElementById("swap-audio-modal")?.classList.add("hidden");
+      this.minimizeSwapModal();
     });
     document.getElementById("btn-cancel-swap-modal")?.addEventListener("click", () => {
       this.stopCandidatePreview();
-      document.getElementById("swap-audio-modal")?.classList.add("hidden");
+      this.minimizeSwapModal();
     });
+    document.getElementById("btn-minimize-swap-modal")?.addEventListener("click", () => this.minimizeSwapModal());
+    document.getElementById("btn-swap-run-bg")?.addEventListener("click", () => this.minimizeSwapModal());
+    document.getElementById("floating-swap-pill")?.addEventListener("click", () => this.restoreSwapModal());
+    document.getElementById("btn-floating-swap-expand")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.restoreSwapModal();
+    });
+
+    // Auto DB Fix button
+    document.getElementById("btn-auto-fix-db")?.addEventListener("click", () => this.runAutoDbFix());
+
+    // Album Inconsistencies button & modal
+    document.getElementById("btn-album-inconsistencies-pill")?.addEventListener("click", () => this.openAlbumInconsistencyModal());
+    document.getElementById("btn-close-inconsistency-modal")?.addEventListener("click", () => {
+      document.getElementById("album-inconsistency-modal")?.classList.add("hidden");
+    });
+    document.getElementById("btn-cancel-inconsistency-modal")?.addEventListener("click", () => {
+      document.getElementById("album-inconsistency-modal")?.classList.add("hidden");
+    });
+    document.getElementById("btn-apply-inconsistency-resolve")?.addEventListener("click", () => this.applyResolveInconsistency());
 
     // Imbued Last.fm Scrobbler Listeners
     document.getElementById("btn-lastfm-connect")?.addEventListener("click", async () => {
@@ -4089,6 +4398,7 @@ class MusicLinkerController {
         document.getElementById("swap-audio-modal")?.classList.add("hidden");
         document.getElementById("bulk-album-modal")?.classList.add("hidden");
         document.getElementById("lastfm-auth-modal")?.classList.add("hidden");
+        document.getElementById("album-inconsistency-modal")?.classList.add("hidden");
       }
     });
   }

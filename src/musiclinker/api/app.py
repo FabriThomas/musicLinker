@@ -23,6 +23,7 @@ from musiclinker.domain.models import (
     AlbumBulkRenamePayload,
     AlbumDownloadRequest,
     AlbumMatchRequest,
+    AlbumResolveInconsistencyPayload,
     BatchScrobblePayload,
     BatchTrackDeletePayload,
     BulkAssignAlbumPayload,
@@ -70,7 +71,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="3.0.6",
+        version="3.1.3",
         lifespan=lifespan,
     )
 
@@ -188,6 +189,11 @@ def create_app() -> FastAPI:
             logger.error("Failed to replace audio for track %d: %s", track_id, exc)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    @app.get("/api/tracks/{track_id}/swap-status", dependencies=[Depends(require_paired_client)])
+    def get_track_swap_status(track_id: int) -> dict[str, Any]:
+        """Get live progress and state of an audio replacement operation for a track."""
+        return library_service.get_swap_status(track_id)
+
     @app.post("/api/albums/match-tracklist", dependencies=[Depends(require_paired_client)])
     async def match_album_tracklist_endpoint(payload: AlbumMatchRequest) -> dict[str, Any]:
         """Fuzzy match selected local tracks against an official album tracklist."""
@@ -216,6 +222,28 @@ def create_app() -> FastAPI:
             )
         except Exception as exc:
             logger.error("Failed to bulk assign album: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/api/albums/inconsistencies", dependencies=[Depends(require_paired_client)])
+    async def get_album_inconsistencies() -> dict[str, Any]:
+        """Detect albums containing conflicting cover art, mismatched release years, or inconsistent artist tags."""
+        inconsistencies = await asyncio.to_thread(library_service.find_album_inconsistencies)
+        return {"inconsistencies": inconsistencies, "count": len(inconsistencies)}
+
+    @app.post("/api/albums/resolve-inconsistency", dependencies=[Depends(require_paired_client)])
+    async def resolve_album_inconsistency_endpoint(payload: AlbumResolveInconsistencyPayload) -> dict[str, Any]:
+        """Unify and synchronize album cover art, release year, and album artist across all tracks on disk & DB."""
+        try:
+            return await asyncio.to_thread(
+                library_service.resolve_album_inconsistency,
+                album=payload.album,
+                artist=payload.artist,
+                canonical_track_id_for_cover=payload.canonical_track_id_for_cover,
+                canonical_year=payload.canonical_year,
+                canonical_album_artist=payload.canonical_album_artist,
+            )
+        except Exception as exc:
+            logger.error("Failed to resolve album inconsistency for '%s': %s", payload.album, exc)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -260,6 +288,15 @@ def create_app() -> FastAPI:
     @app.post("/api/library/rescan", dependencies=[Depends(require_paired_client)])
     def rescan_library() -> dict[str, int]:
         return library_service.scan_and_sync_downloads()
+
+    @app.post("/api/library/auto-fix", dependencies=[Depends(require_paired_client)])
+    async def auto_fix_database_endpoint() -> dict[str, Any]:
+        """Prune missing files, repair zero durations/bitrates, auto-link LRCs, clean whitespace, and optimize DB."""
+        try:
+            return await asyncio.to_thread(library_service.auto_fix_database)
+        except Exception as exc:
+            logger.error("Database auto-fix failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     # ---- LLM Smart Curator & Deduplication Endpoints ----
 

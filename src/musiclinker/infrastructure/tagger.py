@@ -180,6 +180,27 @@ class AudioTagger:
         except Exception as exc:
             raise TaggingError(f"Failed updating lyrics on {mp3_path.name}: {exc}") from exc
 
+    def set_mp3_cover(self, mp3_path: Path, cover_bytes: bytes, cover_mime: str = "image/jpeg") -> None:
+        """Inject or replace the APIC cover art frame in an existing MP3 file."""
+        try:
+            try:
+                tags = ID3(str(mp3_path))
+            except ID3NoHeaderError:
+                tags = ID3()
+            tags.delall("APIC")
+            tags.add(
+                APIC(
+                    encoding=3,
+                    mime=cover_mime or "image/jpeg",
+                    type=3,
+                    desc="Cover",
+                    data=cover_bytes,
+                )
+            )
+            tags.save(str(mp3_path), v2_version=4)
+        except Exception as exc:
+            raise TaggingError(f"Failed updating cover art on {mp3_path.name}: {exc}") from exc
+
     def read_mp3_metadata(self, mp3_path: Path) -> dict[str, Any]:
         audio = MP3(str(mp3_path))
         duration = int(round(audio.info.length)) if audio.info else 0
