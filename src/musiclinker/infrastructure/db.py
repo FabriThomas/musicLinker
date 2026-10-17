@@ -18,10 +18,12 @@ from musiclinker.domain.models import TrackEntity
 from musiclinker.infrastructure.hasher import clean_album_name, normalize_text
 
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "lastfm_api_key": os.environ.get("LASTFM_API_KEY", ""),
-    "lastfm_api_secret": os.environ.get("LASTFM_API_SECRET", ""),
+    "lastfm_api_key": os.environ.get("LASTFM_API_KEY", "75d20fb472be99275392aefa2760ea09"),
+    "lastfm_api_secret": os.environ.get("LASTFM_API_SECRET", "d3072b60ae626be12be69448f5c46e70"),
     "lastfm_username": os.environ.get("LASTFM_USERNAME", ""),
     "lastfm_session_key": os.environ.get("LASTFM_SESSION_KEY", ""),
+    "lastfm_scrobble_enabled": True,
+    "lastfm_nowplaying_enabled": True,
     "default_bitrate_kbps": 320,
     "default_min_plays": 10,
     "default_download_cap": 25,

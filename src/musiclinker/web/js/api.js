@@ -141,8 +141,9 @@ class MusicLinkerAPI {
 
   // ---- Audio Candidates & Audio Replacement ----
 
-  async getTrackCandidates(trackId, maxResults = 6) {
-    return this.request(`/api/tracks/${trackId}/candidates?max_results=${maxResults}`);
+  async getTrackCandidates(trackId, query = "", maxResults = 6) {
+    const qParam = query ? `&q=${encodeURIComponent(query)}` : "";
+    return this.request(`/api/tracks/${trackId}/candidates?max_results=${maxResults}${qParam}`);
   }
 
   getCandidatePreviewUrl(videoId) {
@@ -154,6 +155,24 @@ class MusicLinkerAPI {
       method: "POST",
       body: JSON.stringify({ youtube_url: youtubeUrl, bitrate_kbps: bitrateKbps }),
     });
+  }
+
+  // ---- Last.fm Imbued Scrobbler Methods ----
+
+  async startLastFmAuth() {
+    return this.request("/api/lastfm/auth/start", { method: "POST" });
+  }
+
+  async completeLastFmAuth(token) {
+    return this.request(`/api/lastfm/auth/complete?token=${encodeURIComponent(token)}`, { method: "POST" });
+  }
+
+  async disconnectLastFm() {
+    return this.request("/api/lastfm/disconnect", { method: "POST" });
+  }
+
+  async flushPendingScrobbles() {
+    return this.request("/api/lastfm/scrobble-pending", { method: "POST" });
   }
 
   // ---- Bulk Album Matching & Assignment ----

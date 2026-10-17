@@ -490,16 +490,36 @@ class LibraryService:
         self.repo.delete_album_alias(alias_id)
         return True
 
-    def get_track_audio_candidates(self, track_id: int, max_results: int = 6) -> dict[str, Any]:
+    def get_track_audio_candidates(self, track_id: int, custom_query: str = "", max_results: int = 6) -> dict[str, Any]:
         track = self.repo.get_track(track_id)
         if not track:
             raise ValueError(f"Track ID {track_id} not found.")
 
+        raw_results: list[dict[str, Any]] = []
         clean_title = re.sub(r"\(.*?\)|\[.*?\]", "", track.title).strip()
-        query = f"{track.artist_display} {clean_title} official audio"
-        raw_results = youtube_client.search_videos(query, max_results=max_results)
-        if len(raw_results) < 3:
-            raw_results += youtube_client.search_videos(f"{track.artist_display} {clean_title}", max_results=max_results)
+
+        if custom_query.strip():
+            cq = custom_query.strip()
+            try:
+                raw_results.extend(youtube_client.search_videos(cq, max_results=max_results))
+            except Exception as exc:
+                logger.debug("Custom candidate search failed for '%s': %s", cq, exc)
+
+        if not raw_results:
+            strategies = [
+                f"{track.artist_display} {clean_title} official audio",
+                f"{track.artist_display} {clean_title}",
+                f"{clean_title} {track.artist_display}",
+                clean_title,
+            ]
+            for q in strategies:
+                if len(raw_results) >= max_results:
+                    break
+                try:
+                    found = youtube_client.search_videos(q, max_results=max_results)
+                    raw_results.extend(found)
+                except Exception as exc:
+                    logger.debug("Candidate search fallback failed for '%s': %s", q, exc)
 
         seen_ids = set()
         candidates = []
@@ -514,10 +534,13 @@ class LibraryService:
             diff_label = f"{sign}{diff}s" if dur > 0 and track.duration > 0 else ""
             candidates.append({
                 "id": vid_id,
+                "video_id": vid_id,
                 "title": r.get("title", "Unknown"),
                 "uploader": r.get("uploader", "YouTube"),
+                "channel": r.get("uploader", "YouTube"),
                 "duration": dur,
                 "duration_diff": diff,
+                "duration_diff_sec": diff,
                 "duration_diff_label": diff_label,
                 "url": r.get("url") or f"https://www.youtube.com/watch?v={vid_id}",
                 "thumbnail": r.get("thumbnail", ""),

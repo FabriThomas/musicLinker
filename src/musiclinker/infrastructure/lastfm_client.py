@@ -19,18 +19,22 @@ LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 USER_AGENT = "MusicLinker/3.0 (+https://github.com/FabriThomas/musicLink)"
 
 
+DEFAULT_LASTFM_API_KEY = "75d20fb472be99275392aefa2760ea09"
+DEFAULT_LASTFM_API_SECRET = "d3072b60ae626be12be69448f5c46e70"
+
+
 class LastFMClient:
     """Handles Last.fm read queries (Top Tracks, Calendar Year Scrobbles, Album Tracklists) and write calls (Now Playing, Scrobble)."""
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
         api_secret: str = "",
         session_key: str = "",
         timeout: float = 15.0,
     ) -> None:
-        self.api_key = api_key.strip()
-        self.api_secret = api_secret.strip()
+        self.api_key = (api_key.strip() if api_key else "") or DEFAULT_LASTFM_API_KEY
+        self.api_secret = (api_secret.strip() if api_secret else "") or DEFAULT_LASTFM_API_SECRET
         self.session_key = session_key.strip()
         self.timeout = timeout
         self.session = requests.Session()

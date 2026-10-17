@@ -756,18 +756,83 @@
           <div id="settings-aliases-list" class="max-h-48 overflow-y-auto ml-scroll space-y-1.5 text-xs"></div>
         </div>
 
-        <div class="space-y-3 border-t border-zinc-800/80 pt-3">
-          <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>
-            <span>Last.fm API Credentials</span>
-          </h2>
-          <input id="set-api-key" type="text" placeholder="Last.fm API Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-          <input id="set-api-secret" type="password" placeholder="Last.fm API Secret" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-          <input id="set-username" type="text" placeholder="Default Last.fm Username" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm" />
-          <button id="btn-save-settings" class="ml-btn ml-btn-secondary w-full py-2 text-xs flex items-center justify-center gap-1.5">
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-            <span>Save Credentials</span>
-          </button>
+        <!-- Imbued Last.fm Scrobbler Section -->
+        <div class="space-y-3.5 border-t border-zinc-800/80 pt-4">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+              <span class="w-3.5 h-3.5 rounded-full bg-red-600 flex items-center justify-center text-[9px] font-black text-white shrink-0">l</span>
+              <span>Last.fm Scrobbler (Imbued)</span>
+            </h2>
+            <span id="lastfm-status-badge" class="text-[10px] font-mono px-2 py-0.5 rounded-full border border-zinc-700 bg-zinc-800 text-zinc-400">Disconnected</span>
+          </div>
+
+          <!-- Connected Card -->
+          <div id="lastfm-connected-card" class="hidden bg-emerald-950/30 border border-emerald-500/40 rounded-xl p-3 space-y-2.5">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <div class="w-8 h-8 rounded-full bg-red-600/20 border border-red-500/50 flex items-center justify-center font-bold text-red-400 shrink-0 text-xs">FM</div>
+                <div class="min-w-0">
+                  <div class="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                    <span id="lastfm-user-display">@username</span>
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  </div>
+                  <div class="text-[11px] text-zinc-400">Scrobbler active & synced</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <a id="lastfm-profile-link" href="#" target="_blank" class="ml-btn ml-btn-secondary px-2.5 py-1 text-[11px] flex items-center gap-1 text-zinc-300 hover:text-white">
+                  <span>Profile</span>
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                </a>
+                <button id="btn-lastfm-disconnect" class="ml-btn ml-btn-danger px-2.5 py-1 text-[11px]">
+                  Disconnect
+                </button>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between pt-1 border-t border-emerald-900/50 text-[11px] text-zinc-400">
+              <span id="lastfm-pending-text">Pending scrobbles: 0</span>
+              <button id="btn-flush-scrobbles" class="text-emerald-400 hover:underline">Sync Pending Now</button>
+            </div>
+          </div>
+
+          <!-- Disconnected Card / Connect Account -->
+          <div id="lastfm-disconnected-card" class="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3.5 space-y-3">
+            <p class="text-xs text-zinc-400 leading-relaxed">
+              MusicLinker has an <strong>imbued Last.fm scrobbler</strong>. Connect your account in 1 click to automatically scrobble your plays and broadcast "Now Playing" status in real time.
+            </p>
+            <button id="btn-lastfm-connect" class="ml-btn w-full py-2.5 text-xs font-bold bg-red-600 hover:bg-red-500 text-white flex items-center justify-center gap-2 rounded-xl shadow-lg transition">
+              <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-6h2v6zm4 0h-2V7h2v10z"/></svg>
+              <span>Connect Last.fm Account</span>
+            </button>
+          </div>
+
+          <!-- Scrobbler Preferences Toggles -->
+          <div class="space-y-2 pt-1">
+            <label class="flex items-center gap-2.5 cursor-pointer text-xs text-zinc-300">
+              <input id="set-scrobble-enabled" type="checkbox" checked class="track-select-checkbox" />
+              <span>Enable automatic track scrobbling (after 50% or 4 mins)</span>
+            </label>
+            <label class="flex items-center gap-2.5 cursor-pointer text-xs text-zinc-300">
+              <input id="set-nowplaying-enabled" type="checkbox" checked class="track-select-checkbox" />
+              <span>Broadcast "Now Playing" status to Last.fm</span>
+            </label>
+          </div>
+
+          <!-- Advanced / Custom Credentials Accordion -->
+          <details class="text-xs text-zinc-500">
+            <summary class="cursor-pointer hover:text-zinc-300 py-1 font-mono text-[11px]">Advanced: Custom API Key / Manual Session Key</summary>
+            <div class="space-y-2 pt-2">
+              <input id="set-api-key" type="text" placeholder="Custom Last.fm API Key (leave empty for imbued default)" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-xs text-zinc-200" />
+              <input id="set-api-secret" type="password" placeholder="Custom Last.fm API Secret (leave empty for imbued default)" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-xs text-zinc-200" />
+              <input id="set-session-key" type="text" placeholder="Manual Last.fm Session Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-xs text-zinc-200" />
+              <input id="set-username" type="text" placeholder="Default Last.fm Username" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-xs text-zinc-200" />
+              <button id="btn-save-settings" class="ml-btn ml-btn-secondary w-full py-1.5 text-xs flex items-center justify-center gap-1.5">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+                <span>Save Advanced Credentials</span>
+              </button>
+            </div>
+          </details>
         </div>
       </div>
     </section>
@@ -784,7 +849,13 @@
         </div>
       </div>
       <div class="min-w-0 flex-1 cursor-pointer" id="np-text-container" title="Click to open Big Player & Synced Lyrics">
-        <div id="np-title" class="font-bold text-sm sm:text-base truncate text-white hover:text-emerald-400 transition leading-snug">Not Playing</div>
+        <div class="flex items-center gap-1.5 min-w-0">
+          <div id="np-title" class="font-bold text-sm sm:text-base truncate text-white hover:text-emerald-400 transition leading-snug">Not Playing</div>
+          <span id="player-lastfm-badge" class="hidden lastfm-badge text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0 flex items-center gap-1" title="Last.fm Scrobbler Active">
+            <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+            <span>Last.fm</span>
+          </span>
+        </div>
         <div id="np-artist" class="text-xs sm:text-sm text-zinc-400 truncate mt-0.5">Select a track or album</div>
       </div>
       <button id="btn-expand-player" class="ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs shrink-0 rounded-xl text-zinc-300 hover:text-white flex items-center gap-1" title="Maximize Big Player & Karaoke Lyrics">
@@ -1179,6 +1250,20 @@
         </div>
       </div>
 
+      <!-- Search / Direct URL Input Form -->
+      <form id="swap-search-form" class="flex items-center gap-2 shrink-0">
+        <input
+          id="swap-search-input"
+          type="text"
+          placeholder="Search title, artist, or paste direct YouTube URL..."
+          class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:border-emerald-500 focus:outline-none"
+        />
+        <button type="submit" id="btn-swap-search" class="ml-btn ml-btn-secondary px-3.5 py-2 text-xs rounded-xl flex items-center gap-1.5 shrink-0">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <span>Search</span>
+        </button>
+      </form>
+
       <p class="text-xs text-zinc-400 shrink-0">
         Listen to a 15-second instant preview of the audio start to verify correctness before swapping. Metadata and ID3 tags will be preserved.
       </p>
@@ -1350,6 +1435,36 @@
         </button>
         <button id="btn-eq-done" class="ml-btn ml-btn-primary px-5 py-1.5 text-xs font-bold rounded-xl">
           Done
+        </button>
+      </div>
+  <!-- Last.fm 1-Click Browser Authorization Modal -->
+  <div id="lastfm-auth-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-md">
+    <div class="bg-zinc-900/95 border border-zinc-700/90 rounded-2xl p-5 max-w-md w-full space-y-4 shadow-2xl flex flex-col">
+      <div class="flex items-center justify-between pb-3 border-b border-zinc-800">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center text-xs font-black text-white">l</span>
+          <h3 class="font-bold text-base text-white">Authorize Last.fm</h3>
+        </div>
+        <button id="btn-close-lastfm-modal" class="text-zinc-400 hover:text-white p-1 rounded-lg">✕</button>
+      </div>
+
+      <div class="space-y-3 text-xs text-zinc-300">
+        <p>A Last.fm authorization page has been opened in your web browser.</p>
+        <div class="bg-zinc-950/70 border border-zinc-800 rounded-xl p-3 space-y-1.5">
+          <div class="font-bold text-zinc-200">Step 1: Allow access on Last.fm</div>
+          <div class="text-zinc-400">Click <strong>"Yes, allow access"</strong> in the browser tab to grant scrobbling permissions.</div>
+          <div class="font-bold text-zinc-200 pt-1">Step 2: Finish connection</div>
+          <div class="text-zinc-400">Click the button below once approved to complete linking.</div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 pt-2">
+        <button id="btn-cancel-lastfm-modal" class="ml-btn ml-btn-secondary flex-1 py-2 text-xs">
+          Cancel
+        </button>
+        <button id="btn-complete-lastfm-auth" class="ml-btn flex-1 py-2 text-xs font-bold bg-red-600 hover:bg-red-500 text-white rounded-xl flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span>Complete Connection</span>
         </button>
       </div>
     </div>

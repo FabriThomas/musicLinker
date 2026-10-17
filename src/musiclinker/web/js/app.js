@@ -356,14 +356,12 @@ class MusicLinkerController {
             : "";
 
         const isSelected = this.selectedTrackIds.has(t.id);
-        const checkboxHtml = this.isMultiSelectActive
-          ? `<input type="checkbox" data-select-id="${t.id}" ${isSelected ? "checked" : ""} class="track-select-checkbox mr-2.5 shrink-0" />`
-          : "";
+        const checkboxHtml = `<input type="checkbox" data-select-id="${t.id}" ${isSelected ? "checked" : ""} class="track-select-checkbox mr-2.5 shrink-0 ${this.isMultiSelectActive ? "" : "hidden"}" />`;
 
         return `
-          <div class="ml-track-row group flex items-center justify-between p-2.5 rounded-xl border ${
+          <div data-track-row-id="${t.id}" class="ml-track-row group flex items-center justify-between p-2.5 rounded-xl border ${
             isSelected
-              ? "bg-emerald-950/60 border-emerald-500/70"
+              ? "is-selected bg-emerald-950/60 border-emerald-500/70"
               : isCurrent
               ? "bg-emerald-950/50 border-emerald-500/45 shadow-sm"
               : "bg-zinc-900/30 border-zinc-800/40 hover:bg-zinc-800/65 hover:border-zinc-700/80"
@@ -436,13 +434,22 @@ class MusicLinkerController {
         if (e.target.closest("[data-select-id]")) return;
         const idx = Number(el.dataset.playIdx);
         const track = this.tracks[idx];
-        if (this.isMultiSelectActive || e.ctrlKey || e.metaKey || e.shiftKey) {
+        if (!track) return;
+
+        if (e.shiftKey) {
           e.stopPropagation();
-          if (track) {
-            this.toggleTrackSelection(track.id, !this.selectedTrackIds.has(track.id));
-          }
+          e.preventDefault();
+          this.handleShiftClickSelection(idx);
           return;
         }
+
+        if (this.isMultiSelectActive || e.ctrlKey || e.metaKey) {
+          e.stopPropagation();
+          e.preventDefault();
+          this.handleCtrlClickSelection(idx);
+          return;
+        }
+
         const albumSpan = e.target.closest("[data-filter-album]");
         if (albumSpan) {
           e.stopPropagation();
@@ -451,6 +458,7 @@ class MusicLinkerController {
           this.loadLibrary(document.getElementById("search-input")?.value || "", false);
           return;
         }
+        this.lastSelectedTrackIdx = idx;
         this.playQueue = [...this.tracks];
         this.playByIndex(idx);
       });
@@ -2165,13 +2173,32 @@ class MusicLinkerController {
       timestamp: Math.floor(Date.now() / 1000),
     };
     try {
-      await api.request("/api/player/scrobble", {
+      const res = await api.request("/api/player/scrobble", {
         method: "POST",
         body: JSON.stringify(payload),
       });
+      if (res && res.status === "scrobbled") {
+        this.showScrobbleToast(track.title, track.artist_display);
+      }
     } catch (_err) {
       await offlineStore.queueOfflineScrobble(payload);
     }
+  }
+
+  showScrobbleToast(title, artist) {
+    const existing = document.querySelector(".lastfm-scrobble-toast");
+    if (existing) existing.remove();
+
+    const toast = document.createElement("div");
+    toast.className = "lastfm-scrobble-toast text-xs";
+    toast.innerHTML = `
+      <span class="w-4 h-4 rounded-full bg-red-600 flex items-center justify-center text-[10px] font-black text-white shrink-0">l</span>
+      <span class="text-zinc-200">Scrobbled to Last.fm: <strong class="text-white">${this.escape(title)}</strong> - <span class="text-zinc-400">${this.escape(artist)}</span></span>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => {
+      if (toast.parentNode) toast.remove();
+    }, 4000);
   }
 
   async loadLyricsForTrack(track) {
@@ -2610,19 +2637,92 @@ class MusicLinkerController {
     this.renderTrackList();
   }
 
+  ensureMultiSelectActive() {
+    if (this.isMultiSelectActive) return;
+    this.isMultiSelectActive = true;
+    const btn = document.getElementById("btn-toggle-multi-select");
+    const bar = document.getElementById("multi-select-bar");
+    if (btn) {
+      btn.className = "ml-btn px-2.5 py-1.5 text-xs font-semibold bg-emerald-500 text-zinc-950 flex items-center gap-1.5 shadow-sm";
+    }
+    if (bar) {
+      bar.classList.remove("hidden");
+    }
+    document.querySelectorAll(".track-select-checkbox").forEach((cb) => {
+      cb.classList.remove("hidden");
+    });
+  }
+
+  handleCtrlClickSelection(idx) {
+    const track = this.tracks[idx];
+    if (!track) return;
+    this.ensureMultiSelectActive();
+    const willSelect = !this.selectedTrackIds.has(track.id);
+    if (willSelect) {
+      this.selectedTrackIds.add(track.id);
+    } else {
+      this.selectedTrackIds.delete(track.id);
+    }
+    this.lastSelectedTrackIdx = idx;
+    this.updateMultiSelectBar();
+
+    // Immediate DOM feedback
+    const rowEl = document.querySelector(`[data-track-row-id="${track.id}"]`);
+    if (rowEl) {
+      rowEl.classList.toggle("is-selected", willSelect);
+      rowEl.classList.toggle("bg-emerald-950/60", willSelect);
+      rowEl.classList.toggle("border-emerald-500/70", willSelect);
+      rowEl.classList.add("selection-pulse");
+      setTimeout(() => rowEl.classList.remove("selection-pulse"), 200);
+      const cb = rowEl.querySelector(`[data-select-id="${track.id}"]`);
+      if (cb) cb.checked = willSelect;
+    }
+  }
+
+  handleShiftClickSelection(idx) {
+    const track = this.tracks[idx];
+    if (!track) return;
+    this.ensureMultiSelectActive();
+
+    const startIdx = this.lastSelectedTrackIdx !== null && this.lastSelectedTrackIdx !== undefined
+      ? this.lastSelectedTrackIdx
+      : 0;
+    const endIdx = idx;
+    const minIdx = Math.min(startIdx, endIdx);
+    const maxIdx = Math.max(startIdx, endIdx);
+
+    for (let i = minIdx; i <= maxIdx; i++) {
+      const t = this.tracks[i];
+      if (!t) continue;
+      this.selectedTrackIds.add(t.id);
+      const rowEl = document.querySelector(`[data-track-row-id="${t.id}"]`);
+      if (rowEl) {
+        rowEl.classList.add("is-selected", "bg-emerald-950/60", "border-emerald-500/70", "selection-pulse");
+        setTimeout(() => rowEl.classList.remove("selection-pulse"), 200);
+        const cb = rowEl.querySelector(`[data-select-id="${t.id}"]`);
+        if (cb) cb.checked = true;
+      }
+    }
+
+    this.lastSelectedTrackIdx = idx;
+    this.updateMultiSelectBar();
+  }
+
   toggleTrackSelection(trackId, isSelected) {
     if (isSelected) {
+      this.ensureMultiSelectActive();
       this.selectedTrackIds.add(trackId);
     } else {
       this.selectedTrackIds.delete(trackId);
     }
     this.updateMultiSelectBar();
-    const rowCb = document.querySelector(`[data-select-id="${trackId}"]`);
-    if (rowCb) rowCb.checked = isSelected;
-    const rowEl = rowCb?.closest(".ml-track-row");
+    const rowEl = document.querySelector(`[data-track-row-id="${trackId}"]`);
     if (rowEl) {
+      rowEl.classList.toggle("is-selected", isSelected);
       rowEl.classList.toggle("bg-emerald-950/60", isSelected);
       rowEl.classList.toggle("border-emerald-500/70", isSelected);
+      const rowCb = rowEl.querySelector(`[data-select-id="${trackId}"]`);
+      if (rowCb) rowCb.checked = isSelected;
     }
   }
 
@@ -2858,30 +2958,46 @@ class MusicLinkerController {
     const titleEl = document.getElementById("swap-target-title");
     const artistEl = document.getElementById("swap-target-artist");
     const durEl = document.getElementById("swap-target-duration");
-    const listEl = document.getElementById("swap-candidates-list");
-    const statusEl = document.getElementById("swap-status-text");
+    const searchInput = document.getElementById("swap-search-input");
 
     if (idInput) idInput.value = track.id;
     if (titleEl) titleEl.textContent = track.title;
     if (artistEl) artistEl.textContent = track.artist_display;
     if (durEl) durEl.textContent = this.formatDuration(track.duration);
+    if (searchInput) searchInput.value = `${track.artist_display} ${track.title}`;
+
+    if (modal) modal.classList.remove("hidden");
+    await this.queryAudioCandidates(track.id, "");
+  }
+
+  async queryAudioCandidates(trackId, customQuery = "") {
+    this.stopCandidatePreview();
+    const listEl = document.getElementById("swap-candidates-list");
+    const statusEl = document.getElementById("swap-status-text");
+    const track = this.swapCurrentTrack;
 
     if (listEl) {
       listEl.innerHTML = `
         <div class="p-8 text-center text-xs text-zinc-400 space-y-2">
           <div class="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <div>Searching YouTube for alternative versions of "${this.escape(track.title)}"...</div>
+          <div>Searching YouTube for alternative versions${customQuery ? ` matching "${this.escape(customQuery)}"` : ""}...</div>
         </div>
       `;
     }
     if (statusEl) statusEl.textContent = "Querying alternative audio versions...";
 
-    if (modal) modal.classList.remove("hidden");
-
     try {
-      const res = await api.getTrackCandidates(track.id, 6);
-      this.renderAudioCandidates(track, res.candidates || []);
-      if (statusEl) statusEl.textContent = `${(res.candidates || []).length} alternative versions found`;
+      const res = await api.getTrackCandidates(trackId, customQuery, 8);
+      let list = [];
+      if (Array.isArray(res)) {
+        list = res;
+      } else if (Array.isArray(res.candidates)) {
+        list = res.candidates;
+      } else if (res.candidates && Array.isArray(res.candidates.candidates)) {
+        list = res.candidates.candidates;
+      }
+      this.renderAudioCandidates(track, list);
+      if (statusEl) statusEl.textContent = `${list.length} alternative version(s) found`;
     } catch (err) {
       if (listEl) {
         listEl.innerHTML = `<div class="p-6 text-center text-xs text-red-400">Failed searching versions: ${this.escape(err.message)}</div>`;
@@ -2894,14 +3010,21 @@ class MusicLinkerController {
     const listEl = document.getElementById("swap-candidates-list");
     if (!listEl) return;
 
-    if (!candidates.length) {
-      listEl.innerHTML = `<div class="p-6 text-center text-xs text-zinc-500">No alternative versions found for this track.</div>`;
+    if (!candidates || !candidates.length) {
+      listEl.innerHTML = `
+        <div class="p-8 text-center text-xs text-zinc-400 space-y-2">
+          <div class="text-zinc-300 font-semibold">No alternative versions found</div>
+          <div class="text-zinc-500">Try modifying the search bar above or paste a direct YouTube video URL to swap.</div>
+        </div>
+      `;
       return;
     }
 
     listEl.innerHTML = candidates
       .map((c) => {
-        const diffSec = c.duration_diff_sec !== undefined ? c.duration_diff_sec : (c.duration - currentTrack.duration);
+        const vidId = c.video_id || c.id;
+        const channelName = c.channel || c.uploader || "YouTube";
+        const diffSec = c.duration_diff_sec !== undefined ? c.duration_diff_sec : (c.duration_diff !== undefined ? c.duration_diff : (c.duration - (currentTrack ? currentTrack.duration : 0)));
         const diffText = diffSec === 0 ? "Exact duration" : diffSec > 0 ? `+${diffSec}s` : `${diffSec}s`;
         const diffBadgeClass =
           Math.abs(diffSec) <= 3
@@ -2911,11 +3034,11 @@ class MusicLinkerController {
             : "bg-red-500/20 text-red-300 border-red-500/40";
 
         return `
-          <div class="candidate-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs" data-video-card="${c.video_id}">
+          <div class="candidate-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs" data-video-card="${vidId}">
             <div class="min-w-0 flex-1">
               <div class="font-bold text-white text-sm truncate leading-snug">${this.escape(c.title)}</div>
               <div class="flex items-center gap-2 text-zinc-400 text-xs mt-0.5 truncate">
-                <span>${this.escape(c.channel || "Official Channel")}</span>
+                <span>${this.escape(channelName)}</span>
                 <span class="text-zinc-600">•</span>
                 <span class="font-mono text-zinc-300">${this.formatDuration(c.duration)}</span>
                 <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border ${diffBadgeClass}">${diffText}</span>
@@ -2923,7 +3046,7 @@ class MusicLinkerController {
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <button
-                data-preview-video-id="${c.video_id}"
+                data-preview-video-id="${vidId}"
                 class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 text-emerald-300 hover:text-white"
                 title="Play 15-second snippet of this audio start"
               >
@@ -3350,6 +3473,41 @@ class MusicLinkerController {
       setVal("dl-album-method", cfg.preferred_download_method || "auto");
       setVal("ext-method", cfg.preferred_download_method || "auto");
       setVal("ext-bitrate", cfg.default_bitrate_kbps || "320");
+
+      // Last.fm Imbued Scrobbler UI State
+      const isConnected = !!cfg.lastfm_session_connected;
+      const lfmUsername = cfg.lastfm_username || "";
+      const connCard = document.getElementById("lastfm-connected-card");
+      const disconnCard = document.getElementById("lastfm-disconnected-card");
+      const statusBadge = document.getElementById("lastfm-status-badge");
+      const userDisplay = document.getElementById("lastfm-user-display");
+      const profileLink = document.getElementById("lastfm-profile-link");
+      const playerBadge = document.getElementById("player-lastfm-badge");
+      const scrobbleCb = document.getElementById("set-scrobble-enabled");
+      const nowPlayingCb = document.getElementById("set-nowplaying-enabled");
+
+      if (connCard) connCard.classList.toggle("hidden", !isConnected);
+      if (disconnCard) disconnCard.classList.toggle("hidden", isConnected);
+      if (statusBadge) {
+        statusBadge.textContent = isConnected ? "Connected" : "Disconnected";
+        statusBadge.className = isConnected
+          ? "text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-500/60 bg-emerald-950/60 text-emerald-400"
+          : "text-[10px] font-mono px-2 py-0.5 rounded-full border border-zinc-700 bg-zinc-800 text-zinc-400";
+      }
+      if (userDisplay) userDisplay.textContent = lfmUsername ? `@${lfmUsername}` : "@user";
+      if (profileLink && lfmUsername) profileLink.href = `https://www.last.fm/user/${encodeURIComponent(lfmUsername)}`;
+      if (playerBadge) playerBadge.classList.toggle("hidden", !isConnected);
+
+      if (scrobbleCb) scrobbleCb.checked = cfg.lastfm_scrobble_enabled !== false;
+      if (nowPlayingCb) nowPlayingCb.checked = cfg.lastfm_nowplaying_enabled !== false;
+
+      // Pending scrobbles
+      try {
+        const syncInfo = await api.request("/api/sync/info");
+        const pendingEl = document.getElementById("lastfm-pending-text");
+        if (pendingEl) pendingEl.textContent = `Pending scrobbles: ${syncInfo.pending_scrobbles || 0}`;
+      } catch (_e) {}
+
       await this.loadAlbumAliases();
       try {
         const storageInfo = await api.request("/api/system/storage-info");
@@ -3422,7 +3580,10 @@ class MusicLinkerController {
   async saveSettings(silent = false) {
     const apiKey = document.getElementById("set-api-key")?.value.trim();
     const apiSecret = document.getElementById("set-api-secret")?.value.trim();
+    const sessionKey = document.getElementById("set-session-key")?.value.trim();
     const username = document.getElementById("set-username")?.value.trim();
+    const scrobbleEnabled = document.getElementById("set-scrobble-enabled")?.checked;
+    const nowPlayingEnabled = document.getElementById("set-nowplaying-enabled")?.checked;
     const llmBaseUrl = document.getElementById("llm-base-url")?.value.trim();
     const llmApiKey = document.getElementById("llm-api-key")?.value.trim();
     const llmModel = document.getElementById("llm-model")?.value.trim();
@@ -3435,7 +3596,10 @@ class MusicLinkerController {
       body: JSON.stringify({
         lastfm_api_key: apiKey || undefined,
         lastfm_api_secret: apiSecret || undefined,
+        lastfm_session_key: sessionKey || undefined,
         lastfm_username: username || undefined,
+        lastfm_scrobble_enabled: scrobbleEnabled !== undefined ? scrobbleEnabled : undefined,
+        lastfm_nowplaying_enabled: nowPlayingEnabled !== undefined ? nowPlayingEnabled : undefined,
         llm_base_url: llmBaseUrl || undefined,
         llm_api_key: llmApiKey || undefined,
         llm_model: llmModel || undefined,
@@ -3447,6 +3611,7 @@ class MusicLinkerController {
     if (!silent) {
       this.showToast("Settings saved to SQLite WAL database.");
     }
+    await this.loadSettingsIntoUI();
   }
 
   async openSyncModal() {
@@ -3753,7 +3918,15 @@ class MusicLinkerController {
     document.getElementById("btn-bulk-compare-official")?.addEventListener("click", () => this.matchBulkAlbumTracklist());
     document.getElementById("btn-bulk-apply-album-submit")?.addEventListener("click", () => this.submitBulkAssignAlbum());
 
-    // Audio Version Swap Modal
+    // Audio Version Swap Modal & Search Form
+    document.getElementById("swap-search-form")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = document.getElementById("swap-search-input")?.value.trim() || "";
+      if (this.swapCurrentTrack) {
+        this.queryAudioCandidates(this.swapCurrentTrack.id, q);
+      }
+    });
+
     document.getElementById("btn-close-swap-modal")?.addEventListener("click", () => {
       this.stopCandidatePreview();
       document.getElementById("swap-audio-modal")?.classList.add("hidden");
@@ -3761,6 +3934,78 @@ class MusicLinkerController {
     document.getElementById("btn-cancel-swap-modal")?.addEventListener("click", () => {
       this.stopCandidatePreview();
       document.getElementById("swap-audio-modal")?.classList.add("hidden");
+    });
+
+    // Imbued Last.fm Scrobbler Listeners
+    document.getElementById("btn-lastfm-connect")?.addEventListener("click", async () => {
+      try {
+        const authData = await api.startLastFmAuth();
+        this.pendingLastFmToken = authData.token;
+        if (authData.auth_url) {
+          window.open(authData.auth_url, "_blank");
+        }
+        document.getElementById("lastfm-auth-modal")?.classList.remove("hidden");
+      } catch (err) {
+        this.showToast(`Failed starting Last.fm authorization: ${err.message}`, "error");
+      }
+    });
+
+    document.getElementById("btn-complete-lastfm-auth")?.addEventListener("click", async () => {
+      if (!this.pendingLastFmToken) {
+        this.showToast("No authorization token found. Please click 'Connect' again.", "error");
+        return;
+      }
+      try {
+        const res = await api.completeLastFmAuth(this.pendingLastFmToken);
+        document.getElementById("lastfm-auth-modal")?.classList.add("hidden");
+        this.showToast(`Connected to Last.fm as @${res.username}!`);
+        await this.loadSettingsIntoUI();
+      } catch (err) {
+        this.showToast(`Last.fm connection error: ${err.message}`, "error");
+      }
+    });
+
+    document.getElementById("btn-close-lastfm-modal")?.addEventListener("click", () => {
+      document.getElementById("lastfm-auth-modal")?.classList.add("hidden");
+    });
+    document.getElementById("btn-cancel-lastfm-modal")?.addEventListener("click", () => {
+      document.getElementById("lastfm-auth-modal")?.classList.add("hidden");
+    });
+
+    document.getElementById("btn-lastfm-disconnect")?.addEventListener("click", async () => {
+      if (!confirm("Are you sure you want to disconnect your Last.fm account?")) return;
+      try {
+        await api.disconnectLastFm();
+        this.showToast("Disconnected from Last.fm.");
+        await this.loadSettingsIntoUI();
+      } catch (err) {
+        this.showToast(`Disconnect failed: ${err.message}`, "error");
+      }
+    });
+
+    document.getElementById("btn-flush-scrobbles")?.addEventListener("click", async () => {
+      try {
+        const res = await api.flushPendingScrobbles();
+        this.showToast(`Synced ${res.flushed} scrobble(s) to Last.fm.`);
+        const pendingEl = document.getElementById("lastfm-pending-text");
+        if (pendingEl) pendingEl.textContent = `Pending scrobbles: ${res.pending_count || 0}`;
+      } catch (err) {
+        this.showToast(`Sync failed: ${err.message}`, "error");
+      }
+    });
+
+    document.getElementById("set-scrobble-enabled")?.addEventListener("change", async (e) => {
+      await api.request("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ lastfm_scrobble_enabled: e.target.checked }),
+      });
+    });
+
+    document.getElementById("set-nowplaying-enabled")?.addEventListener("change", async (e) => {
+      await api.request("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ lastfm_nowplaying_enabled: e.target.checked }),
+      });
     });
 
     // Global keyboard shortcuts
@@ -3774,6 +4019,7 @@ class MusicLinkerController {
         document.getElementById("playlist-edit-modal")?.classList.add("hidden");
         document.getElementById("swap-audio-modal")?.classList.add("hidden");
         document.getElementById("bulk-album-modal")?.classList.add("hidden");
+        document.getElementById("lastfm-auth-modal")?.classList.add("hidden");
       }
     });
   }

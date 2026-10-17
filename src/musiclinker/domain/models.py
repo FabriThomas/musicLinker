@@ -294,6 +294,8 @@ class SettingsUpdatePayload(BaseModel):
     lastfm_api_secret: str | None = None
     lastfm_username: str | None = None
     lastfm_session_key: str | None = None
+    lastfm_scrobble_enabled: bool | None = None
+    lastfm_nowplaying_enabled: bool | None = None
     default_bitrate_kbps: int | None = None
     default_min_plays: int | None = None
     default_download_cap: int | None = None

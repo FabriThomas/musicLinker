@@ -874,5 +874,38 @@ def test_bulk_album_matching_and_assignment_endpoints(tmp_path: Path):
         assert len(res_assign.json()["updated_tracks"]) == 1
 
 
+def test_lastfm_scrobbler_and_candidate_query_features():
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.infrastructure.lastfm_client import LastFMClient, DEFAULT_LASTFM_API_KEY, DEFAULT_LASTFM_API_SECRET
+    from musiclinker.infrastructure.db import db_repo
 
+    # 1. Verify default imbued Last.fm credentials
+    client_default = LastFMClient()
+    assert client_default.api_key == DEFAULT_LASTFM_API_KEY
+    assert client_default.api_secret == DEFAULT_LASTFM_API_SECRET
 
+    test_client = TestClient(app, base_url="http://127.0.0.1")
+
+    # 2. Test settings retrieval & update for Last.fm toggles
+    res_set = test_client.put(
+        "/api/settings",
+        json={"lastfm_scrobble_enabled": True, "lastfm_nowplaying_enabled": False},
+    )
+    assert res_set.status_code == 200
+    data = res_set.json()
+    assert data["lastfm_scrobble_enabled"] is True
+    assert data["lastfm_nowplaying_enabled"] is False
+
+    # 3. Test Last.fm disconnect endpoint
+    db_repo.update_settings({"lastfm_session_key": "dummy_session", "lastfm_username": "musicfan"})
+    res_dc = test_client.post("/api/lastfm/disconnect")
+    assert res_dc.status_code == 200
+    cfg = db_repo.get_settings()
+    assert cfg.get("lastfm_session_key") == ""
+
+    # 4. Test Last.fm scrobble pending flush endpoint
+    res_flush = test_client.post("/api/lastfm/scrobble-pending")
+    assert res_flush.status_code == 200
+    assert "flushed" in res_flush.json()

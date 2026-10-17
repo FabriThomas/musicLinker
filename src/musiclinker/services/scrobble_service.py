@@ -25,6 +25,9 @@ class ScrobbleService:
         )
 
     def notify_now_playing(self, payload: ScrobblePayload) -> dict[str, Any]:
+        cfg = self.repo.get_settings()
+        if not cfg.get("lastfm_nowplaying_enabled", True):
+            return {"status": "disabled", "reason": "Now playing updates disabled in settings"}
         client = self._build_client()
         if not client.session_key or not client.api_key:
             return {"status": "skipped", "reason": "Last.fm session not configured"}
@@ -43,6 +46,10 @@ class ScrobbleService:
     def record_scrobble(self, payload: ScrobblePayload) -> dict[str, Any]:
         if payload.track_id is not None:
             self.repo.increment_local_playcount(payload.track_id)
+
+        cfg = self.repo.get_settings()
+        if not cfg.get("lastfm_scrobble_enabled", True):
+            return {"status": "disabled", "reason": "Scrobbling disabled in settings"}
 
         client = self._build_client()
         item = {
@@ -113,6 +120,10 @@ class ScrobbleService:
         except Exception as exc:
             logger.debug("Pending scrobble flush deferred: %s", exc)
             return 0
+
+    def disconnect_lastfm(self) -> dict[str, Any]:
+        self.repo.update_settings({"lastfm_session_key": "", "lastfm_username": ""})
+        return {"status": "disconnected"}
 
 
 scrobble_service = ScrobbleService()

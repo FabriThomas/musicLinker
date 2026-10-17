@@ -133,14 +133,28 @@ def create_app() -> FastAPI:
 
     @app.get("/api/tracks/{track_id}/candidates", dependencies=[Depends(require_paired_client)])
     def get_track_audio_candidates_endpoint(
-        track_id: int, max_results: int = Query(default=6, ge=1, le=15)
+        track_id: int,
+        q: str = Query(default=""),
+        max_results: int = Query(default=6, ge=1, le=15),
     ) -> dict[str, Any]:
         """Search YouTube for alternative audio versions of a track with duration comparison."""
         track = db_repo.get_track(track_id)
         if not track:
             raise HTTPException(status_code=404, detail="Track not found.")
-        candidates = library_service.get_track_audio_candidates(track_id=track_id, max_results=max_results)
-        return {"track_id": track_id, "track": track.to_dict(), "candidates": candidates}
+        candidates_data = library_service.get_track_audio_candidates(
+            track_id=track_id, custom_query=q, max_results=max_results
+        )
+        if isinstance(candidates_data, list):
+            candidates_list = candidates_data
+        elif isinstance(candidates_data, dict):
+            candidates_list = candidates_data.get("candidates", [])
+        else:
+            candidates_list = []
+        return {
+            "track_id": track_id,
+            "track": track.to_dict(),
+            "candidates": candidates_list,
+        }
 
     @app.get("/api/tracks/candidate-preview/{video_id}")
     async def get_candidate_preview_endpoint(video_id: str) -> FileResponse:
@@ -640,6 +654,8 @@ def create_app() -> FastAPI:
             "lastfm_api_secret_configured": bool(cfg.get("lastfm_api_secret")),
             "lastfm_username": cfg.get("lastfm_username", ""),
             "lastfm_session_connected": bool(cfg.get("lastfm_session_key")),
+            "lastfm_scrobble_enabled": bool(cfg.get("lastfm_scrobble_enabled", True)),
+            "lastfm_nowplaying_enabled": bool(cfg.get("lastfm_nowplaying_enabled", True)),
             "default_bitrate_kbps": cfg.get("default_bitrate_kbps", 320),
             "default_min_plays": cfg.get("default_min_plays", 10),
             "default_download_cap": cfg.get("default_download_cap", 25),
@@ -686,6 +702,15 @@ def create_app() -> FastAPI:
             }
         )
         return session_info
+
+    @app.post("/api/lastfm/disconnect", dependencies=[Depends(require_paired_client)])
+    def disconnect_lastfm_endpoint() -> dict[str, Any]:
+        return scrobble_service.disconnect_lastfm()
+
+    @app.post("/api/lastfm/scrobble-pending", dependencies=[Depends(require_paired_client)])
+    def flush_pending_scrobbles_endpoint() -> dict[str, Any]:
+        flushed = scrobble_service.flush_pending_queue()
+        return {"flushed": flushed, "pending_count": len(db_repo.get_pending_scrobbles(limit=500))}
 
     # ---- PWA / APK Static Files & Root Entrypoint ----
 
