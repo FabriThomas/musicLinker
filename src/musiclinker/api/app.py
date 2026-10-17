@@ -688,20 +688,21 @@ def create_app() -> FastAPI:
         return client.get_auth_token()
 
     @app.post("/api/lastfm/auth/complete", dependencies=[Depends(require_paired_client)])
-    def complete_lastfm_web_auth(token: str = Query(...)) -> dict[str, str]:
+    def complete_lastfm_web_auth(token: str = Query(...)) -> dict[str, Any]:
         cfg = db_repo.get_settings()
         client = LastFMClient(
             api_key=str(cfg.get("lastfm_api_key", "")),
             api_secret=str(cfg.get("lastfm_api_secret", "")),
         )
-        session_info = client.exchange_token_for_session(token)
-        db_repo.update_settings(
-            {
-                "lastfm_session_key": session_info["session_key"],
-                "lastfm_username": session_info["username"] or cfg.get("lastfm_username", ""),
-            }
-        )
-        return session_info
+        res = client.check_or_exchange_token(token)
+        if res.get("authenticated"):
+            db_repo.update_settings(
+                {
+                    "lastfm_session_key": res["session_key"],
+                    "lastfm_username": res["username"] or cfg.get("lastfm_username", ""),
+                }
+            )
+        return res
 
     @app.post("/api/lastfm/disconnect", dependencies=[Depends(require_paired_client)])
     def disconnect_lastfm_endpoint() -> dict[str, Any]:

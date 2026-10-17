@@ -538,6 +538,7 @@ class LibraryService:
                 "title": r.get("title", "Unknown"),
                 "uploader": r.get("uploader", "YouTube"),
                 "channel": r.get("uploader", "YouTube"),
+                "album": r.get("album") or track.album or "",
                 "duration": dur,
                 "duration_diff": diff,
                 "duration_diff_sec": diff,
@@ -590,7 +591,9 @@ class LibraryService:
         return out_mp3
 
     def replace_track_audio(self, track_id: int, youtube_url: str, bitrate_kbps: int = 320) -> TrackEntity:
+        import gc
         import shutil
+        import time
 
         track = self.repo.get_track(track_id)
         if not track:
@@ -601,6 +604,15 @@ class LibraryService:
         staging_dir = PATHS.app_data_dir / "swap_staging"
         staging_dir.mkdir(parents=True, exist_ok=True)
 
+        # 1. Extract cover art BEFORE overwriting the original MP3
+        existing_cover = None
+        if target_mp3.exists():
+            try:
+                existing_cover, _ = audio_tagger.extract_cover_bytes(target_mp3)
+            except Exception as cov_exc:
+                logger.debug("Could not pre-extract cover from target MP3: %s", cov_exc)
+
+        # 2. Download replacement audio from YouTube into staging
         staged_mp3, info, _ = youtube_client.download_mp3_to_staging(
             url_or_query=youtube_url,
             staging_dir=staging_dir,
@@ -608,22 +620,45 @@ class LibraryService:
             bitrate_kbps=bitrate_kbps,
         )
 
-        try:
-            if target_mp3.exists():
-                shutil.copy2(target_mp3, backup_mp3)
-            shutil.move(str(staged_mp3), str(target_mp3))
-        except Exception as move_exc:
-            if backup_mp3.exists() and not target_mp3.exists():
-                shutil.move(str(backup_mp3), str(target_mp3))
-            raise RuntimeError(f"Failed replacing audio file: {move_exc}") from move_exc
-        finally:
-            if backup_mp3.exists():
-                backup_mp3.unlink(missing_ok=True)
+        # 3. Safely replace the file on disk (resilient against Windows locks)
+        final_mp3_path = target_mp3
+        replaced_in_place = False
 
+        for attempt in range(4):
+            try:
+                if target_mp3.exists() and not backup_mp3.exists():
+                    shutil.copy2(target_mp3, backup_mp3)
+                shutil.move(str(staged_mp3), str(target_mp3))
+                replaced_in_place = True
+                break
+            except (PermissionError, OSError) as exc:
+                gc.collect()
+                time.sleep(0.35)
+                if attempt == 3:
+                    logger.warning("Target MP3 '%s' locked on Windows (%s); writing versioned audio file", target_mp3, exc)
+
+        if not replaced_in_place:
+            # Fallback for Windows file locks: write to a versioned filename in same folder
+            version_stem = f"{target_mp3.stem}_v{int(time.time()) % 10000}"
+            version_mp3 = target_mp3.with_name(f"{version_stem}.mp3")
+            shutil.move(str(staged_mp3), str(version_mp3))
+            final_mp3_path = version_mp3
+            try:
+                # Attempt to remove locked file if lock released
+                target_mp3.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        if backup_mp3.exists():
+            try:
+                backup_mp3.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        # 4. Tag the new MP3 with all track metadata and preserved original cover art
         artists_list = [a.strip() for a in track.artist_display.split(",") if a.strip()] or [track.artist_display]
-        cover_bytes = audio_tagger.extract_cover_bytes(target_mp3) if target_mp3.exists() else None
         audio_tagger.tag_mp3(
-            mp3_path=target_mp3,
+            mp3_path=final_mp3_path,
             title=track.title,
             artists=artists_list,
             album_artist=track.album_artist,
@@ -631,14 +666,14 @@ class LibraryService:
             track_number=track.track_number,
             release_year=track.release_year,
             original_year=track.original_year,
-            cover_bytes=cover_bytes,
+            cover_bytes=existing_cover,
         )
 
         new_duration = int(info.get("duration") or 0)
         if not new_duration:
             from mutagen.mp3 import MP3
             try:
-                audio = MP3(str(target_mp3))
+                audio = MP3(str(final_mp3_path))
                 new_duration = int(audio.info.length)
             except Exception:
                 new_duration = track.duration
@@ -647,6 +682,7 @@ class LibraryService:
             track_id=track_id,
             duration=new_duration,
             bitrate_kbps=bitrate_kbps,
+            file_path=str(final_mp3_path) if final_mp3_path != target_mp3 else None,
         )
         return updated_track or track
 

@@ -1367,6 +1367,35 @@
         </div>
       </div>
 
+      <!-- Master Volume Equalizer & Limiter Controls -->
+      <div class="bg-zinc-950/80 border border-zinc-800/80 rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="text-sm font-bold text-white">Volume Equalizer (Preamp)</span>
+              <span id="eq-preamp-badge" class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">0 dB (1.0x)</span>
+            </div>
+            <p class="text-[10px] text-zinc-400">Output volume gain stage with studio peak limiter</p>
+          </div>
+          <label class="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer select-none">
+            <input type="checkbox" id="eq-limiter-toggle" checked class="accent-emerald-500 w-3.5 h-3.5 rounded" />
+            <span class="text-[11px] font-medium text-zinc-400">Anti-Clip Limiter</span>
+          </label>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-[10px] font-mono text-zinc-500">-12dB</span>
+          <input id="eq-preamp-slider" type="range" min="-12" max="12" step="0.5" value="0" class="ml-slider flex-1" />
+          <span class="text-[10px] font-mono text-zinc-500">+12dB</span>
+        </div>
+        <div class="flex items-center gap-1.5 pt-1">
+          <button type="button" class="eq-preamp-quick px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/60 text-[10px] text-zinc-300 font-mono" data-preamp="-6">-6 dB</button>
+          <button type="button" class="eq-preamp-quick px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/60 text-[10px] text-zinc-300 font-mono" data-preamp="0">0 dB (Flat)</button>
+          <button type="button" class="eq-preamp-quick px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/60 text-[10px] text-zinc-300 font-mono" data-preamp="3">+3 dB</button>
+          <button type="button" class="eq-preamp-quick px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/60 text-[10px] text-zinc-300 font-mono" data-preamp="6">+6 dB</button>
+          <button type="button" class="eq-preamp-quick px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/60 text-[10px] text-zinc-300 font-mono" data-preamp="9">+9 dB</button>
+        </div>
+      </div>
+
       <!-- 5 Equalizer Sliders -->
       <div class="bg-zinc-950/70 border border-zinc-800/80 rounded-2xl p-4">
         <div class="grid grid-cols-5 gap-2 sm:gap-4 text-center">
@@ -1437,6 +1466,9 @@
           Done
         </button>
       </div>
+    </div>
+  </div>
+
   <!-- Last.fm 1-Click Browser Authorization Modal -->
   <div id="lastfm-auth-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-md">
     <div class="bg-zinc-900/95 border border-zinc-700/90 rounded-2xl p-5 max-w-md w-full space-y-4 shadow-2xl flex flex-col">
@@ -1453,8 +1485,12 @@
         <div class="bg-zinc-950/70 border border-zinc-800 rounded-xl p-3 space-y-1.5">
           <div class="font-bold text-zinc-200">Step 1: Allow access on Last.fm</div>
           <div class="text-zinc-400">Click <strong>"Yes, allow access"</strong> in the browser tab to grant scrobbling permissions.</div>
-          <div class="font-bold text-zinc-200 pt-1">Step 2: Finish connection</div>
-          <div class="text-zinc-400">Click the button below once approved to complete linking.</div>
+          <div class="font-bold text-zinc-200 pt-1">Step 2: Instant Auto-Connect</div>
+          <div class="text-zinc-400">MusicLinker automatically polls and finishes authorization when you approve.</div>
+        </div>
+        <div id="lastfm-auth-status" class="flex items-center gap-2.5 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
+          <span class="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin shrink-0"></span>
+          <span id="lastfm-auth-status-text">Waiting for approval on Last.fm... (polling every 2s)</span>
         </div>
       </div>
 
@@ -1464,7 +1500,7 @@
         </button>
         <button id="btn-complete-lastfm-auth" class="ml-btn flex-1 py-2 text-xs font-bold bg-red-600 hover:bg-red-500 text-white rounded-xl flex items-center justify-center gap-1.5">
           <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          <span>Complete Connection</span>
+          <span>Check Now</span>
         </button>
       </div>
     </div>

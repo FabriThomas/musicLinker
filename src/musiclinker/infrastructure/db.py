@@ -488,13 +488,20 @@ class DatabaseRepository:
         track_id: int,
         duration: int,
         bitrate_kbps: int,
+        file_path: str | None = None,
     ) -> TrackEntity | None:
         with self._write_lock:
             conn = self._get_conn()
-            conn.execute(
-                "UPDATE tracks SET duration = ?, bitrate_kbps = ? WHERE id = ?",
-                (duration, bitrate_kbps, track_id),
-            )
+            if file_path:
+                conn.execute(
+                    "UPDATE tracks SET duration = ?, bitrate_kbps = ?, file_path = ? WHERE id = ?",
+                    (duration, bitrate_kbps, file_path, track_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE tracks SET duration = ?, bitrate_kbps = ? WHERE id = ?",
+                    (duration, bitrate_kbps, track_id),
+                )
             conn.commit()
             return self.get_track(track_id)
 

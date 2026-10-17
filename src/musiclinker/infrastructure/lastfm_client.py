@@ -96,6 +96,30 @@ class LastFMClient:
         self.session_key = key
         return {"session_key": key, "username": name}
 
+    def check_or_exchange_token(self, token: str) -> dict[str, Any]:
+        """
+        Poll-safe token exchange:
+        Returns {'authenticated': True, 'status': 'connected', 'session_key': '...', 'username': '...'}
+        or {'authenticated': False, 'status': 'pending', 'message': '...'} if user hasn't approved yet.
+        """
+        try:
+            res = self.exchange_token_for_session(token)
+            return {
+                "authenticated": True,
+                "status": "connected",
+                "session_key": res["session_key"],
+                "username": res["username"],
+            }
+        except LastFMAuthError as exc:
+            msg = str(exc)
+            if "(14)" in msg or "not authorized" in msg.lower():
+                return {
+                    "authenticated": False,
+                    "status": "pending",
+                    "message": "Authorization pending. Please approve access in your browser.",
+                }
+            raise
+
     def fetch_album_tracklist(self, artist: str, album: str) -> list[dict[str, Any]]:
         """Query `album.getInfo` on Last.fm as a fallback tracklist source when downloading full albums."""
         if not self.api_key:

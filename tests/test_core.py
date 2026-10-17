@@ -909,3 +909,65 @@ def test_lastfm_scrobbler_and_candidate_query_features():
     res_flush = test_client.post("/api/lastfm/scrobble-pending")
     assert res_flush.status_code == 200
     assert "flushed" in res_flush.json()
+
+
+def test_v312_lastfm_polling_and_candidate_album(tmp_path):
+    from unittest.mock import patch, MagicMock
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.infrastructure.lastfm_client import LastFMClient, LastFMAuthError
+    from musiclinker.infrastructure.db import db_repo
+    from musiclinker.services.library_service import library_service
+
+    client = LastFMClient()
+
+    # 1. Test LastFMClient.check_or_exchange_token when token is pending approval (error 14)
+    with patch.object(client, "exchange_token_for_session", side_effect=LastFMAuthError("Last.fm authentication error (14): This token has not been authorized")):
+        res = client.check_or_exchange_token("test_token_123")
+        assert res["authenticated"] is False
+        assert res["status"] == "pending"
+
+    # 2. Test LastFMClient.check_or_exchange_token when user approved
+    with patch.object(client, "exchange_token_for_session", return_value={"session_key": "sess_abc", "username": "audiophile"}):
+        res_ok = client.check_or_exchange_token("test_token_123")
+        assert res_ok["authenticated"] is True
+        assert res_ok["status"] == "connected"
+        assert res_ok["session_key"] == "sess_abc"
+
+    # 3. Test API endpoint /api/lastfm/auth/complete returns pending cleanly
+    test_client = TestClient(app, base_url="http://127.0.0.1")
+    with patch("musiclinker.api.app.LastFMClient") as mock_lfm:
+        instance = MagicMock()
+        instance.check_or_exchange_token.return_value = {
+            "authenticated": False,
+            "status": "pending",
+            "message": "Authorization pending. Please approve access in your browser.",
+        }
+        mock_lfm.return_value = instance
+
+        resp = test_client.post("/api/lastfm/auth/complete?token=test_pending")
+        assert resp.status_code == 200
+        assert resp.json()["authenticated"] is False
+        assert resp.json()["status"] == "pending"
+
+    # 4. Test candidate audio versions contains album
+    fake_mp3 = tmp_path / "song.mp3"
+    fake_mp3.write_bytes(b"ID3" + b"\x00" * 100)
+    t = db_repo.upsert_track(
+        track_hash="hash_cand_test",
+        title="Aerodynamic",
+        artist_display="Daft Punk",
+        artists=["Daft Punk"],
+        album="Discovery",
+        album_artist="Daft Punk",
+        duration=212,
+        file_path=str(fake_mp3),
+    )
+    with patch("musiclinker.services.library_service.youtube_client.search_videos", return_value=[
+        {"id": "yt_vid_1", "title": "Aerodynamic", "uploader": "Daft Punk - Topic", "duration": 212, "url": "https://youtube.com/watch?v=yt_vid_1", "thumbnail": "https://img.youtube.com/vi/yt_vid_1/0.jpg"}
+    ]):
+        cands_data = library_service.get_track_audio_candidates(t.id, custom_query="Aerodynamic", max_results=3)
+        cands = cands_data["candidates"]
+        assert len(cands) == 1
+        assert cands[0]["album"] == "Discovery"
+        assert cands[0]["thumbnail"] == "https://img.youtube.com/vi/yt_vid_1/0.jpg"

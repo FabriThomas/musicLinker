@@ -46,9 +46,13 @@ export class AudioEngine {
     this.audioCtx = null;
     this.sourceNode = null;
     this.eqFilters = [];
+    this.preampNode = null;
+    this.compressorNode = null;
     this.eqEnabled = true;
     this.currentEqPreset = "Flat";
     this.eqGains = [0, 0, 0, 0, 0];
+    this.preampGainDb = 0;
+    this.limiterEnabled = true;
 
     this._loadSavedEq();
     this._bindEvents();
@@ -64,6 +68,8 @@ export class AudioEngine {
         if (Array.isArray(parsed.gains) && parsed.gains.length === 5) {
           this.eqGains = parsed.gains.map(g => Number(g) || 0);
         }
+        if (typeof parsed.preampDb === "number") this.preampGainDb = Math.max(-12, Math.min(12, parsed.preampDb));
+        if (typeof parsed.limiter === "boolean") this.limiterEnabled = parsed.limiter;
       }
     } catch (_e) {}
   }
@@ -74,6 +80,8 @@ export class AudioEngine {
         enabled: this.eqEnabled,
         preset: this.currentEqPreset,
         gains: this.eqGains,
+        preampDb: this.preampGainDb,
+        limiter: this.limiterEnabled,
       }));
     } catch (_e) {}
   }
@@ -102,12 +110,32 @@ export class AudioEngine {
         return filter;
       });
 
+      // Master Preamp Gain Node (Volume Equalizer Boost / Attenuation)
+      this.preampNode = this.audioCtx.createGain();
+      const rawLinear = Math.pow(10, this.preampGainDb / 20);
+      this.preampNode.gain.value = this.eqEnabled ? rawLinear : 1.0;
+
+      // Dynamics Compressor (Studio limiter to prevent clipping and distortion when boosting bass/volume)
+      this.compressorNode = this.audioCtx.createDynamicsCompressor();
+      this.compressorNode.threshold.value = -1.5;
+      this.compressorNode.knee.value = 30;
+      this.compressorNode.ratio.value = 12;
+      this.compressorNode.attack.value = 0.003;
+      this.compressorNode.release.value = 0.25;
+
       let prevNode = this.sourceNode;
       for (const filter of this.eqFilters) {
         prevNode.connect(filter);
         prevNode = filter;
       }
-      prevNode.connect(this.audioCtx.destination);
+      prevNode.connect(this.preampNode);
+
+      if (this.limiterEnabled) {
+        this.preampNode.connect(this.compressorNode);
+        this.compressorNode.connect(this.audioCtx.destination);
+      } else {
+        this.preampNode.connect(this.audioCtx.destination);
+      }
     } catch (err) {
       console.warn("AudioContext equalizer initialization failed:", err);
     }
@@ -123,6 +151,35 @@ export class AudioEngine {
       this.eqFilters[bandIdx].gain.value = this.eqEnabled ? clamped : 0;
     }
     this._saveEq();
+  }
+
+  setPreamp(gainDb) {
+    const clamped = Math.max(-12, Math.min(12, Number(gainDb) || 0));
+    this.preampGainDb = clamped;
+    if (this.audioCtx && this.preampNode) {
+      const rawLinear = Math.pow(10, clamped / 20);
+      this.preampNode.gain.value = this.eqEnabled ? rawLinear : 1.0;
+    }
+    this._saveEq();
+    return this.preampGainDb;
+  }
+
+  toggleLimiter(enabled) {
+    this.limiterEnabled = typeof enabled === "boolean" ? enabled : !this.limiterEnabled;
+    if (this.audioCtx && this.preampNode && this.compressorNode) {
+      try {
+        this.preampNode.disconnect();
+        this.compressorNode.disconnect();
+      } catch (_e) {}
+      if (this.limiterEnabled) {
+        this.preampNode.connect(this.compressorNode);
+        this.compressorNode.connect(this.audioCtx.destination);
+      } else {
+        this.preampNode.connect(this.audioCtx.destination);
+      }
+    }
+    this._saveEq();
+    return this.limiterEnabled;
   }
 
   setPreset(presetName) {
@@ -146,8 +203,25 @@ export class AudioEngine {
         f.gain.value = this.eqEnabled ? this.eqGains[idx] : 0;
       });
     }
+    if (this.audioCtx && this.preampNode) {
+      const rawLinear = Math.pow(10, this.preampGainDb / 20);
+      this.preampNode.gain.value = this.eqEnabled ? rawLinear : 1.0;
+    }
     this._saveEq();
     return this.eqEnabled;
+  }
+
+  resetEq() {
+    this.currentEqPreset = "Flat";
+    this.eqGains = [0, 0, 0, 0, 0];
+    this.preampGainDb = 0;
+    if (this.audioCtx && this.eqFilters.length === 5) {
+      this.eqFilters.forEach(f => f.gain.value = 0);
+    }
+    if (this.audioCtx && this.preampNode) {
+      this.preampNode.gain.value = 1.0;
+    }
+    this._saveEq();
   }
 
   getEqState() {
@@ -155,6 +229,8 @@ export class AudioEngine {
       enabled: this.eqEnabled,
       preset: this.currentEqPreset,
       gains: [...this.eqGains],
+      preampGainDb: this.preampGainDb,
+      limiterEnabled: this.limiterEnabled,
     };
   }
 
