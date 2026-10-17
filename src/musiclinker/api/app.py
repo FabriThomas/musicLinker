@@ -22,14 +22,17 @@ from musiclinker.domain.models import (
     AgentCommandRequest,
     AlbumBulkRenamePayload,
     AlbumDownloadRequest,
+    AlbumMatchRequest,
     BatchScrobblePayload,
     BatchTrackDeletePayload,
+    BulkAssignAlbumPayload,
     DirectDownloadRequest,
     ExtractionJobRequest,
     JobStatus,
     LLMCurationApplyPayload,
     PlaylistCreatePayload,
     PlaylistUpdatePayload,
+    ReplaceTrackAudioPayload,
     ScrobblePayload,
     SettingsUpdatePayload,
     TrackMetadataUpdatePayload,
@@ -127,6 +130,80 @@ def create_app() -> FastAPI:
             return {"track": updated.to_dict()}
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/tracks/{track_id}/candidates", dependencies=[Depends(require_paired_client)])
+    def get_track_audio_candidates_endpoint(
+        track_id: int, max_results: int = Query(default=6, ge=1, le=15)
+    ) -> dict[str, Any]:
+        """Search YouTube for alternative audio versions of a track with duration comparison."""
+        track = db_repo.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Track not found.")
+        candidates = library_service.get_track_audio_candidates(track_id=track_id, max_results=max_results)
+        return {"track_id": track_id, "track": track.to_dict(), "candidates": candidates}
+
+    @app.get("/api/tracks/candidate-preview/{video_id}")
+    async def get_candidate_preview_endpoint(video_id: str) -> FileResponse:
+        """Stream a 15-second MP3 snippet of a candidate YouTube video for instant verification."""
+        try:
+            snippet_path = await asyncio.to_thread(library_service.generate_audio_snippet, video_id=video_id)
+            return FileResponse(
+                path=str(snippet_path),
+                media_type="audio/mpeg",
+                filename=f"preview_{video_id}.mp3",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        except Exception as exc:
+            logger.error("Failed to generate preview snippet for '%s': %s", video_id, exc)
+            raise HTTPException(status_code=500, detail=f"Failed to generate preview snippet: {exc}") from exc
+
+    @app.post("/api/tracks/{track_id}/replace-audio", dependencies=[Depends(require_paired_client)])
+    async def replace_track_audio_endpoint(track_id: int, payload: ReplaceTrackAudioPayload) -> dict[str, Any]:
+        """Replace a track's audio with an alternative version while retaining tags, lyrics and metadata."""
+        try:
+            updated = await asyncio.to_thread(
+                library_service.replace_track_audio,
+                track_id=track_id,
+                youtube_url=payload.youtube_url,
+                bitrate_kbps=payload.bitrate_kbps,
+            )
+            return {"status": "success", "track": updated.to_dict()}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.error("Failed to replace audio for track %d: %s", track_id, exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/albums/match-tracklist", dependencies=[Depends(require_paired_client)])
+    async def match_album_tracklist_endpoint(payload: AlbumMatchRequest) -> dict[str, Any]:
+        """Fuzzy match selected local tracks against an official album tracklist."""
+        try:
+            return await asyncio.to_thread(
+                library_service.match_tracks_to_album,
+                album=payload.album,
+                artist=payload.artist,
+                track_ids=payload.track_ids,
+            )
+        except Exception as exc:
+            logger.error("Failed to match album tracklist: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/tracks/bulk-assign-album", dependencies=[Depends(require_paired_client)])
+    async def bulk_assign_album_endpoint(payload: BulkAssignAlbumPayload) -> dict[str, Any]:
+        """Group and tag selected tracks into an album, update track numbers, and relocate files."""
+        try:
+            return await asyncio.to_thread(
+                library_service.bulk_assign_album,
+                album=payload.album,
+                album_artist=payload.album_artist,
+                release_year=payload.release_year,
+                cover_url=payload.cover_url,
+                track_assignments=payload.track_assignments,
+            )
+        except Exception as exc:
+            logger.error("Failed to bulk assign album: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
 
     @app.delete("/api/tracks/{track_id}", dependencies=[Depends(require_paired_client)])
     def delete_single_track(

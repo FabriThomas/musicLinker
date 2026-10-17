@@ -740,4 +740,139 @@ def test_permanently_shift_track_lyrics(tmp_path):
         mock_tagger.assert_called_once_with(fake_mp3, updated_lrc_content)
 
 
+def test_audio_candidates_and_replacement_endpoints(tmp_path: Path):
+    from unittest.mock import MagicMock, patch
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.domain.models import TrackEntity
+    from musiclinker.infrastructure.db import db_repo
+    from musiclinker.services.library_service import library_service
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    fake_file = tmp_path / "song.mp3"
+    fake_file.write_bytes(b"ID3" + b"\x00" * 100)
+
+    track = TrackEntity(
+        id=77,
+        track_hash="hash77",
+        title="Get Lucky",
+        artist_display="Daft Punk",
+        artists=["Daft Punk"],
+        album_artist="Daft Punk",
+        album="Random Access Memories",
+        track_number=8,
+        release_year="2013",
+        original_year="2013",
+        duration=248,
+        file_path=str(fake_file),
+        lrc_path="",
+        lyric_sync_mode="none",
+        cover_mime="",
+        has_cover=False,
+        lastfm_playcount=0,
+        local_playcount=0,
+        replaygain_db=0.0,
+        bitrate_kbps=320,
+    )
+
+    with patch.object(db_repo, "get_track", return_value=track):
+        # 1. Test get candidates endpoint
+        with patch.object(
+            library_service,
+            "get_track_audio_candidates",
+            return_value=[
+                {
+                    "title": "Daft Punk - Get Lucky (Official Audio) ft. Pharrell Williams",
+                    "url": "https://www.youtube.com/watch?v=5NV6Rdv1a3I",
+                    "video_id": "5NV6Rdv1a3I",
+                    "duration": 248,
+                    "duration_diff_sec": 0,
+                    "channel": "DaftPunkVEVO",
+                }
+            ],
+        ):
+            res = client.get("/api/tracks/77/candidates")
+            assert res.status_code == 200
+            data = res.json()
+            assert len(data["candidates"]) == 1
+            assert data["candidates"][0]["video_id"] == "5NV6Rdv1a3I"
+
+        # 2. Test candidate preview snippet endpoint
+        fake_snippet = tmp_path / "snippet.mp3"
+        fake_snippet.write_bytes(b"ID3" + b"\x00" * 50)
+        with patch.object(library_service, "generate_audio_snippet", return_value=fake_snippet):
+            res_preview = client.get("/api/tracks/candidate-preview/5NV6Rdv1a3I")
+            assert res_preview.status_code == 200
+            assert res_preview.headers["content-type"] == "audio/mpeg"
+
+        # 3. Test replace track audio endpoint
+        with patch.object(library_service, "replace_track_audio", return_value=track):
+            res_replace = client.post(
+                "/api/tracks/77/replace-audio",
+                json={"youtube_url": "https://www.youtube.com/watch?v=5NV6Rdv1a3I", "bitrate_kbps": 320},
+            )
+            assert res_replace.status_code == 200
+            assert res_replace.json()["status"] == "success"
+
+
+def test_bulk_album_matching_and_assignment_endpoints(tmp_path: Path):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.services.library_service import library_service
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    # 1. Test match album tracklist
+    mock_match_result = {
+        "album": "Discovery",
+        "artist": "Daft Punk",
+        "official_tracks": [
+            {"track_number": 1, "title": "One More Time", "duration": 320},
+            {"track_number": 2, "title": "Aerodynamic", "duration": 207},
+        ],
+        "assignments": [
+            {
+                "track_id": 101,
+                "current_title": "One More Time (Radio Edit)",
+                "current_artist": "Daft Punk",
+                "track_number": 1,
+                "confidence": 0.85,
+            }
+        ],
+    }
+    with patch.object(library_service, "match_tracks_to_album", return_value=mock_match_result):
+        res = client.post(
+            "/api/albums/match-tracklist",
+            json={"album": "Discovery", "artist": "Daft Punk", "track_ids": [101]},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["album"] == "Discovery"
+        assert len(data["assignments"]) == 1
+        assert data["assignments"][0]["track_number"] == 1
+
+    # 2. Test bulk assign album
+    mock_assign_result = {
+        "album": "Discovery",
+        "album_artist": "Daft Punk",
+        "release_year": 2001,
+        "updated_tracks": [{"id": 101, "track_number": 1, "title": "One More Time"}],
+    }
+    with patch.object(library_service, "bulk_assign_album", return_value=mock_assign_result):
+        res_assign = client.post(
+            "/api/tracks/bulk-assign-album",
+            json={
+                "album": "Discovery",
+                "album_artist": "Daft Punk",
+                "release_year": 2001,
+                "track_assignments": [{"track_id": 101, "track_number": 1, "title": "One More Time"}],
+            },
+        )
+        assert res_assign.status_code == 200
+        assert len(res_assign.json()["updated_tracks"]) == 1
+
+
+
 

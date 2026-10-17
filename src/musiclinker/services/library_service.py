@@ -490,5 +490,309 @@ class LibraryService:
         self.repo.delete_album_alias(alias_id)
         return True
 
+    def get_track_audio_candidates(self, track_id: int, max_results: int = 6) -> dict[str, Any]:
+        track = self.repo.get_track(track_id)
+        if not track:
+            raise ValueError(f"Track ID {track_id} not found.")
+
+        clean_title = re.sub(r"\(.*?\)|\[.*?\]", "", track.title).strip()
+        query = f"{track.artist_display} {clean_title} official audio"
+        raw_results = youtube_client.search_videos(query, max_results=max_results)
+        if len(raw_results) < 3:
+            raw_results += youtube_client.search_videos(f"{track.artist_display} {clean_title}", max_results=max_results)
+
+        seen_ids = set()
+        candidates = []
+        for r in raw_results:
+            vid_id = r.get("id")
+            if not vid_id or vid_id in seen_ids:
+                continue
+            seen_ids.add(vid_id)
+            dur = int(r.get("duration") or 0)
+            diff = dur - track.duration if track.duration > 0 and dur > 0 else 0
+            sign = "+" if diff > 0 else ""
+            diff_label = f"{sign}{diff}s" if dur > 0 and track.duration > 0 else ""
+            candidates.append({
+                "id": vid_id,
+                "title": r.get("title", "Unknown"),
+                "uploader": r.get("uploader", "YouTube"),
+                "duration": dur,
+                "duration_diff": diff,
+                "duration_diff_label": diff_label,
+                "url": r.get("url") or f"https://www.youtube.com/watch?v={vid_id}",
+                "thumbnail": r.get("thumbnail", ""),
+                "preview_url": f"/api/tracks/candidate-preview/{vid_id}",
+            })
+        return {
+            "track": track.to_dict(),
+            "candidates": candidates[:max_results],
+        }
+
+    def generate_audio_snippet(self, video_id: str, duration_sec: float = 15.0) -> Path:
+        import subprocess
+        import yt_dlp
+
+        cache_dir = PATHS.app_data_dir / "preview_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        out_mp3 = cache_dir / f"{video_id}_snippet.mp3"
+        if out_mp3.exists() and out_mp3.stat().st_size > 5000:
+            return out_mp3
+
+        target_url = f"https://www.youtube.com/watch?v={video_id}"
+        ydl_opts = {
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "quiet": True,
+            "no_warnings": True,
+            **youtube_client._get_base_ydl_opts(),
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(target_url, download=False)
+        audio_stream_url = info.get("url") if isinstance(info, dict) else None
+        if not audio_stream_url:
+            raise ValueError(f"Could not extract audio stream URL for video {video_id}")
+
+        cmd = [
+            youtube_client.ffmpeg_exe,
+            "-y",
+            "-ss", "0",
+            "-i", audio_stream_url,
+            "-t", str(duration_sec),
+            "-c:a", "libmp3lame",
+            "-b:a", "128k",
+            str(out_mp3),
+        ]
+        p = subprocess.run(cmd, capture_output=True, timeout=25)
+        if p.returncode != 0 or not out_mp3.exists():
+            raise RuntimeError(f"FFmpeg snippet generation failed: {p.stderr.decode('utf-8', errors='ignore')}")
+        return out_mp3
+
+    def replace_track_audio(self, track_id: int, youtube_url: str, bitrate_kbps: int = 320) -> TrackEntity:
+        import shutil
+
+        track = self.repo.get_track(track_id)
+        if not track:
+            raise ValueError(f"Track ID {track_id} not found.")
+
+        target_mp3 = Path(track.file_path)
+        backup_mp3 = target_mp3.with_suffix(".mp3.bak")
+        staging_dir = PATHS.app_data_dir / "swap_staging"
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        staged_mp3, info, _ = youtube_client.download_mp3_to_staging(
+            url_or_query=youtube_url,
+            staging_dir=staging_dir,
+            stem_name=f"swap_{track_id}_{random.randint(1000, 9999)}",
+            bitrate_kbps=bitrate_kbps,
+        )
+
+        try:
+            if target_mp3.exists():
+                shutil.copy2(target_mp3, backup_mp3)
+            shutil.move(str(staged_mp3), str(target_mp3))
+        except Exception as move_exc:
+            if backup_mp3.exists() and not target_mp3.exists():
+                shutil.move(str(backup_mp3), str(target_mp3))
+            raise RuntimeError(f"Failed replacing audio file: {move_exc}") from move_exc
+        finally:
+            if backup_mp3.exists():
+                backup_mp3.unlink(missing_ok=True)
+
+        artists_list = [a.strip() for a in track.artist_display.split(",") if a.strip()] or [track.artist_display]
+        cover_bytes = audio_tagger.extract_cover_bytes(target_mp3) if target_mp3.exists() else None
+        audio_tagger.tag_mp3(
+            mp3_path=target_mp3,
+            title=track.title,
+            artists=artists_list,
+            album_artist=track.album_artist,
+            album=track.album,
+            track_number=track.track_number,
+            release_year=track.release_year,
+            original_year=track.original_year,
+            cover_bytes=cover_bytes,
+        )
+
+        new_duration = int(info.get("duration") or 0)
+        if not new_duration:
+            from mutagen.mp3 import MP3
+            try:
+                audio = MP3(str(target_mp3))
+                new_duration = int(audio.info.length)
+            except Exception:
+                new_duration = track.duration
+
+        updated_track = self.repo.update_track_audio_info(
+            track_id=track_id,
+            duration=new_duration,
+            bitrate_kbps=bitrate_kbps,
+        )
+        return updated_track or track
+
+    def match_tracks_to_album(self, album: str, artist: str, track_ids: list[int]) -> dict[str, Any]:
+        import difflib
+
+        official_data = self.resolve_album_tracklist(artist, album)
+        official_tracks = official_data.get("tracks") or []
+        if not official_tracks:
+            raise ValueError(f"Could not resolve tracklist for '{artist}' - '{album}'.")
+
+        local_tracks = []
+        for tid in track_ids:
+            t = self.repo.get_track(tid)
+            if t:
+                local_tracks.append(t)
+
+        if not local_tracks:
+            raise ValueError("No valid tracks selected for matching.")
+
+        def clean_title_for_diff(title: str) -> str:
+            t = re.sub(r"\(.*?\)|\[.*?\]", "", title.lower())
+            t = re.sub(r"[^a-z0-9\s]", "", t)
+            return t.strip()
+
+        proposed_mappings: list[dict[str, Any]] = []
+        used_local_ids = set()
+
+        for off in official_tracks:
+            off_num = int(off.get("track_number") or len(proposed_mappings) + 1)
+            off_title = off.get("title", "")
+            clean_off = clean_title_for_diff(off_title)
+
+            best_track = None
+            best_score = 0.0
+
+            for lt in local_tracks:
+                if lt.id in used_local_ids:
+                    continue
+                clean_lt = clean_title_for_diff(lt.title)
+                score = difflib.SequenceMatcher(None, clean_off, clean_lt).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_track = lt
+
+            if best_track and best_score >= 0.40:
+                used_local_ids.add(best_track.id)
+                proposed_mappings.append({
+                    "official_track_number": off_num,
+                    "official_title": off_title,
+                    "official_artist": off.get("artist") or official_data.get("artist") or "",
+                    "official_duration": int(off.get("duration") or 0),
+                    "matched_track_id": best_track.id,
+                    "matched_track_title": best_track.title,
+                    "matched_track_duration": best_track.duration,
+                    "confidence": round(best_score * 100, 1),
+                })
+            else:
+                proposed_mappings.append({
+                    "official_track_number": off_num,
+                    "official_title": off_title,
+                    "official_artist": off.get("artist") or official_data.get("artist") or "",
+                    "official_duration": int(off.get("duration") or 0),
+                    "matched_track_id": None,
+                    "matched_track_title": "",
+                    "matched_track_duration": 0,
+                    "confidence": 0.0,
+                })
+
+        unmatched = [t.to_dict() for t in local_tracks if t.id not in used_local_ids]
+
+        return {
+            "official_album": official_data.get("album") or album,
+            "official_artist": official_data.get("artist") or artist,
+            "official_year": official_data.get("release_year") or "",
+            "official_cover_url": official_data.get("cover_url") or "",
+            "mappings": proposed_mappings,
+            "unmatched_tracks": unmatched,
+            "all_selected_tracks": [t.to_dict() for t in local_tracks],
+        }
+
+    def bulk_assign_album(
+        self,
+        album: str,
+        album_artist: str,
+        release_year: str,
+        cover_url: str,
+        track_assignments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        import shutil
+
+        updated_count = 0
+        dest_dir = (
+            PATHS.downloads_dir
+            / sanitize_filename(album_artist or "Various Artists", "Various Artists")
+            / sanitize_filename(album or "Collection", "Collection")
+        )
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        cover_bytes = None
+        if cover_url:
+            try:
+                cover_bytes, _ = spotify_client.fetch_cover_bytes(cover_url)
+            except Exception as e:
+                logger.warning("Could not fetch album cover bytes from %s: %s", cover_url, e)
+
+        for assign in track_assignments:
+            track_id = int(assign.get("track_id") or 0)
+            if not track_id:
+                continue
+            track = self.repo.get_track(track_id)
+            if not track:
+                continue
+
+            track_num = int(assign.get("track_number") or track.track_number or 0)
+            title = assign.get("title") or track.title
+
+            old_file = Path(track.file_path)
+            new_file = old_file
+
+            if old_file.exists():
+                artists_list = [a.strip() for a in track.artist_display.split(",") if a.strip()] or [track.artist_display]
+                audio_tagger.tag_mp3(
+                    mp3_path=old_file,
+                    title=title,
+                    artists=artists_list,
+                    album_artist=album_artist or track.album_artist,
+                    album=album,
+                    track_number=track_num,
+                    release_year=release_year or track.release_year,
+                    original_year=track.original_year,
+                    cover_bytes=cover_bytes,
+                )
+                prefix = f"{track_num:02d} - " if track_num > 0 else ""
+                new_name = f"{prefix}{sanitize_filename(track.artist_display)} - {sanitize_filename(title)}.mp3"
+                target_dest = dest_dir / new_name
+                if str(old_file.resolve()) != str(target_dest.resolve()):
+                    try:
+                        shutil.move(str(old_file), str(target_dest))
+                        new_file = target_dest
+                        old_lrc = Path(track.lrc_path) if track.lrc_path else old_file.with_suffix(".lrc")
+                        if old_lrc.exists():
+                            shutil.move(str(old_lrc), str(target_dest.with_suffix(".lrc")))
+                    except Exception as mv_e:
+                        logger.warning("Could not move track file %s: %s", old_file, mv_e)
+
+            new_hash = compute_track_hash(album_artist or track.album_artist, title)
+            self.repo.update_track_row(
+                track_id=track.id,
+                track_hash=new_hash,
+                title=title,
+                artist_display=track.artist_display,
+                artists=[a.strip() for a in track.artist_display.split(",") if a.strip()],
+                album_artist=album_artist or track.album_artist,
+                album=album,
+                track_number=track_num,
+                release_year=release_year or track.release_year,
+                original_year=track.original_year,
+                file_path=str(new_file),
+                lrc_path=str(new_file.with_suffix(".lrc")) if new_file.with_suffix(".lrc").exists() else track.lrc_path,
+            )
+            updated_count += 1
+
+        return {
+            "status": "ok",
+            "updated_count": updated_count,
+            "album": album,
+            "album_artist": album_artist,
+        }
+
 
 library_service = LibraryService()

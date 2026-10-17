@@ -69,6 +69,16 @@ class MusicLinkerAPI {
     return `${base}${path.startsWith("/") ? path : `/${path}`}`;
   }
 
+  isCapacitor() {
+    return Boolean(
+      window.Capacitor?.isNativePlatform?.() ||
+      window.Capacitor !== undefined ||
+      window.location.protocol === "capacitor:" ||
+      window.location.protocol === "file:" ||
+      (window.location.hostname === "localhost" && !window.location.port)
+    );
+  }
+
   async request(path, options = {}) {
     const headers = new Headers(options.headers || {});
     const token = this.getPairToken();
@@ -79,16 +89,93 @@ class MusicLinkerAPI {
       headers.set("Content-Type", "application/json");
     }
 
-    const fullUrl = this.resolveUrl(path);
-    const resp = await fetch(fullUrl, {
-      ...options,
-      headers,
-    });
-    if (!resp.ok) {
-      const errBody = await resp.json().catch(() => ({}));
-      throw new Error(errBody.detail || `HTTP ${resp.status}`);
+    const origin = this.getServerOrigin();
+    if (this.isCapacitor() && !origin && !path.startsWith("http")) {
+      window.dispatchEvent(new CustomEvent("ml:show-connect-modal", { detail: { reason: "APK requires PC server connection." } }));
+      throw new Error("APK is not connected to your PC server. Tap 'Connect PC' to enter your PC IP (e.g. http://192.168.1.X:8101).");
     }
-    return resp.json();
+
+    const fullUrl = this.resolveUrl(path);
+    let resp;
+    try {
+      resp = await fetch(fullUrl, {
+        ...options,
+        headers,
+      });
+    } catch (networkErr) {
+      if (this.isCapacitor()) {
+        window.dispatchEvent(new CustomEvent("ml:show-connect-modal", { detail: { reason: "Cannot reach PC server." } }));
+        throw new Error(`Cannot reach PC server at ${origin || "localhost"}. Verify your PC is running and on the same Wi-Fi.`);
+      }
+      throw networkErr;
+    }
+
+    const contentType = resp.headers.get("content-type") || "";
+    const rawText = await resp.text();
+
+    if (rawText.trim().startsWith("<!DOCTYPE") || rawText.trim().startsWith("<html") || contentType.includes("text/html")) {
+      if (this.isCapacitor() || !origin) {
+        window.dispatchEvent(new CustomEvent("ml:show-connect-modal", { detail: { reason: "PC Server returned HTML / Not connected" } }));
+        throw new Error("APK is not connected to your PC server. Tap 'Connect PC' to enter your PC IP (e.g. http://192.168.1.X:8101).");
+      }
+      throw new Error(`Server returned HTML instead of JSON for ${path}. (Check if server is running on correct port)`);
+    }
+
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try {
+        const errJson = JSON.parse(rawText);
+        detail = errJson.detail || errJson.message || detail;
+      } catch (_e) {
+        if (rawText) detail = rawText.slice(0, 150);
+      }
+      throw new Error(detail);
+    }
+
+    try {
+      return JSON.parse(rawText);
+    } catch (err) {
+      throw new Error(`Invalid JSON response: ${err.message}`);
+    }
+  }
+
+  // ---- Audio Candidates & Audio Replacement ----
+
+  async getTrackCandidates(trackId, maxResults = 6) {
+    return this.request(`/api/tracks/${trackId}/candidates?max_results=${maxResults}`);
+  }
+
+  getCandidatePreviewUrl(videoId) {
+    return this.resolveUrl(`/api/tracks/candidate-preview/${encodeURIComponent(videoId)}`);
+  }
+
+  async replaceTrackAudio(trackId, youtubeUrl, bitrateKbps = 320) {
+    return this.request(`/api/tracks/${trackId}/replace-audio`, {
+      method: "POST",
+      body: JSON.stringify({ youtube_url: youtubeUrl, bitrate_kbps: bitrateKbps }),
+    });
+  }
+
+  // ---- Bulk Album Matching & Assignment ----
+
+  async matchAlbumTracklist(album, artist, trackIds) {
+    return this.request("/api/albums/match-tracklist", {
+      method: "POST",
+      body: JSON.stringify({ album, artist: artist || "", track_ids: trackIds }),
+    });
+  }
+
+  async bulkAssignAlbum(album, albumArtist, releaseYear, coverUrl, trackAssignments) {
+    return this.request("/api/tracks/bulk-assign-album", {
+      method: "POST",
+      body: JSON.stringify({
+        album,
+        album_artist: albumArtist || "",
+        release_year: parseInt(releaseYear, 10) || 0,
+        cover_url: coverUrl || null,
+        track_assignments: trackAssignments,
+      }),
+    });
   }
 
   subscribeJobEvents(jobId, onUpdate) {

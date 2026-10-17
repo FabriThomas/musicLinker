@@ -307,3 +307,28 @@ class SettingsUpdatePayload(BaseModel):
     proxy_server_url: str | None = None
     proxy_password: str | None = None
     preferred_download_method: str | None = None
+
+
+class ReplaceTrackAudioPayload(BaseModel):
+    """Payload to swap track audio with an alternative YouTube source."""
+
+    youtube_url: str = Field(..., min_length=5)
+    bitrate_kbps: int = Field(default=320, ge=64, le=320)
+
+
+class AlbumMatchRequest(BaseModel):
+    """Payload to fuzzy-match local tracks against an official album tracklist."""
+
+    album: str = Field(..., min_length=1)
+    artist: str = Field(default="")
+    track_ids: list[int] = Field(..., min_length=1)
+
+
+class BulkAssignAlbumPayload(BaseModel):
+    """Payload to bulk-assign tracks to an album, update ID3 tags, and move files."""
+
+    album: str = Field(..., min_length=1)
+    album_artist: str = Field(default="")
+    release_year: int = Field(default=0)
+    cover_url: str | None = None
+    track_assignments: list[dict[str, Any]] = Field(..., min_length=1)

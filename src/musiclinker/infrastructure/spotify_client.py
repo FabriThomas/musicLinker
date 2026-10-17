@@ -13,7 +13,7 @@ from musiclinker.core.logging_config import logger
 
 
 _SPOTIFY_PATTERN = re.compile(
-    r"(?:open\.spotify\.com/(?:intl-[a-zA-Z0-9_-]+/)?(album|playlist|track)/|spotify:(album|playlist|track):)([a-zA-Z0-9]+)"
+    r"(?:open\.spotify\.com/(?:intl-[a-zA-Z0-9_-]+/)?(?:embed/)?(album|playlist|track)/|spotify:(album|playlist|track):)([a-zA-Z0-9]+)"
 )
 
 _NEXT_DATA_PATTERN = re.compile(
@@ -49,6 +49,9 @@ class SpotifyClient:
             except Exception as exc:
                 logger.warning("Failed resolving shortened spotify.link '%s': %s", url_or_uri, exc)
 
+        if "?" in clean:
+            clean = clean.split("?")[0]
+
         match = _SPOTIFY_PATTERN.search(clean)
         if not match:
             return None
@@ -79,17 +82,50 @@ class SpotifyClient:
             raise SpotifyResolutionError(f"Failed fetching Spotify embed page for {embed_url}: {exc}") from exc
 
         match = _NEXT_DATA_PATTERN.search(html)
-        if not match:
-            raise SpotifyResolutionError(f"Spotify embed page did not contain JSON metadata (__NEXT_DATA__) for {embed_url}")
+        entity: dict[str, Any] = {}
+        if match:
+            try:
+                data = json.loads(match.group(1))
+                entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+            except Exception as exc:
+                logger.warning("Failed parsing Spotify embed __NEXT_DATA__: %s", exc)
 
-        try:
-            data = json.loads(match.group(1))
-        except Exception as exc:
-            raise SpotifyResolutionError(f"Failed parsing Spotify embed JSON payload: {exc}") from exc
-
-        entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
         if not entity:
-            raise SpotifyResolutionError(f"Spotify embed payload missing 'entity' dictionary for {embed_url}")
+            # Fallback 1: Check initial-state script
+            init_match = re.search(r'<script id=[\x22\x27]initial-state[\x22\x27][^>]*>(.*?)</script>', html, re.DOTALL)
+            if init_match:
+                try:
+                    data = json.loads(init_match.group(1))
+                    entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {}) if isinstance(data, dict) else {}
+                except Exception:
+                    pass
+
+        if not entity:
+            # Fallback 2: OpenGraph tags
+            og_title_m = re.search(r'<meta property=[\x22\x27]og:title[\x22\x27] content=[\x22\x27](.*?)[\x22\x27]', html)
+            og_desc_m = re.search(r'<meta property=[\x22\x27]og:description[\x22\x27] content=[\x22\x27](.*?)[\x22\x27]', html)
+            og_img_m = re.search(r'<meta property=[\x22\x27]og:image[\x22\x27] content=[\x22\x27](.*?)[\x22\x27]', html)
+            og_title = og_title_m.group(1) if og_title_m else ""
+            og_desc = og_desc_m.group(1) if og_desc_m else ""
+            og_img = og_img_m.group(1) if og_img_m else ""
+            if og_title:
+                clean_title = og_title.split(" - song and lyrics by")[0].split(" | Spotify")[0].strip()
+                artist_guess = ""
+                if "by " in og_desc:
+                    artist_guess = og_desc.split("by ")[1].split(" on Spotify")[0].split(".")[0].strip()
+                return {
+                    "source": "spotify",
+                    "entity_type": entity_type,
+                    "entity_id": entity_id,
+                    "album": clean_title,
+                    "artist": artist_guess or "Spotify",
+                    "release_year": "",
+                    "cover_url": og_img,
+                    "tracks": [
+                        {"track_number": 1, "title": clean_title, "artist": artist_guess, "duration": 0, "spotify_uri": f"spotify:{entity_type}:{entity_id}", "youtube_url": ""}
+                    ],
+                }
+            raise SpotifyResolutionError(f"Spotify embed page did not contain metadata for {embed_url}")
 
         # Extract best cover art URL from visualIdentity images
         images = entity.get("visualIdentity", {}).get("image", [])

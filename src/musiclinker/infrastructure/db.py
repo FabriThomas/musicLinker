@@ -481,6 +481,21 @@ class DatabaseRepository:
             conn.commit()
             return self.get_track(track_id)
 
+    def update_track_audio_info(
+        self,
+        track_id: int,
+        duration: int,
+        bitrate_kbps: int,
+    ) -> TrackEntity | None:
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE tracks SET duration = ?, bitrate_kbps = ? WHERE id = ?",
+                (duration, bitrate_kbps, track_id),
+            )
+            conn.commit()
+            return self.get_track(track_id)
+
     def delete_track(self, track_id: int) -> None:
         with self._write_lock:
             conn = self._get_conn()

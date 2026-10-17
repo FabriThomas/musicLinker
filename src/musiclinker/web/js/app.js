@@ -56,6 +56,15 @@ class MusicLinkerController {
     this.wakeLock = null;
     this.carModeActive = false;
 
+    // Standalone Mobile UX, Audio Version Swap & Multi-Select Album Grouping State
+    this.mobileView = "library";
+    this.isMultiSelectActive = false;
+    this.selectedTrackIds = new Set();
+    this.previewAudio = null;
+    this.activePreviewVideoId = null;
+    this.swapCurrentTrack = null;
+    this.bulkMatchData = null;
+
     this.engine = new AudioEngine({
       onTimeUpdate: (cur, dur) => this.handleTimeUpdate(cur, dur),
       onTrackEnded: () => this.handleTrackEnded(),
@@ -76,6 +85,7 @@ class MusicLinkerController {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
     this.bindDOMEvents();
+    this.initMobileNavigation();
     this.initAllSliderFills();
     this.initEqualizerUI();
     const volBar = document.getElementById("volume-bar");
@@ -85,6 +95,13 @@ class MusicLinkerController {
       if (volLabel) volLabel.textContent = `${initVal}%`;
       this.updateVolumeIcon(initVal);
     }
+    await this.checkServerConnection();
+    window.addEventListener("ml:show-connect-modal", (e) => {
+      this.openSyncModal();
+      if (e.detail?.reason) {
+        this.showToast(e.detail.reason, "warning");
+      }
+    });
     await this.refreshOfflineState();
     await this.loadSettingsIntoUI();
     await this.loadAlbums();
@@ -338,13 +355,21 @@ class MusicLinkerController {
             ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0" title="Rough Synced Lyrics">≈Sync</span>`
             : "";
 
+        const isSelected = this.selectedTrackIds.has(t.id);
+        const checkboxHtml = this.isMultiSelectActive
+          ? `<input type="checkbox" data-select-id="${t.id}" ${isSelected ? "checked" : ""} class="track-select-checkbox mr-2.5 shrink-0" />`
+          : "";
+
         return `
           <div class="ml-track-row group flex items-center justify-between p-2.5 rounded-xl border ${
-            isCurrent
+            isSelected
+              ? "bg-emerald-950/60 border-emerald-500/70"
+              : isCurrent
               ? "bg-emerald-950/50 border-emerald-500/45 shadow-sm"
               : "bg-zinc-900/30 border-zinc-800/40 hover:bg-zinc-800/65 hover:border-zinc-700/80"
           }">
             <div class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer" data-play-idx="${idx}">
+              ${checkboxHtml}
               <div class="w-11 h-11 rounded-lg bg-zinc-800 flex items-center justify-center overflow-hidden shrink-0 border border-zinc-700/60 relative">
                 ${
                   coverSrc
@@ -369,6 +394,13 @@ class MusicLinkerController {
             </div>
             <div class="flex items-center gap-1.5 shrink-0 ml-2">
               <span class="text-[11px] text-zinc-500 hidden md:inline font-mono mr-1">${this.formatDuration(t.duration)}</span>
+              <button
+                data-swap-idx="${idx}"
+                title="Change Version (Re-search & Preview 15s Snippet)"
+                class="ml-btn-icon w-7 h-7 text-xs flex items-center justify-center hover:!text-emerald-300"
+              >
+                <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+              </button>
               <button
                 data-edit-idx="${idx}"
                 title="Edit Track, Track #, or Album Metadata"
@@ -401,6 +433,16 @@ class MusicLinkerController {
 
     container.querySelectorAll("[data-play-idx]").forEach((el) => {
       el.addEventListener("click", (e) => {
+        if (e.target.closest("[data-select-id]")) return;
+        const idx = Number(el.dataset.playIdx);
+        const track = this.tracks[idx];
+        if (this.isMultiSelectActive || e.ctrlKey || e.metaKey || e.shiftKey) {
+          e.stopPropagation();
+          if (track) {
+            this.toggleTrackSelection(track.id, !this.selectedTrackIds.has(track.id));
+          }
+          return;
+        }
         const albumSpan = e.target.closest("[data-filter-album]");
         if (albumSpan) {
           e.stopPropagation();
@@ -410,7 +452,24 @@ class MusicLinkerController {
           return;
         }
         this.playQueue = [...this.tracks];
-        this.playByIndex(Number(el.dataset.playIdx));
+        this.playByIndex(idx);
+      });
+    });
+
+    container.querySelectorAll("[data-select-id]").forEach((cb) => {
+      cb.addEventListener("click", (e) => e.stopPropagation());
+      cb.addEventListener("change", (e) => {
+        e.stopPropagation();
+        const trackId = Number(cb.dataset.selectId);
+        this.toggleTrackSelection(trackId, cb.checked);
+      });
+    });
+
+    container.querySelectorAll("[data-swap-idx]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const track = this.tracks[Number(btn.dataset.swapIdx)];
+        if (track) this.openSwapAudioModal(track);
       });
     });
 
@@ -2458,6 +2517,541 @@ class MusicLinkerController {
     });
   }
 
+  // ---- Standalone Mobile UX & Navigation ----
+
+  initMobileNavigation() {
+    this.switchMobileView("library");
+    const navItems = [
+      { id: "nav-btn-library", view: "library" },
+      { id: "nav-btn-downloader", view: "downloader" },
+      { id: "nav-btn-lyrics", view: "lyrics" },
+      { id: "nav-btn-studio", view: "studio" },
+      { id: "nav-btn-settings", view: "settings" },
+    ];
+    navItems.forEach(({ id, view }) => {
+      document.getElementById(id)?.addEventListener("click", () => this.switchMobileView(view));
+    });
+
+    // Also header connection pill
+    document.getElementById("header-conn-status")?.addEventListener("click", () => this.openSyncModal());
+  }
+
+  switchMobileView(viewName) {
+    this.mobileView = viewName;
+    document.body.dataset.mobileView = viewName;
+
+    const navMap = {
+      library: "nav-btn-library",
+      downloader: "nav-btn-downloader",
+      lyrics: "nav-btn-lyrics",
+      studio: "nav-btn-studio",
+      settings: "nav-btn-settings",
+    };
+
+    Object.entries(navMap).forEach(([v, id]) => {
+      const btn = document.getElementById(id);
+      if (btn) {
+        btn.classList.toggle("active", v === viewName);
+        btn.classList.toggle("text-emerald-400", v === viewName);
+        btn.classList.toggle("text-zinc-400", v !== viewName);
+      }
+    });
+
+    // Synchronize right-side desktop tab panel with mobile selection
+    if (viewName === "downloader") {
+      this.switchStudioTab("extractor");
+    } else if (viewName === "lyrics") {
+      this.switchStudioTab("lyrics");
+    } else if (viewName === "studio") {
+      this.switchStudioTab("curator");
+    } else if (viewName === "settings") {
+      this.switchStudioTab("settings");
+    }
+  }
+
+  async checkServerConnection() {
+    const pill = document.getElementById("header-conn-status");
+    const label = document.getElementById("header-conn-label");
+    const dot = document.getElementById("header-conn-dot");
+    try {
+      const info = await api.request("/api/sync/info");
+      if (pill) {
+        pill.className = "ml-btn px-2.5 py-1.5 text-xs rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-400 flex items-center gap-1.5 transition cursor-pointer";
+      }
+      if (label) label.textContent = "Online";
+      if (dot) dot.className = "w-2 h-2 rounded-full bg-emerald-400";
+    } catch (_err) {
+      if (pill) {
+        pill.className = "ml-btn px-2.5 py-1.5 text-xs rounded-xl border border-amber-500/50 bg-amber-500/15 text-amber-300 flex items-center gap-1.5 transition cursor-pointer";
+      }
+      if (label) label.textContent = api.isCapacitor() ? "Connect PC" : "Offline";
+      if (dot) dot.className = "w-2 h-2 rounded-full bg-amber-400 animate-ping";
+    }
+  }
+
+  // ---- Multi-Select & Bulk Album Grouping ----
+
+  toggleMultiSelectMode() {
+    this.isMultiSelectActive = !this.isMultiSelectActive;
+    const btn = document.getElementById("btn-toggle-multi-select");
+    const bar = document.getElementById("multi-select-bar");
+    if (btn) {
+      btn.className = this.isMultiSelectActive
+        ? "ml-btn px-2.5 py-1.5 text-xs font-semibold bg-emerald-500 text-zinc-950 flex items-center gap-1.5"
+        : "ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs flex items-center gap-1.5";
+    }
+    if (bar) {
+      bar.classList.toggle("hidden", !this.isMultiSelectActive);
+    }
+    if (!this.isMultiSelectActive) {
+      this.selectedTrackIds.clear();
+    }
+    this.updateMultiSelectBar();
+    this.renderTrackList();
+  }
+
+  toggleTrackSelection(trackId, isSelected) {
+    if (isSelected) {
+      this.selectedTrackIds.add(trackId);
+    } else {
+      this.selectedTrackIds.delete(trackId);
+    }
+    this.updateMultiSelectBar();
+    const rowCb = document.querySelector(`[data-select-id="${trackId}"]`);
+    if (rowCb) rowCb.checked = isSelected;
+    const rowEl = rowCb?.closest(".ml-track-row");
+    if (rowEl) {
+      rowEl.classList.toggle("bg-emerald-950/60", isSelected);
+      rowEl.classList.toggle("border-emerald-500/70", isSelected);
+    }
+  }
+
+  selectAllFilteredTracks() {
+    this.tracks.forEach((t) => this.selectedTrackIds.add(t.id));
+    this.updateMultiSelectBar();
+    this.renderTrackList();
+  }
+
+  clearSelectedTracks() {
+    this.selectedTrackIds.clear();
+    this.updateMultiSelectBar();
+    this.renderTrackList();
+  }
+
+  updateMultiSelectBar() {
+    const countEl = document.getElementById("multi-select-count");
+    if (countEl) {
+      countEl.textContent = `${this.selectedTrackIds.size} selected`;
+    }
+  }
+
+  openBulkAlbumModal() {
+    if (this.selectedTrackIds.size === 0) {
+      this.showToast("Select at least 1 track using checkboxes first.", "warning");
+      return;
+    }
+    const selectedTracks = this.allTracks.filter((t) => this.selectedTrackIds.has(t.id));
+    if (!selectedTracks.length) return;
+
+    const modal = document.getElementById("bulk-album-modal");
+    const titleInput = document.getElementById("bulk-album-input-title");
+    const artistInput = document.getElementById("bulk-album-input-artist");
+    const yearInput = document.getElementById("bulk-album-input-year");
+    const statusEl = document.getElementById("bulk-album-match-status");
+
+    const sample = selectedTracks[0];
+    if (titleInput) titleInput.value = sample.album || "";
+    if (artistInput) artistInput.value = sample.album_artist || sample.artist_display || "";
+    if (yearInput) yearInput.value = sample.release_year || sample.original_year || "";
+
+    if (statusEl) statusEl.textContent = `${selectedTracks.length} tracks selected`;
+
+    // Render preliminary list of selected tracks
+    this.renderBulkAlbumReviewTable(selectedTracks, null);
+    if (modal) modal.classList.remove("hidden");
+  }
+
+  renderBulkAlbumReviewTable(selectedTracks, matchResult = null) {
+    const container = document.getElementById("bulk-album-table-container");
+    if (!container) return;
+
+    if (!matchResult) {
+      container.innerHTML = `
+        <div class="text-xs text-zinc-400 mb-2 font-mono">
+          Ready to group ${selectedTracks.length} tracks. Click <b>"Match Official Tracklist"</b> to auto-sort 1..N via Spotify/MusicBrainz, or adjust assignments below.
+        </div>
+        ${selectedTracks
+          .map(
+            (t, i) => `
+          <div class="flex items-center justify-between p-2 rounded-lg bg-zinc-900/80 border border-zinc-800 text-xs">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="font-mono text-zinc-500 w-6 text-center">#${i + 1}</span>
+              <span class="text-zinc-200 font-medium truncate">${this.escape(t.title)}</span>
+              <span class="text-zinc-500 truncate text-[11px]">— ${this.escape(t.artist_display)}</span>
+            </div>
+            <input type="number" min="1" max="99" value="${t.track_number || i + 1}" data-assign-track-id="${t.id}" class="w-14 bg-zinc-950 border border-zinc-700 rounded px-1.5 py-0.5 text-center text-xs text-emerald-400 font-mono font-bold" />
+          </div>
+        `
+          )
+          .join("")}
+      `;
+      return;
+    }
+
+    const { official_tracks = [], assignments = [] } = matchResult;
+
+    container.innerHTML = `
+      <div class="text-xs text-emerald-300 mb-2 font-medium bg-emerald-950/40 border border-emerald-500/30 rounded-lg p-2 flex items-center gap-2">
+        <span>✓ Fuzzy match completed! Review the assigned track numbers (1..N) below:</span>
+      </div>
+      ${assignments
+        .map((a) => {
+          const conf = Math.round((a.confidence || 0) * 100);
+          const confBadgeClass =
+            conf >= 80
+              ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+              : conf >= 50
+              ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+              : "bg-zinc-800 text-zinc-400 border-zinc-700";
+
+          return `
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between p-2 rounded-lg bg-zinc-900/90 border border-zinc-800 gap-2 text-xs">
+              <div class="min-w-0 flex-1">
+                <div class="text-zinc-200 font-semibold truncate">${this.escape(a.current_title)}</div>
+                <div class="text-zinc-500 text-[11px] truncate">${this.escape(a.current_artist)}</div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border ${confBadgeClass}">${conf}% match</span>
+                <select data-assign-track-id="${a.track_id}" class="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs text-emerald-400 font-mono font-bold">
+                  ${official_tracks
+                    .map(
+                      (ot) =>
+                        `<option value="${ot.track_number}" ${ot.track_number === a.track_number ? "selected" : ""}>#${ot.track_number} ${this.escape(ot.title)}</option>`
+                    )
+                    .join("")}
+                </select>
+              </div>
+            </div>
+          `;
+        })
+        .join("")}
+    `;
+  }
+
+  async matchBulkAlbumTracklist() {
+    const title = document.getElementById("bulk-album-input-title")?.value.trim();
+    const artist = document.getElementById("bulk-album-input-artist")?.value.trim() || "";
+    if (!title) {
+      this.showToast("Please enter an album title to match.", "warning");
+      return;
+    }
+
+    const btn = document.getElementById("btn-bulk-compare-official");
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<span>Matching tracklist...</span>`;
+    }
+
+    try {
+      const trackIds = Array.from(this.selectedTrackIds);
+      const res = await api.matchAlbumTracklist(title, artist, trackIds);
+      this.bulkMatchData = res;
+      this.renderBulkAlbumReviewTable(
+        this.allTracks.filter((t) => this.selectedTrackIds.has(t.id)),
+        res
+      );
+      this.showToast(`Found ${res.official_tracks?.length || 0} official track(s) for "${res.album}"`);
+    } catch (err) {
+      this.showToast(`Failed matching tracklist: ${err.message}`, "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span>Match Official Tracklist</span>`;
+      }
+    }
+  }
+
+  async submitBulkAssignAlbum() {
+    const title = document.getElementById("bulk-album-input-title")?.value.trim();
+    const artist = document.getElementById("bulk-album-input-artist")?.value.trim() || "";
+    const year = parseInt(document.getElementById("bulk-album-input-year")?.value || "0", 10) || 0;
+    if (!title) {
+      this.showToast("Album title is required.", "warning");
+      return;
+    }
+
+    const selects = document.querySelectorAll("[data-assign-track-id]");
+    if (!selects.length) {
+      this.showToast("No tracks to assign.", "warning");
+      return;
+    }
+
+    const trackAssignments = [];
+    selects.forEach((el) => {
+      const trackId = Number(el.dataset.assignTrackId);
+      const trackNum = parseInt(el.value, 10) || 1;
+      let matchedTitle = "";
+      if (this.bulkMatchData?.official_tracks) {
+        const match = this.bulkMatchData.official_tracks.find((ot) => ot.track_number === trackNum);
+        if (match) matchedTitle = match.title;
+      }
+      trackAssignments.push({
+        track_id: trackId,
+        track_number: trackNum,
+        title: matchedTitle,
+      });
+    });
+
+    const submitBtn = document.getElementById("btn-bulk-apply-album-submit");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<span>Updating ID3 tags & moving files...</span>`;
+    }
+
+    try {
+      const res = await api.bulkAssignAlbum(title, artist, year, null, trackAssignments);
+      this.showToast(`Updated ${res.updated_tracks?.length || 0} track(s) into album "${title}"!`);
+      document.getElementById("bulk-album-modal")?.classList.add("hidden");
+      this.toggleMultiSelectMode();
+      await this.loadAlbums();
+      await this.loadLibrary("", true);
+    } catch (err) {
+      this.showToast(`Failed bulk assigning album: ${err.message}`, "error");
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `<svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><polygon points="20 6 9 17 4 12"/></svg><span>Confirm & Apply to Selected Tracks</span>`;
+      }
+    }
+  }
+
+  async batchDeleteSelectedTracks() {
+    if (this.selectedTrackIds.size === 0) return;
+    const count = this.selectedTrackIds.size;
+    if (!confirm(`Delete ${count} selected track(s) from your library and disk?`)) return;
+
+    try {
+      await api.request("/api/tracks/batch-delete", {
+        method: "POST",
+        body: JSON.stringify({
+          track_ids: Array.from(this.selectedTrackIds),
+          delete_files: true,
+          unmark_hashes: false,
+        }),
+      });
+      this.showToast(`Deleted ${count} track(s)`);
+      this.toggleMultiSelectMode();
+      await this.loadLibrary("", true);
+    } catch (err) {
+      this.showToast(`Failed batch deleting: ${err.message}`, "error");
+    }
+  }
+
+  // ---- Audio Version Swap & 15s Snippet Preview ----
+
+  async openSwapAudioModal(track) {
+    this.stopCandidatePreview();
+    this.swapCurrentTrack = track;
+
+    const modal = document.getElementById("swap-audio-modal");
+    const idInput = document.getElementById("swap-track-id");
+    const titleEl = document.getElementById("swap-target-title");
+    const artistEl = document.getElementById("swap-target-artist");
+    const durEl = document.getElementById("swap-target-duration");
+    const listEl = document.getElementById("swap-candidates-list");
+    const statusEl = document.getElementById("swap-status-text");
+
+    if (idInput) idInput.value = track.id;
+    if (titleEl) titleEl.textContent = track.title;
+    if (artistEl) artistEl.textContent = track.artist_display;
+    if (durEl) durEl.textContent = this.formatDuration(track.duration);
+
+    if (listEl) {
+      listEl.innerHTML = `
+        <div class="p-8 text-center text-xs text-zinc-400 space-y-2">
+          <div class="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <div>Searching YouTube for alternative versions of "${this.escape(track.title)}"...</div>
+        </div>
+      `;
+    }
+    if (statusEl) statusEl.textContent = "Querying alternative audio versions...";
+
+    if (modal) modal.classList.remove("hidden");
+
+    try {
+      const res = await api.getTrackCandidates(track.id, 6);
+      this.renderAudioCandidates(track, res.candidates || []);
+      if (statusEl) statusEl.textContent = `${(res.candidates || []).length} alternative versions found`;
+    } catch (err) {
+      if (listEl) {
+        listEl.innerHTML = `<div class="p-6 text-center text-xs text-red-400">Failed searching versions: ${this.escape(err.message)}</div>`;
+      }
+      if (statusEl) statusEl.textContent = "Search error";
+    }
+  }
+
+  renderAudioCandidates(currentTrack, candidates) {
+    const listEl = document.getElementById("swap-candidates-list");
+    if (!listEl) return;
+
+    if (!candidates.length) {
+      listEl.innerHTML = `<div class="p-6 text-center text-xs text-zinc-500">No alternative versions found for this track.</div>`;
+      return;
+    }
+
+    listEl.innerHTML = candidates
+      .map((c) => {
+        const diffSec = c.duration_diff_sec !== undefined ? c.duration_diff_sec : (c.duration - currentTrack.duration);
+        const diffText = diffSec === 0 ? "Exact duration" : diffSec > 0 ? `+${diffSec}s` : `${diffSec}s`;
+        const diffBadgeClass =
+          Math.abs(diffSec) <= 3
+            ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+            : Math.abs(diffSec) <= 15
+            ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+            : "bg-red-500/20 text-red-300 border-red-500/40";
+
+        return `
+          <div class="candidate-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs" data-video-card="${c.video_id}">
+            <div class="min-w-0 flex-1">
+              <div class="font-bold text-white text-sm truncate leading-snug">${this.escape(c.title)}</div>
+              <div class="flex items-center gap-2 text-zinc-400 text-xs mt-0.5 truncate">
+                <span>${this.escape(c.channel || "Official Channel")}</span>
+                <span class="text-zinc-600">•</span>
+                <span class="font-mono text-zinc-300">${this.formatDuration(c.duration)}</span>
+                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border ${diffBadgeClass}">${diffText}</span>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button
+                data-preview-video-id="${c.video_id}"
+                class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 text-emerald-300 hover:text-white"
+                title="Play 15-second snippet of this audio start"
+              >
+                <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                <span>15s Preview</span>
+              </button>
+              <button
+                data-replace-url="${this.escapeAttr(c.url)}"
+                class="ml-btn ml-btn-primary px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 font-bold"
+                title="Swap track audio with this version"
+              >
+                <span>Select & Swap</span>
+              </button>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    listEl.querySelectorAll("[data-preview-video-id]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const vid = btn.dataset.previewVideoId;
+        this.playCandidatePreview(vid, btn);
+      });
+    });
+
+    listEl.querySelectorAll("[data-replace-url]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const ytUrl = btn.dataset.replaceUrl;
+        if (this.swapCurrentTrack) {
+          this.confirmReplaceAudio(this.swapCurrentTrack.id, ytUrl, btn);
+        }
+      });
+    });
+  }
+
+  playCandidatePreview(videoId, btnEl) {
+    if (this.activePreviewVideoId === videoId && this.previewAudio && !this.previewAudio.paused) {
+      this.stopCandidatePreview();
+      return;
+    }
+
+    this.stopCandidatePreview();
+    this.activePreviewVideoId = videoId;
+
+    const url = api.getCandidatePreviewUrl(videoId);
+    this.previewAudio = new Audio(url);
+    this.previewAudio.volume = this.engine.masterGain?.gain.value || 0.85;
+
+    // Temporarily pause main playback so preview is clean
+    if (this.engine.isPlaying) {
+      this.engine.pause();
+    }
+
+    btnEl.innerHTML = `<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Playing...</span>`;
+    const card = document.querySelector(`[data-video-card="${videoId}"]`);
+    if (card) card.classList.add("is-playing");
+
+    this.previewAudio.play().catch((err) => {
+      this.showToast(`Preview failed: ${err.message}`, "error");
+      this.stopCandidatePreview();
+    });
+
+    this.previewAudio.onended = () => {
+      this.stopCandidatePreview();
+    };
+    this.previewAudio.onerror = () => {
+      this.showToast("Could not load 15s snippet preview.", "error");
+      this.stopCandidatePreview();
+    };
+  }
+
+  stopCandidatePreview() {
+    if (this.previewAudio) {
+      try {
+        this.previewAudio.pause();
+        this.previewAudio.currentTime = 0;
+      } catch (_e) {}
+      this.previewAudio = null;
+    }
+    if (this.activePreviewVideoId) {
+      const card = document.querySelector(`[data-video-card="${this.activePreviewVideoId}"]`);
+      if (card) card.classList.remove("is-playing");
+      const btn = document.querySelector(`[data-preview-video-id="${this.activePreviewVideoId}"]`);
+      if (btn) {
+        btn.innerHTML = `<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg><span>15s Preview</span>`;
+      }
+      this.activePreviewVideoId = null;
+    }
+  }
+
+  async confirmReplaceAudio(trackId, youtubeUrl, btnEl) {
+    this.stopCandidatePreview();
+
+    if (btnEl) {
+      btnEl.disabled = true;
+      btnEl.innerHTML = `<span class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span><span>Replacing...</span>`;
+    }
+
+    try {
+      const res = await api.replaceTrackAudio(trackId, youtubeUrl, 320);
+      const updatedTrack = res.track;
+      this.showToast(`Audio replaced successfully for "${updatedTrack.title}"!`);
+
+      // Update in memory
+      const allIdx = this.allTracks.findIndex((t) => t.id === trackId);
+      if (allIdx !== -1) this.allTracks[allIdx] = updatedTrack;
+      const curIdx = this.tracks.findIndex((t) => t.id === trackId);
+      if (curIdx !== -1) this.tracks[curIdx] = updatedTrack;
+
+      // If active track, update UI
+      if (this.playQueue[this.currentIndex]?.id === trackId) {
+        this.playQueue[this.currentIndex] = updatedTrack;
+        this.updateNowPlayingBar(updatedTrack);
+      }
+
+      this.renderTrackList();
+      document.getElementById("swap-audio-modal")?.classList.add("hidden");
+    } catch (err) {
+      this.showToast(`Audio replacement failed: ${err.message}`, "error");
+    } finally {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.innerHTML = `<span>Select & Swap</span>`;
+      }
+    }
+  }
+
   // ---- Extraction Job ----
 
   async startExtractionJob() {
@@ -3030,6 +3624,14 @@ class MusicLinkerController {
     document.getElementById("btn-rename-selected-album")?.addEventListener("click", () => this.openBulkAlbumRenameModal());
     document.getElementById("btn-confirm-album-rename")?.addEventListener("click", () => this.submitBulkAlbumRename());
     document.getElementById("btn-save-track-edit")?.addEventListener("click", () => this.saveEditedTrackMetadata());
+    document.getElementById("btn-edit-swap-audio")?.addEventListener("click", () => {
+      const trackId = Number(document.getElementById("edit-track-id")?.value || 0);
+      const track = this.allTracks.find((t) => t.id === trackId);
+      if (track) {
+        document.getElementById("edit-track-modal")?.classList.add("hidden");
+        this.openSwapAudioModal(track);
+      }
+    });
     document.getElementById("btn-delete-track-modal")?.addEventListener("click", async () => {
       const trackId = Number(document.getElementById("edit-track-id")?.value || 0);
       const title = document.getElementById("edit-track-title")?.value || "track";
@@ -3141,16 +3743,63 @@ class MusicLinkerController {
     document.getElementById("btn-fmt-json")?.addEventListener("click", () => this.setExportFormat("json"));
     document.getElementById("btn-do-export-download")?.addEventListener("click", () => this.downloadExportFile());
 
+    // Multi-Select & Bulk Album Grouping
+    document.getElementById("btn-toggle-multi-select")?.addEventListener("click", () => this.toggleMultiSelectMode());
+    document.getElementById("btn-multi-select-all")?.addEventListener("click", () => this.selectAllFilteredTracks());
+    document.getElementById("btn-multi-clear")?.addEventListener("click", () => this.clearSelectedTracks());
+    document.getElementById("btn-multi-group-album")?.addEventListener("click", () => this.openBulkAlbumModal());
+    document.getElementById("btn-multi-delete")?.addEventListener("click", () => this.batchDeleteSelectedTracks());
+    document.getElementById("btn-multi-add-playlist")?.addEventListener("click", () => this.addMultiSelectToPlaylist());
+    document.getElementById("btn-bulk-compare-official")?.addEventListener("click", () => this.matchBulkAlbumTracklist());
+    document.getElementById("btn-bulk-apply-album-submit")?.addEventListener("click", () => this.submitBulkAssignAlbum());
+
+    // Audio Version Swap Modal
+    document.getElementById("btn-close-swap-modal")?.addEventListener("click", () => {
+      this.stopCandidatePreview();
+      document.getElementById("swap-audio-modal")?.classList.add("hidden");
+    });
+    document.getElementById("btn-cancel-swap-modal")?.addEventListener("click", () => {
+      this.stopCandidatePreview();
+      document.getElementById("swap-audio-modal")?.classList.add("hidden");
+    });
+
     // Global keyboard shortcuts
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         if (this.bigPlayerOpen) {
           this.toggleBigPlayer(false);
         }
+        this.stopCandidatePreview();
         document.getElementById("export-list-modal")?.classList.add("hidden");
         document.getElementById("playlist-edit-modal")?.classList.add("hidden");
+        document.getElementById("swap-audio-modal")?.classList.add("hidden");
+        document.getElementById("bulk-album-modal")?.classList.add("hidden");
       }
     });
+  }
+
+  async addMultiSelectToPlaylist() {
+    if (this.selectedTrackIds.size === 0) return;
+    await this.loadPlaylists();
+    if (!this.playlists.length) {
+      this.openCreatePlaylistModal();
+      return;
+    }
+    const plNames = this.playlists.map((p, i) => `${i + 1}. ${p.name}`).join("\n");
+    const choice = prompt(`Select playlist number to add ${this.selectedTrackIds.size} track(s):\n\n${plNames}`);
+    const num = parseInt(choice, 10);
+    if (isNaN(num) || num < 1 || num > this.playlists.length) return;
+    const targetPl = this.playlists[num - 1];
+    try {
+      await api.request(`/api/playlists/${targetPl.id}/tracks`, {
+        method: "POST",
+        body: JSON.stringify({ track_ids: Array.from(this.selectedTrackIds) }),
+      });
+      this.showToast(`Added ${this.selectedTrackIds.size} tracks to "${targetPl.name}"!`);
+      this.toggleMultiSelectMode();
+    } catch (err) {
+      this.showToast(`Failed adding to playlist: ${err.message}`, "error");
+    }
   }
 
   formatTime(sec) {
