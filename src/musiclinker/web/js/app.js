@@ -3228,6 +3228,15 @@ class MusicLinkerController {
 
           if (floatingBar) floatingBar.style.width = `${pct}%`;
           if (floatingPct) floatingPct.textContent = `${pct}%`;
+
+          if (st.status === "error") {
+            clearInterval(this.activeSwapInterval);
+            this.activeSwapTrackId = null;
+            if (progressDetail) {
+              progressDetail.textContent = st.message || "Audio swap failed";
+              progressDetail.classList.add("text-rose-400");
+            }
+          }
         }
       } catch (_e) {}
     }, 500);

@@ -584,11 +584,26 @@ class YouTubeClient:
             valid_bitrate = "192"
 
         def _hook(status_dict: dict[str, Any]) -> None:
-            if progress_cb and status_dict.get("status") == "downloading":
+            if not progress_cb:
+                return
+            st = status_dict.get("status")
+            if st == "downloading":
                 total = status_dict.get("total_bytes") or status_dict.get("total_bytes_estimate") or 0
                 downloaded = status_dict.get("downloaded_bytes") or 0
                 if total > 0:
-                    progress_cb(min(100.0, round((downloaded / total) * 100.0, 1)))
+                    progress_cb(min(100.0, max(1.0, round((downloaded / total) * 100.0, 1))))
+                elif downloaded > 0:
+                    est = min(95.0, round(10.0 + (downloaded / (4.5 * 1024 * 1024)) * 85.0, 1))
+                    progress_cb(est)
+            elif st == "finished":
+                progress_cb(100.0)
+
+        def _post_hook(status_dict: dict[str, Any]) -> None:
+            if not progress_cb:
+                return
+            st = status_dict.get("status")
+            if st == "started":
+                progress_cb(100.0)
 
         clean_expr, start_sec, end_sec = self._parse_timestamp_slice(url_or_query)
 
@@ -600,11 +615,10 @@ class YouTubeClient:
             "quiet": True,
             "no_warnings": True,
             **self._get_base_ydl_opts(),
-            "writesubtitles": True,
-            "writeautomaticsub": True,
-            "subtitleslangs": ["en.*", "pt.*", "es.*", "orig"],
-            "subtitlesformat": "vtt",
+            "writesubtitles": False,
+            "writeautomaticsub": False,
             "progress_hooks": [_hook],
+            "postprocessor_hooks": [_post_hook],
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",

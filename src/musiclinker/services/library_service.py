@@ -650,9 +650,9 @@ class LibraryService:
 
             with self._swap_lock:
                 self._active_swaps[track_id] = {
-                    "status": "extracting",
+                    "status": "replacing",
                     "progress": 80.0,
-                    "message": "Extracting audio stream...",
+                    "message": "Replacing audio file on disk...",
                     "track_id": track_id,
                 }
 
