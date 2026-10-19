@@ -1290,4 +1290,94 @@ def test_v317_bulk_modify_and_delete_operations(tmp_path: Path):
     assert db_repo.get_track(t2.id) is None
 
 
+def test_advanced_audio_replace_and_restore(tmp_path):
+    from unittest.mock import MagicMock, patch
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.infrastructure.db import db_repo
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    # 1. Create a real physical dummy file
+    track_file = tmp_path / "Test Track.mp3"
+    track_file.write_bytes(b"ORIGINAL_AUDIO_BYTES_TEST")
+    lrc_file = tmp_path / "Test Track.lrc"
+    lrc_file.write_text("[00:05.00] Original Lyric Line\n", encoding="utf-8")
+
+    track = db_repo.upsert_track(
+        track_hash="hash_test_swap_restore",
+        title="Test Swap Track",
+        artist_display="Artist Swap",
+        artists=["Artist Swap"],
+        album_artist="Artist Swap",
+        album="Album Swap",
+        release_year="2024",
+        original_year="2024",
+        duration=180,
+        file_path=str(track_file),
+    )
+
+    # Staged replacement file
+    staged_mp3 = tmp_path / "staged_swap.mp3"
+    staged_mp3.write_bytes(b"REPLACEMENT_AUDIO_BYTES_TEST")
+
+    # 2. Test replace-audio with advanced options
+    with patch("musiclinker.infrastructure.youtube_client.youtube_client.download_mp3_to_staging") as mock_dl, \
+         patch("musiclinker.infrastructure.tagger.audio_tagger.write_id3v24_tags") as mock_tag, \
+         patch("musiclinker.infrastructure.lyrics_client.lyrics_client.fetch_and_save_lrc") as mock_lrc:
+
+        mock_dl.return_value = (staged_mp3, {"duration": 215, "thumbnail": "https://img.youtube.com/vi/test/hqdefault.jpg"}, "")
+        mock_tag.return_value = (215, 256)
+        mock_lrc.return_value = ("[00:10.00] New Lyric\n", "exact_lrc", "Exact LRC")
+
+        replace_res = client.post(f"/api/tracks/{track.id}/replace-audio", json={
+            "youtube_url": "https://www.youtube.com/watch?v=mock_replace_1",
+            "bitrate_kbps": 256,
+            "replace_cover": False,
+            "refetch_lyrics": True,
+            "keep_backup": True,
+        })
+
+        assert replace_res.status_code == 200
+        data = replace_res.json()
+        assert data["status"] == "success"
+        assert data["track"]["duration"] == 215
+        assert data["track"]["has_backup"] is True
+
+        # Check backup file exists
+        backup_file = track_file.with_suffix(".mp3.bak")
+        assert backup_file.exists()
+        assert backup_file.read_bytes() == b"ORIGINAL_AUDIO_BYTES_TEST"
+        assert track_file.read_bytes() == b"REPLACEMENT_AUDIO_BYTES_TEST"
+
+    # 3. Test backup status endpoint
+    status_res = client.get(f"/api/tracks/{track.id}/backup-status")
+    assert status_res.status_code == 200
+    assert status_res.json()["has_backup"] is True
+
+    # 4. Test restore backup endpoint
+    with patch("mutagen.mp3.MP3") as mock_mutagen:
+        mock_audio = MagicMock()
+        mock_audio.info.length = 180
+        mock_audio.info.bitrate = 320000
+        mock_mutagen.return_value = mock_audio
+
+        restore_res = client.post(f"/api/tracks/{track.id}/restore-backup")
+        assert restore_res.status_code == 200
+        restore_data = restore_res.json()
+        assert restore_data["status"] == "success"
+        assert restore_data["track"]["duration"] == 180
+        assert restore_data["track"]["has_backup"] is False
+
+        # File should have original content restored and backup unlinked
+        assert track_file.read_bytes() == b"ORIGINAL_AUDIO_BYTES_TEST"
+        assert not backup_file.exists()
+
+    # 5. Backup status should now be false
+    status_res_after = client.get(f"/api/tracks/{track.id}/backup-status")
+    assert status_res_after.status_code == 200
+    assert status_res_after.json()["has_backup"] is False
+
+
+
 

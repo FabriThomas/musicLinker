@@ -489,19 +489,30 @@ class DatabaseRepository:
         duration: int,
         bitrate_kbps: int,
         file_path: str | None = None,
+        has_cover: bool | None = None,
+        lrc_path: str | None = None,
+        lyric_sync_mode: str | None = None,
     ) -> TrackEntity | None:
         with self._write_lock:
             conn = self._get_conn()
-            if file_path:
-                conn.execute(
-                    "UPDATE tracks SET duration = ?, bitrate_kbps = ?, file_path = ? WHERE id = ?",
-                    (duration, bitrate_kbps, file_path, track_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE tracks SET duration = ?, bitrate_kbps = ? WHERE id = ?",
-                    (duration, bitrate_kbps, track_id),
-                )
+            updates = ["duration = ?", "bitrate_kbps = ?"]
+            params: list[Any] = [duration, bitrate_kbps]
+            if file_path is not None:
+                updates.append("file_path = ?")
+                params.append(file_path)
+            if has_cover is not None:
+                updates.append("has_cover = ?")
+                params.append(1 if has_cover else 0)
+            if lrc_path is not None:
+                updates.append("lrc_path = ?")
+                params.append(lrc_path)
+            if lyric_sync_mode is not None:
+                updates.append("lyric_sync_mode = ?")
+                params.append(lyric_sync_mode)
+
+            params.append(track_id)
+            sql = f"UPDATE tracks SET {', '.join(updates)} WHERE id = ?"
+            conn.execute(sql, tuple(params))
             conn.commit()
             return self.get_track(track_id)
 

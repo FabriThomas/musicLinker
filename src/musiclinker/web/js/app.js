@@ -132,7 +132,7 @@ class MusicLinkerController {
 
   // ---- Toast Notification Helper ----
 
-  showToast(message, type = "info") {
+  showToast(message, type = "info", action = null) {
     const container = document.getElementById("toast-container");
     if (!container) return;
 
@@ -153,14 +153,29 @@ class MusicLinkerController {
     const toast = document.createElement("div");
     toast.className = `ml-toast pointer-events-auto flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-xl backdrop-blur-md text-xs font-medium ${colorClasses}`;
     toast.innerHTML = `<span class="shrink-0">${iconSvg}</span><span class="leading-snug">${this.escape(message)}</span>`;
+
+    if (action && action.label && typeof action.onClick === "function") {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ml-btn ml-btn-secondary px-2.5 py-1 text-[11px] rounded-lg ml-auto font-bold border border-emerald-400/40 text-emerald-300 hover:text-white shrink-0 active:scale-95 transition";
+      btn.textContent = action.label;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        action.onClick();
+        toast.remove();
+      });
+      toast.appendChild(btn);
+    }
+
     container.appendChild(toast);
 
+    const ttl = action ? 7500 : 3200;
     setTimeout(() => {
       toast.style.opacity = "0";
       toast.style.transform = "translateY(8px) scale(0.95)";
       toast.style.transition = "opacity 0.2s ease, transform 0.2s ease";
       setTimeout(() => toast.remove(), 220);
-    }, 3200);
+    }, ttl);
   }
 
   // ---- Custom Slider Fill Helper ----
@@ -3201,6 +3216,12 @@ class MusicLinkerController {
       }
       this.closeContextMenu();
     });
+    document.getElementById("ctx-action-restore-backup")?.addEventListener("click", () => {
+      if (this.activeContextTrack) {
+        this.restoreTrackAudioBackup(this.activeContextTrack.id);
+      }
+      this.closeContextMenu();
+    });
     document.getElementById("ctx-action-save-offline")?.addEventListener("click", () => {
       this.handleContextSaveOffline();
       this.closeContextMenu();
@@ -3257,6 +3278,15 @@ class MusicLinkerController {
     const labelMod = document.getElementById("ctx-label-modify");
     const labelDel = document.getElementById("ctx-label-delete");
     const labelSel = document.getElementById("ctx-label-select");
+    const restoreBtn = document.getElementById("ctx-action-restore-backup");
+
+    if (restoreBtn) {
+      if (!isMulti && track.has_backup) {
+        restoreBtn.classList.remove("hidden");
+      } else {
+        restoreBtn.classList.add("hidden");
+      }
+    }
 
     if (isMulti) {
       if (titleEl) titleEl.textContent = `${count} Tracks Selected`;
@@ -4190,11 +4220,23 @@ class MusicLinkerController {
     const progressFill = document.getElementById("swap-progress-fill");
     const progressPct = document.getElementById("swap-progress-pct");
     const progressDetail = document.getElementById("swap-progress-detail");
+    const progressSpeed = document.getElementById("swap-progress-speed");
     const statusEl = document.getElementById("swap-status-text");
     const floatingPill = document.getElementById("floating-swap-pill");
     const floatingBar = document.getElementById("floating-swap-bar");
     const floatingPct = document.getElementById("floating-swap-pct");
     const floatingTitle = document.getElementById("floating-swap-title");
+
+    // Gather advanced options from modal UI
+    const bitrateSelect = document.getElementById("swap-opt-bitrate");
+    const lyricsCb = document.getElementById("swap-opt-refetch-lyrics");
+    const backupCb = document.getElementById("swap-opt-keep-backup");
+    const coverCb = document.getElementById("swap-opt-replace-cover");
+
+    const bitrate_kbps = parseInt(bitrateSelect ? bitrateSelect.value : "320", 10) || 320;
+    const refetch_lyrics = lyricsCb ? lyricsCb.checked : true;
+    const keep_backup = backupCb ? backupCb.checked : true;
+    const replace_cover = coverCb ? coverCb.checked : false;
 
     const track = this.allTracks.find((t) => t.id === trackId) || this.swapCurrentTrack;
     const trackTitle = track ? track.title : `Track #${trackId}`;
@@ -4204,6 +4246,8 @@ class MusicLinkerController {
     if (progressFill) progressFill.style.width = "5%";
     if (progressPct) progressPct.textContent = "5%";
     if (progressDetail) progressDetail.textContent = "Connecting to audio stream...";
+    if (progressSpeed) progressSpeed.textContent = "";
+    this.updateSwapStepper("init");
 
     const allButtons = document.querySelectorAll("#swap-candidates-list button");
     allButtons.forEach((b) => (b.disabled = true));
@@ -4246,6 +4290,8 @@ class MusicLinkerController {
           if (floatingBar) floatingBar.style.width = `${pct}%`;
           if (floatingPct) floatingPct.textContent = `${pct}%`;
 
+          this.updateSwapStepper(st.phase || st.status);
+
           if (st.status === "error") {
             clearInterval(this.activeSwapInterval);
             this.activeSwapTrackId = null;
@@ -4256,10 +4302,16 @@ class MusicLinkerController {
           }
         }
       } catch (_e) {}
-    }, 500);
+    }, 450);
 
     try {
-      const res = await api.replaceTrackAudio(trackId, youtubeUrl, 320);
+      const res = await api.replaceTrackAudio(trackId, {
+        youtube_url: youtubeUrl,
+        bitrate_kbps: bitrate_kbps,
+        replace_cover: replace_cover,
+        refetch_lyrics: refetch_lyrics,
+        keep_backup: keep_backup,
+      });
       const updatedTrack = res.track;
 
       if (this.activeSwapInterval) clearInterval(this.activeSwapInterval);
@@ -4268,8 +4320,7 @@ class MusicLinkerController {
       if (progressFill) progressFill.style.width = "100%";
       if (progressPct) progressPct.textContent = "100%";
       if (progressDetail) progressDetail.textContent = "Replacement complete!";
-
-      this.showToast(`Audio replaced successfully for "${updatedTrack.title}"!`);
+      this.updateSwapStepper("completed");
 
       // Update in memory & cache bust stream_url
       if (updatedTrack.stream_url) {
@@ -4302,6 +4353,21 @@ class MusicLinkerController {
       }
 
       this.renderTrackList();
+
+      // Show interactive undo toast if backup was preserved
+      if (updatedTrack.has_backup || keep_backup) {
+        this.showToast(
+          `Audio replaced for "${updatedTrack.title}"!`,
+          "info",
+          {
+            label: "↺ Restore Original",
+            onClick: () => this.restoreTrackAudioBackup(trackId),
+          }
+        );
+      } else {
+        this.showToast(`Audio replaced successfully for "${updatedTrack.title}"!`);
+      }
+
       setTimeout(() => {
         document.getElementById("swap-audio-modal")?.classList.add("hidden");
         if (progressContainer) progressContainer.classList.add("hidden");
@@ -4324,6 +4390,85 @@ class MusicLinkerController {
       }
       if (statusEl) {
         statusEl.textContent = "Ready";
+      }
+    }
+  }
+
+  updateSwapStepper(phase) {
+    const steps = [
+      { id: "swap-step-init", phases: ["init", "starting", "download", "downloading", "file_swap", "replacing", "tagging", "lyrics", "completed"] },
+      { id: "swap-step-download", phases: ["download", "downloading", "file_swap", "replacing", "tagging", "lyrics", "completed"] },
+      { id: "swap-step-transcode", phases: ["file_swap", "replacing", "tagging", "lyrics", "completed"] },
+      { id: "swap-step-tagging", phases: ["tagging", "lyrics", "completed"] },
+      { id: "swap-step-lyrics", phases: ["lyrics", "completed"] },
+    ];
+    for (const step of steps) {
+      const el = document.getElementById(step.id);
+      if (!el) continue;
+      if (phase === "completed") {
+        el.className = "py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40";
+      } else if (step.phases.includes(phase)) {
+        if (step.phases[0] === phase || (step.id === "swap-step-download" && (phase === "download" || phase === "downloading"))) {
+          el.className = "py-0.5 rounded bg-emerald-500/30 text-emerald-200 font-bold border border-emerald-500/60 animate-pulse";
+        } else {
+          el.className = "py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold";
+        }
+      } else {
+        el.className = "py-0.5 rounded bg-zinc-800 text-zinc-500";
+      }
+    }
+  }
+
+  async restoreTrackAudioBackup(trackId) {
+    const track = this.allTracks.find((t) => t.id === trackId);
+    const title = track ? track.title : `Track #${trackId}`;
+
+    const wasCurrentPlaying = this.currentIndex >= 0 && this.playQueue[this.currentIndex]?.id === trackId;
+    if (wasCurrentPlaying) {
+      this.engine.pause();
+      if (this.engine.audio) {
+        this.engine.audio.src = "";
+        this.engine.audio.load();
+      }
+    }
+
+    this.showToast(`Restoring original audio for "${title}"...`, "info");
+    try {
+      const res = await api.restoreTrackBackup(trackId);
+      const restoredTrack = res.track;
+
+      if (restoredTrack.stream_url) {
+        restoredTrack.stream_url = `${restoredTrack.stream_url.split("?")[0]}?v=${Date.now()}`;
+      }
+      const allIdx = this.allTracks.findIndex((t) => t.id === trackId);
+      if (allIdx !== -1) this.allTracks[allIdx] = restoredTrack;
+      const curIdx = this.tracks.findIndex((t) => t.id === trackId);
+      if (curIdx !== -1) this.tracks[curIdx] = restoredTrack;
+
+      const qIdx = this.playQueue.findIndex((t) => t.id === trackId);
+      if (qIdx !== -1) this.playQueue[qIdx] = restoredTrack;
+
+      if (this.engine.currentTrack?.id === trackId) {
+        this.engine.currentTrack = restoredTrack;
+      }
+
+      if (this.offlineIds.has(trackId)) {
+        await offlineStore.removeOfflineTrack(trackId).catch(() => {});
+        await offlineStore.saveTrackForOffline(restoredTrack, api).catch(() => {});
+        await this.refreshOfflineState();
+      }
+
+      if (wasCurrentPlaying) {
+        this.updateNowPlayingBar(restoredTrack);
+        await this.playByIndex(this.currentIndex);
+      }
+
+      this.renderTrackList();
+      this.showToast(res.message || `Original audio restored for "${restoredTrack.title}"!`);
+    } catch (err) {
+      this.showToast(`Failed restoring backup: ${err.message}`, "error");
+      if (wasCurrentPlaying && this.playQueue[this.currentIndex]) {
+        await this.playByIndex(this.currentIndex);
       }
     }
   }
@@ -5414,6 +5559,15 @@ class MusicLinkerController {
     document.getElementById("btn-floating-swap-expand")?.addEventListener("click", (e) => {
       e.stopPropagation();
       this.restoreSwapModal();
+    });
+    document.getElementById("btn-toggle-swap-options")?.addEventListener("click", () => {
+      const panel = document.getElementById("swap-options-panel");
+      const chevron = document.getElementById("swap-options-chevron");
+      if (panel) {
+        panel.classList.toggle("hidden");
+        const isOpen = !panel.classList.contains("hidden");
+        if (chevron) chevron.style.transform = isOpen ? "rotate(180deg)" : "rotate(0deg)";
+      }
     });
 
     // Auto DB Fix button

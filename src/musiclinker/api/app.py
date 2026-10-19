@@ -75,7 +75,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="3.1.7",
+        version="3.1.8",
         lifespan=lifespan,
     )
 
@@ -185,6 +185,9 @@ def create_app() -> FastAPI:
                 track_id=track_id,
                 youtube_url=payload.youtube_url,
                 bitrate_kbps=payload.bitrate_kbps,
+                replace_cover=payload.replace_cover,
+                refetch_lyrics=payload.refetch_lyrics,
+                keep_backup=payload.keep_backup,
             )
             return {"status": "success", "track": updated.to_dict()}
         except ValueError as exc:
@@ -192,6 +195,27 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.error("Failed to replace audio for track %d: %s", track_id, exc)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/tracks/{track_id}/restore-backup", dependencies=[Depends(require_paired_client)])
+    async def restore_track_backup_endpoint(track_id: int) -> dict[str, Any]:
+        """Restore previous original audio and lyrics from .bak files."""
+        try:
+            restored = await asyncio.to_thread(library_service.restore_track_backup, track_id=track_id)
+            return {
+                "status": "success",
+                "message": f"Successfully restored original audio for '{restored.title}'",
+                "track": restored.to_dict(),
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.error("Failed to restore audio backup for track %d: %s", track_id, exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/api/tracks/{track_id}/backup-status", dependencies=[Depends(require_paired_client)])
+    def get_track_backup_status_endpoint(track_id: int) -> dict[str, Any]:
+        """Check if an audio backup (.bak) exists for the track."""
+        return library_service.get_track_backup_status(track_id)
 
     @app.get("/api/tracks/{track_id}/swap-status", dependencies=[Depends(require_paired_client)])
     def get_track_swap_status(track_id: int) -> dict[str, Any]:

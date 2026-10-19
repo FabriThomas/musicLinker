@@ -773,10 +773,19 @@ class LibraryService:
 
         return out_mp3
 
-    def replace_track_audio(self, track_id: int, youtube_url: str, bitrate_kbps: int = 320) -> TrackEntity:
+    def replace_track_audio(
+        self,
+        track_id: int,
+        youtube_url: str,
+        bitrate_kbps: int = 320,
+        replace_cover: bool = False,
+        refetch_lyrics: bool = True,
+        keep_backup: bool = True,
+    ) -> TrackEntity:
         import gc
         import shutil
         import time
+        import requests
 
         track = self.repo.get_track(track_id)
         if not track:
@@ -785,19 +794,30 @@ class LibraryService:
         log_test_event(
             category="swap_start",
             title=f"Starting audio swap for Track #{track_id} '{track.title}' with {youtube_url}",
-            details={"track_id": track_id, "title": track.title, "url": youtube_url, "bitrate": bitrate_kbps},
+            details={
+                "track_id": track_id,
+                "title": track.title,
+                "url": youtube_url,
+                "bitrate": bitrate_kbps,
+                "replace_cover": replace_cover,
+                "refetch_lyrics": refetch_lyrics,
+                "keep_backup": keep_backup,
+            },
         )
 
         target_mp3 = Path(track.file_path)
         backup_mp3 = target_mp3.with_suffix(".mp3.bak")
+        target_lrc = target_mp3.with_suffix(".lrc")
+        backup_lrc = target_mp3.with_suffix(".lrc.bak")
         staging_dir = PATHS.app_data_dir / "swap_staging"
         staging_dir.mkdir(parents=True, exist_ok=True)
 
         with self._swap_lock:
             self._active_swaps[track_id] = {
                 "status": "starting",
+                "phase": "init",
                 "progress": 5.0,
-                "message": "Connecting to YouTube stream...",
+                "message": "Resolving YouTube audio stream...",
                 "track_id": track_id,
             }
 
@@ -806,6 +826,7 @@ class LibraryService:
             with self._swap_lock:
                 self._active_swaps[track_id] = {
                     "status": "downloading",
+                    "phase": "download",
                     "progress": round(mapped, 1),
                     "download_pct": round(pct, 1),
                     "message": f"Downloading audio ({round(pct)}%)...",
@@ -813,7 +834,7 @@ class LibraryService:
                 }
 
         try:
-            # 1. Extract cover art BEFORE overwriting the original MP3
+            # 1. Extract cover art BEFORE overwriting the original MP3 (if preserving cover)
             existing_cover = None
             if target_mp3.exists():
                 try:
@@ -822,7 +843,7 @@ class LibraryService:
                     logger.debug("Could not pre-extract cover from target MP3: %s", cov_exc)
 
             # 2. Download replacement audio from YouTube into staging
-            staged_mp3, info, _ = youtube_client.download_mp3_to_staging(
+            staged_mp3, info, yt_lrc_fallback = youtube_client.download_mp3_to_staging(
                 url_or_query=youtube_url,
                 staging_dir=staging_dir,
                 stem_name=f"swap_{track_id}_{random.randint(1000, 9999)}",
@@ -833,19 +854,30 @@ class LibraryService:
             with self._swap_lock:
                 self._active_swaps[track_id] = {
                     "status": "replacing",
-                    "progress": 80.0,
+                    "phase": "file_swap",
+                    "progress": 78.0,
                     "message": "Replacing audio file on disk...",
                     "track_id": track_id,
                 }
 
-            # 3. Safely replace the file on disk (resilient against Windows locks)
+            # 3. Create backups if original files exist
+            if target_mp3.exists():
+                try:
+                    shutil.copy2(target_mp3, backup_mp3)
+                except Exception as b_exc:
+                    logger.warning("Could not create audio backup .bak: %s", b_exc)
+            if target_lrc.exists():
+                try:
+                    shutil.copy2(target_lrc, backup_lrc)
+                except Exception as b_exc:
+                    logger.warning("Could not create lyrics backup .bak: %s", b_exc)
+
+            # 4. Safely replace the file on disk (resilient against Windows locks)
             final_mp3_path = target_mp3
             replaced_in_place = False
 
             for attempt in range(4):
                 try:
-                    if target_mp3.exists() and not backup_mp3.exists():
-                        shutil.copy2(target_mp3, backup_mp3)
                     shutil.move(str(staged_mp3), str(target_mp3))
                     replaced_in_place = True
                     break
@@ -865,21 +897,48 @@ class LibraryService:
                 except Exception:
                     pass
 
-            if backup_mp3.exists():
-                try:
-                    backup_mp3.unlink(missing_ok=True)
-                except Exception:
-                    pass
+            # If user didn't want to keep backup, clean it up
+            if not keep_backup:
+                if backup_mp3.exists():
+                    try:
+                        backup_mp3.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                if backup_lrc.exists():
+                    try:
+                        backup_lrc.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
             with self._swap_lock:
                 self._active_swaps[track_id] = {
                     "status": "tagging",
-                    "progress": 92.0,
-                    "message": "Preserving cover art & writing ID3 metadata...",
+                    "phase": "tagging",
+                    "progress": 86.0,
+                    "message": "Writing ID3 metadata & cover art...",
                     "track_id": track_id,
                 }
 
-            # 4. Tag the new MP3 with all track metadata and preserved original cover art
+            # 5. Determine cover art to embed
+            chosen_cover = existing_cover
+            if replace_cover:
+                thumb_url = info.get("thumbnail")
+                if not thumb_url and isinstance(info.get("thumbnails"), list) and info["thumbnails"]:
+                    sorted_thumbs = sorted(
+                        info["thumbnails"],
+                        key=lambda t: (t.get("height", 0) or 0) * (t.get("width", 0) or 0),
+                        reverse=True,
+                    )
+                    thumb_url = sorted_thumbs[0].get("url")
+                if thumb_url:
+                    try:
+                        r = requests.get(thumb_url, timeout=8.0)
+                        if r.status_code == 200 and r.content:
+                            chosen_cover = r.content
+                    except Exception as th_exc:
+                        logger.warning("Failed downloading replacement thumbnail from %s: %s", thumb_url, th_exc)
+
+            # 6. Tag the new MP3 with all track metadata and chosen cover art
             artists_list = [a.strip() for a in track.artist_display.split(",") if a.strip()] or [track.artist_display]
             calc_dur, calc_bitrate = audio_tagger.write_id3v24_tags(
                 mp3_path=final_mp3_path,
@@ -890,16 +949,8 @@ class LibraryService:
                 track_number=track.track_number,
                 release_year=track.release_year,
                 original_year=track.original_year,
-                cover_bytes=existing_cover,
+                cover_bytes=chosen_cover,
             )
-
-            target_lrc = target_mp3.with_suffix(".lrc")
-            final_lrc = final_mp3_path.with_suffix(".lrc")
-            if target_lrc.exists() and final_mp3_path != target_mp3:
-                try:
-                    shutil.copy2(target_lrc, final_lrc)
-                except Exception:
-                    pass
 
             new_duration = int(info.get("duration") or 0) or calc_dur
             if not new_duration:
@@ -910,11 +961,49 @@ class LibraryService:
                 except Exception:
                     new_duration = track.duration
 
+            # 7. Lyrics resolution
+            final_lrc = final_mp3_path.with_suffix(".lrc")
+            has_lrc = bool(track.lrc_path)
+            lyric_sync_mode = track.lyric_sync_mode
+
+            if refetch_lyrics:
+                with self._swap_lock:
+                    self._active_swaps[track_id] = {
+                        "status": "lyrics",
+                        "phase": "lyrics",
+                        "progress": 94.0,
+                        "message": "Re-fetching and aligning synced lyrics...",
+                        "track_id": track_id,
+                    }
+                try:
+                    _, sync_mode, _ = lyrics_client.fetch_and_save_lrc(
+                        artist=track.artist_display,
+                        title=track.title,
+                        album=track.album,
+                        duration=new_duration,
+                        target_lrc_path=final_lrc,
+                        youtube_lrc_fallback=yt_lrc_fallback,
+                    )
+                    has_lrc = final_lrc.exists()
+                    if has_lrc and sync_mode:
+                        lyric_sync_mode = sync_mode
+                except Exception as lyr_exc:
+                    logger.warning("Failed re-fetching lyrics during audio swap: %s", lyr_exc)
+            elif target_lrc.exists() and final_mp3_path != target_mp3:
+                try:
+                    shutil.copy2(target_lrc, final_lrc)
+                    has_lrc = True
+                except Exception:
+                    pass
+
             updated_track = self.repo.update_track_audio_info(
                 track_id=track_id,
                 duration=new_duration,
                 bitrate_kbps=bitrate_kbps or calc_bitrate,
                 file_path=str(final_mp3_path) if final_mp3_path != target_mp3 else None,
+                has_cover=bool(chosen_cover),
+                lrc_path=str(final_lrc) if has_lrc else "",
+                lyric_sync_mode=lyric_sync_mode,
             )
 
             result_track = updated_track or track
@@ -927,11 +1016,15 @@ class LibraryService:
                     "new_duration": new_duration,
                     "bitrate_kbps": bitrate_kbps or calc_bitrate,
                     "file_path": str(final_mp3_path),
+                    "has_backup": keep_backup and backup_mp3.exists(),
+                    "has_cover": bool(chosen_cover),
+                    "has_lrc": has_lrc,
                 },
             )
             with self._swap_lock:
                 self._active_swaps[track_id] = {
                     "status": "completed",
+                    "phase": "completed",
                     "progress": 100.0,
                     "message": "Replacement complete!",
                     "track_id": track_id,
@@ -948,12 +1041,125 @@ class LibraryService:
             with self._swap_lock:
                 self._active_swaps[track_id] = {
                     "status": "error",
+                    "phase": "error",
                     "progress": 0.0,
                     "error": str(exc),
                     "message": f"Audio replacement failed: {exc}",
                     "track_id": track_id,
                 }
             raise
+
+    def restore_track_backup(self, track_id: int) -> TrackEntity:
+        """Restores original audio file and lyrics from .bak files if available."""
+        import gc
+        import shutil
+        import time
+        from mutagen.mp3 import MP3
+
+        track = self.repo.get_track(track_id)
+        if not track:
+            raise ValueError(f"Track ID {track_id} not found.")
+
+        target_mp3 = Path(track.file_path)
+        backup_mp3 = target_mp3.with_suffix(".mp3.bak")
+        target_lrc = target_mp3.with_suffix(".lrc")
+        backup_lrc = target_mp3.with_suffix(".lrc.bak")
+
+        # Also check parent directory if track was version-renamed
+        if not backup_mp3.exists():
+            base_stem = re.sub(r"_v\d+$", "", target_mp3.stem)
+            alt_backup = target_mp3.with_name(f"{base_stem}.mp3.bak")
+            if alt_backup.exists():
+                backup_mp3 = alt_backup
+                alt_lrc_bak = target_mp3.with_name(f"{base_stem}.lrc.bak")
+                if alt_lrc_bak.exists():
+                    backup_lrc = alt_lrc_bak
+
+        if not backup_mp3.exists():
+            raise ValueError(f"No backup file (.mp3.bak) found for track #{track_id} '{track.title}'.")
+
+        # Restore MP3
+        for attempt in range(4):
+            try:
+                shutil.move(str(backup_mp3), str(target_mp3))
+                break
+            except (PermissionError, OSError):
+                gc.collect()
+                time.sleep(0.3)
+                if attempt == 3:
+                    shutil.copy2(str(backup_mp3), str(target_mp3))
+                    try:
+                        backup_mp3.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        # Restore LRC if backup exists
+        if backup_lrc.exists():
+            try:
+                shutil.move(str(backup_lrc), str(target_lrc))
+            except Exception:
+                try:
+                    shutil.copy2(str(backup_lrc), str(target_lrc))
+                except Exception:
+                    pass
+
+        # Recalculate duration & bitrate from restored MP3
+        restored_dur = track.duration
+        restored_bitrate = track.bitrate_kbps
+        try:
+            audio = MP3(str(target_mp3))
+            restored_dur = int(audio.info.length)
+            if audio.info.bitrate:
+                restored_bitrate = int(audio.info.bitrate // 1000)
+        except Exception as aud_exc:
+            logger.warning("Could not read restored MP3 metadata: %s", aud_exc)
+
+        updated_track = self.repo.update_track_audio_info(
+            track_id=track_id,
+            duration=restored_dur,
+            bitrate_kbps=restored_bitrate,
+            file_path=str(target_mp3),
+            lrc_path=str(target_lrc) if target_lrc.exists() else "",
+        )
+        result_track = updated_track or track
+
+        log_test_event(
+            category="swap_restore",
+            title=f"Restored previous audio backup for Track #{track_id} '{track.title}'",
+            details={
+                "track_id": track_id,
+                "title": track.title,
+                "duration": restored_dur,
+                "bitrate_kbps": restored_bitrate,
+            },
+        )
+        return result_track
+
+    def get_track_backup_status(self, track_id: int) -> dict[str, Any]:
+        """Check if an audio backup (.bak) exists for the track."""
+        track = self.repo.get_track(track_id)
+        if not track or not track.file_path:
+            return {"has_backup": False, "track_id": track_id}
+
+        target_mp3 = Path(track.file_path)
+        backup_mp3 = target_mp3.with_suffix(".mp3.bak")
+        if not backup_mp3.exists():
+            base_stem = re.sub(r"_v\d+$", "", target_mp3.stem)
+            alt_backup = target_mp3.with_name(f"{base_stem}.mp3.bak")
+            if alt_backup.exists():
+                backup_mp3 = alt_backup
+
+        if backup_mp3.exists():
+            stat = backup_mp3.stat()
+            return {
+                "has_backup": True,
+                "track_id": track_id,
+                "backup_path": str(backup_mp3),
+                "backup_size_bytes": stat.st_size,
+                "backup_mtime": stat.st_mtime,
+            }
+
+        return {"has_backup": False, "track_id": track_id}
 
     def auto_fix_database(self) -> dict[str, Any]:
         """

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -92,6 +93,7 @@ class TrackEntity:
             "replaygain_db": self.replaygain_db,
             "bitrate_kbps": self.bitrate_kbps,
             "added_at": self.added_at,
+            "has_backup": bool(self.file_path and Path(self.file_path).with_suffix(".mp3.bak").exists()),
             "stream_url": f"/api/tracks/{self.id}/stream",
             "file_url": f"/api/tracks/{self.id}/file",
             "cover_url": f"/api/tracks/{self.id}/cover" if self.has_cover else "",
@@ -330,6 +332,9 @@ class ReplaceTrackAudioPayload(BaseModel):
 
     youtube_url: str = Field(..., min_length=5)
     bitrate_kbps: int = Field(default=320, ge=64, le=320)
+    replace_cover: bool = Field(default=False, description="Replace embedded cover art with YouTube video thumbnail")
+    refetch_lyrics: bool = Field(default=True, description="Re-fetch and align synced lyrics for new audio duration")
+    keep_backup: bool = Field(default=True, description="Keep original audio backup (.mp3.bak) for instant undo")
 
 
 class AlbumMatchRequest(BaseModel):

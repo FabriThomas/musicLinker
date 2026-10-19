@@ -150,11 +150,31 @@ class MusicLinkerAPI {
     return this.resolveUrl(`/api/tracks/candidate-preview/${encodeURIComponent(videoId)}`);
   }
 
-  async replaceTrackAudio(trackId, youtubeUrl, bitrateKbps = 320) {
+  async replaceTrackAudio(trackId, optionsOrUrl, bitrateKbps = 320) {
+    let payload = {};
+    if (typeof optionsOrUrl === "string") {
+      payload = { youtube_url: optionsOrUrl, bitrate_kbps: bitrateKbps };
+    } else if (optionsOrUrl && typeof optionsOrUrl === "object") {
+      payload = {
+        youtube_url: optionsOrUrl.youtube_url || optionsOrUrl.youtubeUrl,
+        bitrate_kbps: optionsOrUrl.bitrate_kbps || optionsOrUrl.bitrateKbps || 320,
+        replace_cover: Boolean(optionsOrUrl.replace_cover ?? optionsOrUrl.replaceCover ?? false),
+        refetch_lyrics: Boolean(optionsOrUrl.refetch_lyrics ?? optionsOrUrl.refetchLyrics ?? true),
+        keep_backup: Boolean(optionsOrUrl.keep_backup ?? optionsOrUrl.keepBackup ?? true),
+      };
+    }
     return this.request(`/api/tracks/${trackId}/replace-audio`, {
       method: "POST",
-      body: JSON.stringify({ youtube_url: youtubeUrl, bitrate_kbps: bitrateKbps }),
+      body: JSON.stringify(payload),
     });
+  }
+
+  async restoreTrackBackup(trackId) {
+    return this.request(`/api/tracks/${trackId}/restore-backup`, { method: "POST" });
+  }
+
+  async getTrackBackupStatus(trackId) {
+    return this.request(`/api/tracks/${trackId}/backup-status`);
   }
 
   async getSwapStatus(trackId) {

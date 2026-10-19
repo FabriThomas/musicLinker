@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>MusicLinker Studio & APK v3.1.7 — Track, Playlist & Album Downloader + 5-Band DSP</title>
+  <title>MusicLinker Studio & APK v3.1.8 — Track, Playlist & Album Downloader + 5-Band DSP</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/styles.css" />
@@ -18,7 +18,7 @@
       <div>
         <div class="flex items-center gap-2">
           <h1 class="font-bold text-base sm:text-lg tracking-tight leading-none">MusicLinker</h1>
-          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.1.7 APK + Studio</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">v3.1.8 APK + Studio</span>
         </div>
         <p class="text-[11px] text-zinc-400 hidden sm:block">Track, Playlist & Album Downloader • Synced Lyrics • On-Device AppData • 5-Band DSP</p>
       </div>
@@ -1286,20 +1286,33 @@
       </div>
 
       <!-- Live Swap Real-Time Progress Bar & Background Action -->
-      <div id="swap-progress-container" class="hidden bg-zinc-950/90 border border-emerald-500/40 rounded-xl p-3 space-y-2 shrink-0 animate-fade-in shadow-md">
+      <div id="swap-progress-container" class="hidden bg-zinc-950/95 border border-emerald-500/40 rounded-xl p-3 space-y-2.5 shrink-0 animate-fade-in shadow-xl">
         <div class="flex items-center justify-between text-xs">
-          <span id="swap-progress-stage" class="font-semibold text-emerald-400 flex items-center gap-1.5">
+          <span id="swap-progress-stage" class="font-bold text-emerald-400 flex items-center gap-1.5">
             <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             Replacing Audio Track...
           </span>
-          <span id="swap-progress-pct" class="font-mono text-zinc-300 font-bold">0%</span>
+          <div class="flex items-center gap-2">
+            <span id="swap-progress-speed" class="text-[10px] font-mono text-zinc-400 hidden sm:inline"></span>
+            <span id="swap-progress-pct" class="font-mono text-emerald-300 font-bold">0%</span>
+          </div>
         </div>
+
+        <!-- Multi-Phase Step Stepper -->
+        <div class="grid grid-cols-5 gap-1 text-[9px] font-mono text-center">
+          <div id="swap-step-init" class="py-0.5 rounded bg-zinc-800 text-zinc-400">Stream</div>
+          <div id="swap-step-download" class="py-0.5 rounded bg-zinc-800 text-zinc-400">Download</div>
+          <div id="swap-step-transcode" class="py-0.5 rounded bg-zinc-800 text-zinc-400">Swap</div>
+          <div id="swap-step-tagging" class="py-0.5 rounded bg-zinc-800 text-zinc-400">ID3/Tags</div>
+          <div id="swap-step-lyrics" class="py-0.5 rounded bg-zinc-800 text-zinc-400">Lyrics</div>
+        </div>
+
         <div class="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
           <div id="swap-progress-fill" class="bg-emerald-500 h-full w-0 transition-all duration-300"></div>
         </div>
         <div class="flex items-center justify-between text-[11px] text-zinc-400">
-          <span id="swap-progress-detail" class="truncate font-mono">Initializing download pipeline...</span>
-          <button id="btn-swap-run-bg" type="button" class="ml-btn ml-btn-secondary px-2.5 py-0.5 text-[10px] text-zinc-300">Run in Background</button>
+          <span id="swap-progress-detail" class="truncate font-mono">Initializing pipeline...</span>
+          <button id="btn-swap-run-bg" type="button" class="ml-btn ml-btn-secondary px-2 py-0.5 text-[10px] text-zinc-300">Run in BG</button>
         </div>
       </div>
 
@@ -1316,6 +1329,42 @@
           <span>Search</span>
         </button>
       </form>
+
+      <!-- Replacement Options Drawer -->
+      <div id="swap-options-drawer" class="shrink-0 bg-zinc-950/70 border border-zinc-800/90 rounded-xl p-2.5 text-xs space-y-2">
+        <button id="btn-toggle-swap-options" type="button" class="w-full flex items-center justify-between text-zinc-400 hover:text-white font-medium text-[11px] transition">
+          <div class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-emerald-400 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span>Options & Quality</span>
+          </div>
+          <span id="swap-options-chevron" class="text-[10px] text-zinc-500 transform transition-transform">▼</span>
+        </button>
+        <div id="swap-options-panel" class="hidden pt-2 border-t border-zinc-900 space-y-2.5">
+          <div class="flex items-center justify-between gap-3">
+            <label for="swap-opt-bitrate" class="text-zinc-300 font-medium text-[11px]">Audio Quality:</label>
+            <select id="swap-opt-bitrate" class="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-emerald-500">
+              <option value="320" selected>320 kbps (Extreme / CBR)</option>
+              <option value="256">256 kbps (High Fidelity)</option>
+              <option value="192">192 kbps (Standard)</option>
+              <option value="128">128 kbps (Compact)</option>
+            </select>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-zinc-300">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input id="swap-opt-refetch-lyrics" type="checkbox" checked class="rounded border-zinc-700 text-emerald-500 focus:ring-0 focus:outline-none" />
+              <span>Re-sync lyrics (.lrc) for duration</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input id="swap-opt-keep-backup" type="checkbox" checked class="rounded border-zinc-700 text-emerald-500 focus:ring-0 focus:outline-none" />
+              <span>Keep original backup (.bak) for undo</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer select-none sm:col-span-2">
+              <input id="swap-opt-replace-cover" type="checkbox" class="rounded border-zinc-700 text-emerald-500 focus:ring-0 focus:outline-none" />
+              <span>Use replacement video thumbnail as cover</span>
+            </label>
+          </div>
+        </div>
+      </div>
 
       <p id="swap-modal-desc" class="text-xs text-zinc-400 shrink-0">
         Listen to audio previews to verify correctness before choosing to download or swap. Use the timeline scrubber or jump ±10s to inspect verses, drops, or vocals.
@@ -1965,6 +2014,10 @@
       <button id="ctx-action-swap-version" class="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg hover:bg-zinc-800 hover:text-white text-left transition cursor-pointer">
         <svg class="w-3.5 h-3.5 stroke-current fill-none text-emerald-400" viewBox="0 0 24 24" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
         <span>Change Version / Swap Audio...</span>
+      </button>
+      <button id="ctx-action-restore-backup" class="hidden w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg hover:bg-zinc-800 text-amber-300 hover:text-amber-200 text-left transition cursor-pointer">
+        <svg class="w-3.5 h-3.5 stroke-current fill-none text-amber-400" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/></svg>
+        <span>Restore Previous Audio (.bak)</span>
       </button>
       <button id="ctx-action-save-offline" class="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg hover:bg-zinc-800 hover:text-white text-left transition cursor-pointer">
         <svg class="w-3.5 h-3.5 stroke-current fill-none text-emerald-400" viewBox="0 0 24 24" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
