@@ -1199,4 +1199,95 @@ def test_v316_test_mode_and_candidate_preview_timeline(tmp_path):
         assert candidates["candidates"][0]["video_id"] == "vid_tel_1"
 
 
+def test_v317_bulk_modify_and_delete_operations(tmp_path: Path):
+    """Test batch-modify (common tags, find & replace, casing) and batch-delete API endpoints."""
+    from unittest.mock import patch
+    import uuid
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import create_app
+    from musiclinker.domain.models import BatchTrackModifyPayload
+    from musiclinker.infrastructure.db import db_repo
+    from musiclinker.services.library_service import library_service
+
+    app = create_app()
+    client = TestClient(app)
+
+    uid = uuid.uuid4().hex[:6]
+    test_artist = f"UnifiedBand_{uid}"
+    test_album = f"UnifiedAlbum_{uid}"
+
+    # 1. Create dummy audio files
+    file1 = tmp_path / f"track1_{uid}.mp3"
+    file2 = tmp_path / f"track2_{uid}.mp3"
+    file1.write_bytes(b"DUMMY_MP3_DATA_1")
+    file2.write_bytes(b"DUMMY_MP3_DATA_2")
+
+    t1 = db_repo.upsert_track(
+        track_hash=f"hash_batch_1_{uid}",
+        title="song one [official video]",
+        artist_display=f"Old Artist 1 {uid}",
+        artists=[f"Old Artist 1 {uid}"],
+        album="Old Album",
+        album_artist=f"Old Artist 1 {uid}",
+        duration=200,
+        file_path=str(file1),
+    )
+    t2 = db_repo.upsert_track(
+        track_hash=f"hash_batch_2_{uid}",
+        title="song two [official video]",
+        artist_display=f"Old Artist 2 {uid}",
+        artists=[f"Old Artist 2 {uid}"],
+        album="Old Album",
+        album_artist=f"Old Artist 2 {uid}",
+        duration=240,
+        file_path=str(file2),
+    )
+
+    # 2. Test batch modify via endpoint
+    modify_payload = {
+        "track_ids": [t1.id, t2.id],
+        "artist_display": test_artist,
+        "album": test_album,
+        "release_year": "2026",
+        "find_text": "[official video]",
+        "replace_text": "",
+        "target_field": "title",
+        "case_transform": "title_case",
+    }
+
+    with patch("musiclinker.infrastructure.tagger.audio_tagger.update_existing_mp3_tags"):
+        res = client.post("/api/tracks/batch-modify", json=modify_payload)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["updated_count"] == 2
+        assert len(data["tracks"]) == 2
+
+        # Verify tracks in DB
+        mod_t1 = db_repo.get_track(t1.id)
+        mod_t2 = db_repo.get_track(t2.id)
+        assert mod_t1 is not None and mod_t2 is not None
+
+        assert mod_t1.artist_display == test_artist
+        assert mod_t2.artist_display == test_artist
+        assert mod_t1.album == test_album
+        assert mod_t2.album == test_album
+        assert mod_t1.release_year == "2026"
+        assert mod_t2.release_year == "2026"
+        assert mod_t1.title == "Song One"
+        assert mod_t2.title == "Song Two"
+
+    # 3. Test batch delete via endpoint
+    del_res = client.post("/api/tracks/batch-delete", json={
+        "track_ids": [t1.id, t2.id],
+        "delete_files": True,
+        "unmark_hashes": True,
+    })
+    assert del_res.status_code == 200
+    assert del_res.json()["status"] == "deleted"
+    assert del_res.json()["count"] == 2
+
+    assert db_repo.get_track(t1.id) is None
+    assert db_repo.get_track(t2.id) is None
+
+
 

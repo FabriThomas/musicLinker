@@ -60,6 +60,8 @@ class MusicLinkerController {
     this.mobileView = "library";
     this.isMultiSelectActive = false;
     this.selectedTrackIds = new Set();
+    this.activeContextTrack = null;
+    this.activeContextTrackIdx = null;
     this.candidateModalMode = "swap"; // 'swap' | 'download'
     this.activePreviewCandidate = null;
     this.previewAudio = null;
@@ -104,6 +106,8 @@ class MusicLinkerController {
     this.initEqualizerUI();
     this.initPreviewPlayerControls();
     this.initTestMode();
+    this.initContextMenu();
+    this.initBatchModifyModal();
     const volBar = document.getElementById("volume-bar");
     if (volBar) {
       const initVal = Number(volBar.value || 85);
@@ -374,17 +378,17 @@ class MusicLinkerController {
             : "";
 
         const isSelected = this.selectedTrackIds.has(t.id);
-        const checkboxHtml = `<input type="checkbox" data-select-id="${t.id}" ${isSelected ? "checked" : ""} class="track-select-checkbox mr-2.5 shrink-0 ${this.isMultiSelectActive ? "" : "hidden"}" />`;
+        const checkboxHtml = `<input type="checkbox" data-select-id="${t.id}" ${isSelected ? "checked" : ""} class="track-select-checkbox mr-2.5 shrink-0 ${this.isMultiSelectActive ? "" : "hidden md:inline-grid md:opacity-0 group-hover:md:opacity-60 hover:!opacity-100"}" />`;
 
         return `
-          <div data-track-row-id="${t.id}" class="ml-track-row group flex items-center justify-between p-2.5 rounded-xl border ${
+          <div data-track-row-id="${t.id}" class="ml-track-row group flex items-center justify-between p-2.5 rounded-xl border transition cursor-pointer select-none ${
             isSelected
               ? "is-selected bg-emerald-950/60 border-emerald-500/70"
               : isCurrent
               ? "bg-emerald-950/50 border-emerald-500/45 shadow-sm"
               : "bg-zinc-900/30 border-zinc-800/40 hover:bg-zinc-800/65 hover:border-zinc-700/80"
           }">
-            <div class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer" data-play-idx="${idx}">
+            <div class="flex items-center gap-3 min-w-0 flex-1" data-play-idx="${idx}">
               ${checkboxHtml}
               <div class="w-11 h-11 rounded-lg bg-zinc-800 flex items-center justify-center overflow-hidden shrink-0 border border-zinc-700/60 relative">
                 ${
@@ -447,26 +451,75 @@ class MusicLinkerController {
       })
       .join("");
 
+    // Long-Press Detection & Right-Click Context Menu for Track Rows
+    container.querySelectorAll(".ml-track-row").forEach((row) => {
+      const rowId = Number(row.dataset.trackRowId);
+      const idx = this.tracks.findIndex((t) => t.id === rowId);
+      if (idx < 0) return;
+
+      let pressTimer = null;
+      let startX = 0;
+      let startY = 0;
+      let didLongPress = false;
+
+      const cancelPress = () => {
+        if (pressTimer) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+        row.classList.remove("is-pressing");
+      };
+
+      row.addEventListener("pointerdown", (e) => {
+        if (e.button === 2) return; // Right-click handled by contextmenu
+        if (e.target.closest("button") || e.target.closest("input") || e.target.closest("[data-filter-album]")) return;
+
+        didLongPress = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        row.classList.add("is-pressing");
+
+        pressTimer = setTimeout(() => {
+          didLongPress = true;
+          row.classList.remove("is-pressing");
+          if (navigator.vibrate) {
+            try { navigator.vibrate(50); } catch (_) {}
+          }
+          this.handleLongPressSelection(idx, e);
+        }, 420);
+      });
+
+      row.addEventListener("pointermove", (e) => {
+        if (!pressTimer) return;
+        const dist = Math.hypot(e.clientX - startX, e.clientY - startY);
+        if (dist > 10) cancelPress();
+      });
+
+      row.addEventListener("pointerup", (e) => {
+        cancelPress();
+        if (didLongPress) {
+          e.stopPropagation();
+          e.preventDefault();
+        }
+      });
+
+      row.addEventListener("pointercancel", cancelPress);
+
+      // Right-Click Context Menu
+      row.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelPress();
+        this.openContextMenu(idx, e);
+      });
+    });
+
     container.querySelectorAll("[data-play-idx]").forEach((el) => {
       el.addEventListener("click", (e) => {
         if (e.target.closest("[data-select-id]")) return;
         const idx = Number(el.dataset.playIdx);
         const track = this.tracks[idx];
         if (!track) return;
-
-        if (e.shiftKey) {
-          e.stopPropagation();
-          e.preventDefault();
-          this.handleShiftClickSelection(idx);
-          return;
-        }
-
-        if (this.isMultiSelectActive || e.ctrlKey || e.metaKey) {
-          e.stopPropagation();
-          e.preventDefault();
-          this.handleCtrlClickSelection(idx);
-          return;
-        }
 
         const albumSpan = e.target.closest("[data-filter-album]");
         if (albumSpan) {
@@ -476,6 +529,30 @@ class MusicLinkerController {
           this.loadLibrary(document.getElementById("search-input")?.value || "", false);
           return;
         }
+
+        if (e.shiftKey) {
+          e.stopPropagation();
+          e.preventDefault();
+          this.handleShiftClickSelection(idx);
+          return;
+        }
+
+        if (e.ctrlKey || e.metaKey) {
+          e.stopPropagation();
+          e.preventDefault();
+          this.handleCtrlClickSelection(idx);
+          return;
+        }
+
+        if (this.isMultiSelectActive) {
+          e.stopPropagation();
+          e.preventDefault();
+          const willSelect = !this.selectedTrackIds.has(track.id);
+          this.toggleTrackSelection(track.id, willSelect);
+          this.lastSelectedTrackIdx = idx;
+          return;
+        }
+
         this.lastSelectedTrackIdx = idx;
         this.playQueue = [...this.tracks];
         this.playByIndex(idx);
@@ -487,6 +564,9 @@ class MusicLinkerController {
       cb.addEventListener("change", (e) => {
         e.stopPropagation();
         const trackId = Number(cb.dataset.selectId);
+        if (cb.checked && !this.isMultiSelectActive) {
+          this.ensureMultiSelectActive();
+        }
         this.toggleTrackSelection(trackId, cb.checked);
       });
     });
@@ -508,13 +588,15 @@ class MusicLinkerController {
     });
 
     container.querySelectorAll("[data-delete-idx]").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const track = this.tracks[Number(btn.dataset.deleteIdx)];
         if (!track) return;
-        if (confirm(`Delete "${track.title}" by "${track.artist_display}" from library and disk?`)) {
-          await this.deleteTrack(track.id, true, false);
-        }
+        this.selectedTrackIds.clear();
+        this.selectedTrackIds.add(track.id);
+        this.activeContextTrack = track;
+        this.updateMultiSelectBar();
+        this.openBulkDeleteModal();
       });
     });
 
@@ -2650,13 +2732,13 @@ class MusicLinkerController {
 
   // ---- Multi-Select & Bulk Album Grouping ----
 
-  toggleMultiSelectMode() {
-    this.isMultiSelectActive = !this.isMultiSelectActive;
+  toggleMultiSelectMode(forceState = null) {
+    this.isMultiSelectActive = forceState !== null ? forceState : !this.isMultiSelectActive;
     const btn = document.getElementById("btn-toggle-multi-select");
     const bar = document.getElementById("multi-select-bar");
     if (btn) {
       btn.className = this.isMultiSelectActive
-        ? "ml-btn px-2.5 py-1.5 text-xs font-semibold bg-emerald-500 text-zinc-950 flex items-center gap-1.5"
+        ? "ml-btn px-2.5 py-1.5 text-xs font-semibold bg-emerald-500 text-zinc-950 flex items-center gap-1.5 shadow-sm"
         : "ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs flex items-center gap-1.5";
     }
     if (bar) {
@@ -2682,7 +2764,36 @@ class MusicLinkerController {
     }
     document.querySelectorAll(".track-select-checkbox").forEach((cb) => {
       cb.classList.remove("hidden");
+      cb.classList.remove("md:opacity-0");
     });
+  }
+
+  handleLongPressSelection(idx, e) {
+    const track = this.tracks[idx];
+    if (!track) return;
+
+    if (!this.isMultiSelectActive) {
+      this.ensureMultiSelectActive();
+      this.selectedTrackIds.add(track.id);
+      this.showToast(`Selected "${track.title}" (Selection Mode Active)`);
+    } else {
+      if (this.selectedTrackIds.has(track.id)) {
+        this.openContextMenu(idx, e);
+        return;
+      }
+      this.selectedTrackIds.add(track.id);
+    }
+
+    this.lastSelectedTrackIdx = idx;
+    this.updateMultiSelectBar();
+
+    const rowEl = document.querySelector(`[data-track-row-id="${track.id}"]`);
+    if (rowEl) {
+      rowEl.classList.add("is-selected", "bg-emerald-950/60", "border-emerald-500/70", "selection-pulse");
+      setTimeout(() => rowEl.classList.remove("selection-pulse"), 200);
+      const cb = rowEl.querySelector(`[data-select-id="${track.id}"]`);
+      if (cb) cb.checked = true;
+    }
   }
 
   handleCtrlClickSelection(idx) {
@@ -2957,25 +3068,515 @@ class MusicLinkerController {
     }
   }
 
-  async batchDeleteSelectedTracks() {
+  // ---- Dedicated Bulk Delete Modal & Logic ----
+
+  openBulkDeleteModal() {
+    if (this.selectedTrackIds.size === 0 && this.activeContextTrack) {
+      this.selectedTrackIds.add(this.activeContextTrack.id);
+      this.updateMultiSelectBar();
+    }
+    if (this.selectedTrackIds.size === 0) return;
+
+    const count = this.selectedTrackIds.size;
+    const modal = document.getElementById("bulk-delete-modal");
+    const countLabel = document.getElementById("bulk-delete-count-label");
+    const confirmLabel = document.getElementById("bulk-delete-confirm-label");
+    const previewContainer = document.getElementById("bulk-delete-tracks-preview");
+
+    if (countLabel) countLabel.textContent = `${count} track(s) selected for removal`;
+    if (confirmLabel) confirmLabel.textContent = `Permanently Delete ${count} Track(s)`;
+
+    const selectedTracks = this.allTracks.filter((t) => this.selectedTrackIds.has(t.id));
+
+    if (previewContainer) {
+      const previewList = selectedTracks.slice(0, 8);
+      const overflow = selectedTracks.length - previewList.length;
+
+      previewContainer.innerHTML = previewList
+        .map((t) => {
+          const coverSrc = t.cover_url ? api.resolveUrl(t.cover_url) : "";
+          return `
+            <div class="flex items-center gap-2 p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs">
+              <div class="w-7 h-7 rounded bg-zinc-800 shrink-0 overflow-hidden border border-zinc-700/60 flex items-center justify-center">
+                ${coverSrc ? `<img src="${coverSrc}" class="w-full h-full object-cover" />` : `<svg class="w-3.5 h-3.5 text-zinc-500 stroke-current fill-none" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/></svg>`}
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-zinc-200 font-medium truncate">${this.escape(t.title)}</div>
+                <div class="text-zinc-500 text-[11px] truncate">${this.escape(t.artist_display)}</div>
+              </div>
+            </div>
+          `;
+        })
+        .join("") + (overflow > 0 ? `<div class="text-center text-zinc-500 font-mono text-[11px] py-1">+ ${overflow} more track(s)...</div>` : "");
+    }
+
+    modal?.classList.remove("hidden");
+  }
+
+  async confirmBulkDelete() {
     if (this.selectedTrackIds.size === 0) return;
     const count = this.selectedTrackIds.size;
-    if (!confirm(`Delete ${count} selected track(s) from your library and disk?`)) return;
+    const deleteBtn = document.getElementById("btn-confirm-bulk-delete");
+    const confirmLabel = document.getElementById("bulk-delete-confirm-label");
+
+    if (deleteBtn) deleteBtn.disabled = true;
+    if (confirmLabel) confirmLabel.textContent = "Deleting tracks...";
+
+    const deleteFiles = document.getElementById("bulk-delete-option-files")?.checked ?? true;
+    const unmarkHashes = document.getElementById("bulk-delete-option-hashes")?.checked ?? false;
 
     try {
-      await api.request("/api/tracks/batch-delete", {
-        method: "POST",
-        body: JSON.stringify({
-          track_ids: Array.from(this.selectedTrackIds),
-          delete_files: true,
-          unmark_hashes: false,
-        }),
-      });
-      this.showToast(`Deleted ${count} track(s)`);
-      this.toggleMultiSelectMode();
+      await api.batchDeleteTracks(Array.from(this.selectedTrackIds), deleteFiles, unmarkHashes);
+      this.showToast(`Deleted ${count} track(s) successfully!`);
+      document.getElementById("bulk-delete-modal")?.classList.add("hidden");
+      this.selectedTrackIds.clear();
+      this.isMultiSelectActive = false;
+      this.updateMultiSelectBar();
+      await this.loadAlbums();
       await this.loadLibrary("", true);
     } catch (err) {
-      this.showToast(`Failed batch deleting: ${err.message}`, "error");
+      this.showToast(`Failed deleting tracks: ${err.message}`, "error");
+    } finally {
+      if (deleteBtn) deleteBtn.disabled = false;
+      if (confirmLabel) confirmLabel.textContent = "Delete Tracks";
+    }
+  }
+
+  async batchDeleteSelectedTracks() {
+    this.openBulkDeleteModal();
+  }
+
+  // ---- Custom Right-Click & Touch Context Menu ----
+
+  initContextMenu() {
+    const menu = document.getElementById("track-context-menu");
+    if (!menu) return;
+
+    // Dismiss on click outside
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest("#track-context-menu")) {
+        this.closeContextMenu();
+      }
+    });
+
+    window.addEventListener("resize", () => this.closeContextMenu());
+    window.addEventListener("scroll", () => this.closeContextMenu(), true);
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        this.closeContextMenu();
+        if (this.isMultiSelectActive && this.selectedTrackIds.size === 0) {
+          this.toggleMultiSelectMode(false);
+        }
+      }
+    });
+
+    document.getElementById("ctx-action-play")?.addEventListener("click", () => {
+      this.handleContextPlay();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-play-next")?.addEventListener("click", () => {
+      this.handleContextPlayNext();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-add-queue")?.addEventListener("click", () => {
+      this.handleContextAddToQueue();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-modify")?.addEventListener("click", () => {
+      this.handleContextModify();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-group-album")?.addEventListener("click", () => {
+      this.openBulkAlbumModal();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-add-playlist")?.addEventListener("click", () => {
+      this.addMultiSelectToPlaylist();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-swap-version")?.addEventListener("click", () => {
+      if (this.activeContextTrack) {
+        this.openSwapAudioModal(this.activeContextTrack);
+      }
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-save-offline")?.addEventListener("click", () => {
+      this.handleContextSaveOffline();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-copy-info")?.addEventListener("click", () => {
+      this.handleContextCopyInfo();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-copy-url")?.addEventListener("click", () => {
+      this.handleContextCopyUrl();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-delete")?.addEventListener("click", () => {
+      this.openBulkDeleteModal();
+      this.closeContextMenu();
+    });
+    document.getElementById("ctx-action-select-toggle")?.addEventListener("click", () => {
+      if (this.activeContextTrack) {
+        this.ensureMultiSelectActive();
+        const will = !this.selectedTrackIds.has(this.activeContextTrack.id);
+        this.toggleTrackSelection(this.activeContextTrack.id, will);
+      }
+      this.closeContextMenu();
+    });
+  }
+
+  openContextMenu(idx, e) {
+    const track = this.tracks[idx];
+    if (!track) return;
+    this.activeContextTrackIdx = idx;
+    this.activeContextTrack = track;
+
+    if (!this.selectedTrackIds.has(track.id)) {
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        this.selectedTrackIds.clear();
+        this.selectedTrackIds.add(track.id);
+        this.updateMultiSelectBar();
+        this.renderTrackList();
+      } else {
+        this.selectedTrackIds.add(track.id);
+        this.updateMultiSelectBar();
+      }
+    }
+
+    const menu = document.getElementById("track-context-menu");
+    if (!menu) return;
+
+    const count = this.selectedTrackIds.size;
+    const isMulti = count > 1;
+
+    const titleEl = document.getElementById("context-menu-title");
+    const subEl = document.getElementById("context-menu-subtitle");
+    const thumbEl = document.getElementById("context-menu-thumb");
+    const labelMod = document.getElementById("ctx-label-modify");
+    const labelDel = document.getElementById("ctx-label-delete");
+    const labelSel = document.getElementById("ctx-label-select");
+
+    if (isMulti) {
+      if (titleEl) titleEl.textContent = `${count} Tracks Selected`;
+      if (subEl) subEl.textContent = `Batch actions across all selected`;
+      if (thumbEl) thumbEl.innerHTML = `<span class="font-mono text-xs font-bold text-emerald-400">${count}</span>`;
+      if (labelMod) labelMod.textContent = `Batch Modify (${count} tracks)...`;
+      if (labelDel) labelDel.textContent = `Delete ${count} Tracks...`;
+      if (labelSel) labelSel.textContent = `Deselect All`;
+    } else {
+      if (titleEl) titleEl.textContent = track.title;
+      if (subEl) subEl.textContent = `${track.artist_display} • ${track.album}`;
+      const coverSrc = track.cover_url ? api.resolveUrl(track.cover_url) : "";
+      if (thumbEl) {
+        thumbEl.innerHTML = coverSrc
+          ? `<img src="${coverSrc}" class="w-full h-full object-cover" alt="cover"/>`
+          : `<svg class="w-4 h-4 text-emerald-400 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
+      }
+      if (labelMod) labelMod.textContent = `Edit Metadata...`;
+      if (labelDel) labelDel.textContent = `Delete Track...`;
+      if (labelSel) labelSel.textContent = this.selectedTrackIds.has(track.id) ? `Deselect Track` : `Select Track`;
+    }
+
+    menu.classList.remove("hidden");
+    const rect = menu.getBoundingClientRect();
+    let x = e.clientX || 100;
+    let y = e.clientY || 100;
+    if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 12;
+    if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 12;
+    menu.style.left = `${Math.max(8, x)}px`;
+    menu.style.top = `${Math.max(8, y)}px`;
+  }
+
+  closeContextMenu() {
+    document.getElementById("track-context-menu")?.classList.add("hidden");
+  }
+
+  handleContextPlay() {
+    if (this.selectedTrackIds.size > 1) {
+      const sel = this.tracks.filter((t) => this.selectedTrackIds.has(t.id));
+      if (sel.length) {
+        this.playQueue = [...sel];
+        this.playByIndex(0);
+      }
+    } else if (this.activeContextTrackIdx !== null) {
+      this.playByIndex(this.activeContextTrackIdx);
+    }
+  }
+
+  handleContextPlayNext() {
+    const sel = this.selectedTrackIds.size > 1
+      ? this.tracks.filter((t) => this.selectedTrackIds.has(t.id))
+      : this.activeContextTrack ? [this.activeContextTrack] : [];
+    if (!sel.length) return;
+
+    const insertIdx = (this.currentTrackIndex !== null && this.currentTrackIndex >= 0)
+      ? this.currentTrackIndex + 1
+      : 0;
+    this.playQueue.splice(insertIdx, 0, ...sel);
+    this.showToast(`Queued next: ${sel.length} track(s)`);
+  }
+
+  handleContextAddToQueue() {
+    const sel = this.selectedTrackIds.size > 1
+      ? this.tracks.filter((t) => this.selectedTrackIds.has(t.id))
+      : this.activeContextTrack ? [this.activeContextTrack] : [];
+    if (!sel.length) return;
+
+    this.playQueue.push(...sel);
+    this.showToast(`Added ${sel.length} track(s) to end of queue`);
+  }
+
+  handleContextModify() {
+    if (this.selectedTrackIds.size > 1) {
+      this.openBatchModifyModal();
+    } else if (this.activeContextTrack) {
+      this.openEditTrackModal(this.activeContextTrack);
+    }
+  }
+
+  async handleContextSaveOffline() {
+    const sel = this.selectedTrackIds.size > 1
+      ? this.tracks.filter((t) => this.selectedTrackIds.has(t.id))
+      : this.activeContextTrack ? [this.activeContextTrack] : [];
+    if (!sel.length) return;
+
+    let saved = 0;
+    for (const t of sel) {
+      try {
+        await offlineStore.cacheTrackAudio(t);
+        saved++;
+      } catch (_) {}
+    }
+    this.showToast(`Saved ${saved} track(s) to on-device cache!`);
+  }
+
+  handleContextCopyInfo() {
+    const sel = this.selectedTrackIds.size > 1
+      ? this.tracks.filter((t) => this.selectedTrackIds.has(t.id))
+      : this.activeContextTrack ? [this.activeContextTrack] : [];
+    if (!sel.length) return;
+
+    const text = sel.map((t) => `${t.artist_display} - ${t.title}`).join("\n");
+    navigator.clipboard?.writeText(text).then(() => {
+      this.showToast(`Copied info for ${sel.length} track(s) to clipboard!`);
+    }).catch(() => {
+      this.showToast("Could not copy to clipboard", "error");
+    });
+  }
+
+  handleContextCopyUrl() {
+    if (!this.activeContextTrack) return;
+    const url = api.resolveUrl(`/api/tracks/${this.activeContextTrack.id}/stream`);
+    navigator.clipboard?.writeText(url).then(() => {
+      this.showToast("Copied audio stream URL to clipboard!");
+    }).catch(() => {
+      this.showToast("Could not copy to clipboard", "error");
+    });
+  }
+
+  // ---- Batch Modify Modal & Logic ----
+
+  initBatchModifyModal() {
+    const modal = document.getElementById("batch-modify-modal");
+    if (!modal) return;
+
+    document.getElementById("btn-close-batch-modify-modal")?.addEventListener("click", () => modal.classList.add("hidden"));
+    document.getElementById("btn-cancel-batch-modify")?.addEventListener("click", () => modal.classList.add("hidden"));
+    document.getElementById("btn-submit-batch-modify")?.addEventListener("click", () => this.submitBatchModify());
+
+    [
+      "batch-input-artist",
+      "batch-input-album",
+      "batch-input-year",
+      "batch-input-find",
+      "batch-input-replace",
+      "batch-select-target",
+    ].forEach((id) => {
+      document.getElementById(id)?.addEventListener("input", () => this.updateBatchModifyPreview());
+    });
+
+    document.querySelectorAll('input[name="batch-case"]').forEach((r) => {
+      r.addEventListener("change", () => this.updateBatchModifyPreview());
+    });
+
+    // Bulk Delete Modal listeners
+    document.getElementById("btn-close-bulk-delete-modal")?.addEventListener("click", () => {
+      document.getElementById("bulk-delete-modal")?.classList.add("hidden");
+    });
+    document.getElementById("btn-cancel-bulk-delete")?.addEventListener("click", () => {
+      document.getElementById("bulk-delete-modal")?.classList.add("hidden");
+    });
+    document.getElementById("btn-confirm-bulk-delete")?.addEventListener("click", () => this.confirmBulkDelete());
+
+    // Multi-select bar play, batch modify, and exit listeners
+    document.getElementById("btn-multi-play")?.addEventListener("click", () => {
+      if (this.selectedTrackIds.size === 0) return;
+      const sel = this.tracks.filter((t) => this.selectedTrackIds.has(t.id));
+      if (sel.length) {
+        this.playQueue = [...sel];
+        this.playByIndex(0);
+      }
+    });
+
+    document.getElementById("btn-multi-batch-modify")?.addEventListener("click", () => {
+      this.openBatchModifyModal();
+    });
+
+    document.getElementById("btn-multi-exit")?.addEventListener("click", () => {
+      this.toggleMultiSelectMode(false);
+    });
+  }
+
+  openBatchModifyModal() {
+    if (this.selectedTrackIds.size === 0 && this.activeContextTrack) {
+      this.selectedTrackIds.add(this.activeContextTrack.id);
+      this.updateMultiSelectBar();
+    }
+    if (this.selectedTrackIds.size === 0) {
+      this.showToast("Select at least 1 track to batch modify.", "warning");
+      return;
+    }
+
+    const count = this.selectedTrackIds.size;
+    const badge = document.getElementById("batch-modify-count-badge");
+    if (badge) badge.textContent = `${count} tracks selected`;
+
+    const submitLabel = document.getElementById("batch-modify-submit-label");
+    if (submitLabel) submitLabel.textContent = `Apply Changes to ${count} Tracks`;
+
+    const inArtist = document.getElementById("batch-input-artist");
+    const inAlbum = document.getElementById("batch-input-album");
+    const inYear = document.getElementById("batch-input-year");
+    const inFind = document.getElementById("batch-input-find");
+    const inRepl = document.getElementById("batch-input-replace");
+    const selTarget = document.getElementById("batch-select-target");
+
+    if (inArtist) inArtist.value = "";
+    if (inAlbum) inAlbum.value = "";
+    if (inYear) inYear.value = "";
+    if (inFind) inFind.value = "";
+    if (inRepl) inRepl.value = "";
+    if (selTarget) selTarget.value = "title";
+
+    const defaultCase = document.querySelector('input[name="batch-case"][value=""]');
+    if (defaultCase) defaultCase.checked = true;
+
+    this.updateBatchModifyPreview();
+    document.getElementById("batch-modify-modal")?.classList.remove("hidden");
+  }
+
+  updateBatchModifyPreview() {
+    const container = document.getElementById("batch-preview-table");
+    if (!container) return;
+
+    const selectedTracks = this.allTracks.filter((t) => this.selectedTrackIds.has(t.id));
+    if (!selectedTracks.length) {
+      container.innerHTML = `<div class="text-zinc-500 py-4 text-center">No tracks selected.</div>`;
+      return;
+    }
+
+    const artistVal = document.getElementById("batch-input-artist")?.value.trim() || "";
+    const albumVal = document.getElementById("batch-input-album")?.value.trim() || "";
+    const yearVal = document.getElementById("batch-input-year")?.value.trim() || "";
+    const findVal = document.getElementById("batch-input-find")?.value || "";
+    const replVal = document.getElementById("batch-input-replace")?.value || "";
+    const targetField = document.getElementById("batch-select-target")?.value || "title";
+    const caseVal = document.querySelector('input[name="batch-case"]:checked')?.value || "";
+
+    const previewTracks = selectedTracks.slice(0, 15);
+    const overflow = selectedTracks.length - previewTracks.length;
+
+    container.innerHTML = previewTracks
+      .map((t, idx) => {
+        let newTitle = t.title;
+        let newArtist = artistVal || t.artist_display;
+        let newAlbum = albumVal || t.album;
+        let newYear = yearVal || t.release_year;
+
+        if (findVal) {
+          const regex = new RegExp(findVal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+          if (targetField === "title" || targetField === "all") newTitle = newTitle.replace(regex, replVal).trim();
+          if (targetField === "artist" || targetField === "all") newArtist = newArtist.replace(regex, replVal).trim();
+          if (targetField === "album" || targetField === "all") newAlbum = newAlbum.replace(regex, replVal).trim();
+        }
+
+        if (caseVal === "title_case") {
+          newTitle = newTitle.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+        } else if (caseVal === "uppercase") {
+          newTitle = newTitle.toUpperCase();
+        } else if (caseVal === "lowercase") {
+          newTitle = newTitle.toLowerCase();
+        }
+
+        const titleChanged = newTitle !== t.title;
+        const artistChanged = newArtist !== t.artist_display;
+        const albumChanged = newAlbum !== t.album;
+        const yearChanged = newYear !== t.release_year;
+        const hasAnyChange = titleChanged || artistChanged || albumChanged || yearChanged;
+
+        return `
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between p-2 rounded-lg ${hasAnyChange ? "bg-emerald-950/40 border border-emerald-500/30" : "bg-zinc-900/60 border border-zinc-800/60"} gap-1.5">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-zinc-500 font-mono w-5">#${idx + 1}</span>
+                <span class="${titleChanged ? "text-emerald-300 font-bold" : "text-zinc-200 font-medium"} truncate">${this.escape(newTitle)}</span>
+                ${titleChanged ? `<span class="text-[10px] text-zinc-500 line-through truncate">(${this.escape(t.title)})</span>` : ""}
+              </div>
+              <div class="text-[11px] text-zinc-400 mt-0.5 ml-7 flex flex-wrap gap-x-2">
+                <span class="${artistChanged ? "text-emerald-400 font-semibold" : "text-zinc-400"}">${this.escape(newArtist)}</span>
+                <span class="text-zinc-600">•</span>
+                <span class="${albumChanged ? "text-emerald-400 font-semibold" : "text-zinc-400"}">${this.escape(newAlbum)}</span>
+                ${newYear ? `<span class="${yearChanged ? "text-emerald-400" : "text-zinc-500"}">(${newYear})</span>` : ""}
+              </div>
+            </div>
+            <div class="shrink-0">
+              ${hasAnyChange ? `<span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono">Modifying</span>` : `<span class="text-[10px] text-zinc-500">Unchanged</span>`}
+            </div>
+          </div>
+        `;
+      })
+      .join("") + (overflow > 0 ? `<div class="text-center text-zinc-500 font-mono py-1">+ ${overflow} more selected track(s)...</div>` : "");
+  }
+
+  async submitBatchModify() {
+    if (this.selectedTrackIds.size === 0) return;
+    const count = this.selectedTrackIds.size;
+    const btn = document.getElementById("btn-submit-batch-modify");
+    const label = document.getElementById("batch-modify-submit-label");
+
+    const payload = {
+      track_ids: Array.from(this.selectedTrackIds),
+      artist_display: document.getElementById("batch-input-artist")?.value.trim() || null,
+      album: document.getElementById("batch-input-album")?.value.trim() || null,
+      release_year: document.getElementById("batch-input-year")?.value.trim() || null,
+      find_text: document.getElementById("batch-input-find")?.value.trim() || null,
+      replace_text: document.getElementById("batch-input-replace")?.value || null,
+      target_field: document.getElementById("batch-select-target")?.value || "title",
+      case_transform: document.querySelector('input[name="batch-case"]:checked')?.value || null,
+    };
+
+    if (!payload.artist_display && !payload.album && !payload.release_year && !payload.find_text && !payload.case_transform) {
+      this.showToast("No modifications specified.", "warning");
+      return;
+    }
+
+    if (btn) btn.disabled = true;
+    if (label) label.textContent = `Applying changes to ${count} tracks...`;
+
+    try {
+      const res = await api.batchModifyTracks(payload);
+      this.showToast(`Batch modified ${res.updated_count || 0} track(s) successfully!`);
+      document.getElementById("batch-modify-modal")?.classList.add("hidden");
+      this.clearSelectedTracks();
+      await this.loadAlbums();
+      await this.loadLibrary("", true);
+    } catch (err) {
+      this.showToast(`Failed batch modify: ${err.message}`, "error");
+    } finally {
+      if (btn) btn.disabled = false;
+      if (label) label.textContent = `Apply Changes to Selected Tracks`;
     }
   }
 

@@ -1,4 +1,4 @@
 """MusicLinker: Offline-first Last.fm extractor, album downloader, LLM curator, and Windows/Android APK ecosystem."""
 
-__version__ = "3.1.6"
+__version__ = "3.1.7"
 __all__ = ["__version__"]

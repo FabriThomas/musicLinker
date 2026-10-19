@@ -26,6 +26,7 @@ from musiclinker.domain.models import (
     AlbumResolveInconsistencyPayload,
     BatchScrobblePayload,
     BatchTrackDeletePayload,
+    BatchTrackModifyPayload,
     BulkAssignAlbumPayload,
     DirectDownloadRequest,
     ExtractionJobRequest,
@@ -74,7 +75,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="3.1.6",
+        version="3.1.7",
         lifespan=lifespan,
     )
 
@@ -273,6 +274,11 @@ def create_app() -> FastAPI:
             unmark_hashes=payload.unmark_hashes,
         )
         return {"status": "deleted", "count": deleted}
+
+    @app.post("/api/tracks/batch-modify", dependencies=[Depends(require_paired_client)])
+    def batch_modify_tracks_endpoint(payload: BatchTrackModifyPayload) -> dict[str, Any]:
+        """Batch update metadata (artist, album, year, find/replace, case formatting) across multiple tracks."""
+        return library_service.batch_modify_tracks(payload)
 
     @app.delete("/api/albums/{album_name:path}", dependencies=[Depends(require_paired_client)])
     def delete_entire_album(

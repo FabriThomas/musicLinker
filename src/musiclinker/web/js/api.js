@@ -217,6 +217,24 @@ class MusicLinkerAPI {
     });
   }
 
+  async batchModifyTracks(payload) {
+    return this.request("/api/tracks/batch-modify", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async batchDeleteTracks(trackIds, deleteFiles = true, unmarkHashes = false) {
+    return this.request("/api/tracks/batch-delete", {
+      method: "POST",
+      body: JSON.stringify({
+        track_ids: trackIds,
+        delete_files: deleteFiles,
+        unmark_hashes: unmarkHashes,
+      }),
+    });
+  }
+
   subscribeJobEvents(jobId, onUpdate) {
     const token = encodeURIComponent(this.getPairToken());
     const url = this.resolveUrl(`/api/jobs/${jobId}/events${token ? `?pair_token=${token}` : ""}`);

@@ -11,7 +11,12 @@ from typing import Any
 
 from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
-from musiclinker.domain.models import AlbumBulkRenamePayload, TrackEntity, TrackMetadataUpdatePayload
+from musiclinker.domain.models import (
+    AlbumBulkRenamePayload,
+    BatchTrackModifyPayload,
+    TrackEntity,
+    TrackMetadataUpdatePayload,
+)
 from musiclinker.infrastructure.db import DatabaseRepository, db_repo
 from musiclinker.infrastructure.hasher import compute_track_hash, split_artists
 from musiclinker.infrastructure.lastfm_client import LastFMClient
@@ -514,6 +519,78 @@ class LibraryService:
             if self.delete_track(tid, delete_file=delete_files, unmark_hash=unmark_hashes):
                 deleted += 1
         return deleted
+
+    def batch_modify_tracks(self, payload: BatchTrackModifyPayload) -> dict[str, Any]:
+        """Batch update metadata (artist, album, year, find & replace, casing) across multiple tracks."""
+        updated_tracks: list[TrackEntity] = []
+        for tid in payload.track_ids:
+            track = self.repo.get_track(tid)
+            if not track:
+                continue
+
+            new_title = track.title
+            new_artist = payload.artist_display.strip() if payload.artist_display and payload.artist_display.strip() else track.artist_display
+            new_album = payload.album.strip() if payload.album and payload.album.strip() else track.album
+            new_year = payload.release_year.strip() if payload.release_year and payload.release_year.strip() else track.release_year
+
+            # Find & Replace
+            if payload.find_text:
+                target_field = (payload.target_field or "title").lower()
+                find_txt = payload.find_text
+                repl_txt = payload.replace_text or ""
+
+                if target_field in ("title", "all"):
+                    new_title = re.sub(re.escape(find_txt), repl_txt, new_title, flags=re.IGNORECASE).strip()
+                if target_field in ("artist", "all"):
+                    new_artist = re.sub(re.escape(find_txt), repl_txt, new_artist, flags=re.IGNORECASE).strip()
+                if target_field in ("album", "all"):
+                    new_album = re.sub(re.escape(find_txt), repl_txt, new_album, flags=re.IGNORECASE).strip()
+
+            # Case Transformation
+            if payload.case_transform:
+                ct = payload.case_transform.lower()
+                if ct in ("title_case", "title"):
+                    new_title = new_title.title()
+                elif ct in ("uppercase", "upper"):
+                    new_title = new_title.upper()
+                elif ct in ("lowercase", "lower"):
+                    new_title = new_title.lower()
+                elif ct in ("capitalize",):
+                    new_title = new_title.capitalize()
+
+            update_payload = TrackMetadataUpdatePayload(
+                title=new_title or track.title,
+                artist_display=new_artist or track.artist_display,
+                album=new_album or track.album,
+                track_number=track.track_number,
+                release_year=new_year or track.release_year,
+                original_year=track.original_year,
+                remember_album_alias=False,
+            )
+
+            try:
+                updated = self.update_track_metadata(tid, update_payload)
+                updated_tracks.append(updated)
+            except Exception as exc:
+                logger.warning("Error batch modifying track %d: %s", tid, exc)
+
+        log_test_event(
+            category="batch_modify",
+            title=f"Batch modified {len(updated_tracks)} of {len(payload.track_ids)} tracks",
+            details={
+                "requested_ids": payload.track_ids,
+                "updated_count": len(updated_tracks),
+                "artist_display": payload.artist_display,
+                "album": payload.album,
+                "release_year": payload.release_year,
+                "find_text": payload.find_text,
+                "replace_text": payload.replace_text,
+            },
+        )
+        return {
+            "updated_count": len(updated_tracks),
+            "tracks": [t.to_dict() for t in updated_tracks],
+        }
 
     def delete_album(self, album_name: str, artist: str = "", delete_files: bool = True) -> int:
         tracks = self.repo.list_tracks(album=album_name)

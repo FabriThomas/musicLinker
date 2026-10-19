@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -182,6 +182,20 @@ class BatchTrackDeletePayload(BaseModel):
     track_ids: list[int] = Field(..., min_length=1, description="List of track IDs to delete")
     delete_files: bool = Field(default=True, description="Whether to also remove .mp3 and .lrc files from disk")
     unmark_hashes: bool = Field(default=False, description="Whether to remove hashes from seen_hashes history")
+
+
+class BatchTrackModifyPayload(BaseModel):
+    """Payload to batch modify metadata across multiple tracks."""
+
+    track_ids: list[int] = Field(..., min_length=1, description="List of track IDs to modify")
+    artist_display: Optional[str] = Field(default=None, description="Set new artist across all selected tracks if non-empty")
+    album: Optional[str] = Field(default=None, description="Set new album name across all selected tracks if non-empty")
+    release_year: Optional[str] = Field(default=None, description="Set new release year across all selected tracks if non-empty")
+    genre: Optional[str] = Field(default=None, description="Set new genre across all selected tracks if non-empty")
+    find_text: Optional[str] = Field(default=None, description="Text to search for and replace")
+    replace_text: Optional[str] = Field(default=None, description="Text to replace matches with")
+    target_field: Optional[str] = Field(default="title", description="'title', 'artist', 'album', or 'all'")
+    case_transform: Optional[str] = Field(default=None, description="'title_case', 'uppercase', 'lowercase', or 'capitalize'")
 
 
 
