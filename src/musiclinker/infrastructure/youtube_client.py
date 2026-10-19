@@ -13,6 +13,7 @@ import yt_dlp
 from musiclinker.core.exceptions import YouTubeResolutionError
 from musiclinker.core.logging_config import logger
 from musiclinker.core.paths import PATHS
+from musiclinker.infrastructure.test_mode import log_test_event
 
 _VTT_TIMESTAMP_RE = re.compile(
     r"(\d{1,2}:)?(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(?:\d{1,2}:)?\d{2}:\d{2}\.\d{3}"
@@ -59,11 +60,22 @@ class YouTubeClient:
             **self._get_base_ydl_opts(),
         }
         search_expr = query if query.startswith(("http://", "https://")) else f"ytsearch{max_results}:{query}"
+        log_test_event(
+            category="youtube_search",
+            title=f"Querying YouTube for: '{query}' (limit: {max_results})",
+            details={"query": query, "search_expr": search_expr, "max_results": max_results},
+        )
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(search_expr, download=False)
         except Exception as exc:
+            log_test_event(
+                category="youtube_error",
+                title=f"YouTube search failed for '{query}': {exc}",
+                details={"query": query, "error": str(exc)},
+                level="error",
+            )
             raise YouTubeResolutionError(f"YouTube search failed for '{query}': {exc}") from exc
 
         entries = info.get("entries", [info]) if isinstance(info, dict) else []
@@ -87,6 +99,16 @@ class YouTubeClient:
                     "thumbnail": thumb_url,
                 }
             )
+
+        log_test_event(
+            category="youtube_results",
+            title=f"YouTube returned {len(results)} item(s) for '{query}'",
+            details={
+                "query": query,
+                "count": len(results),
+                "items": [{"id": r["id"], "title": r["title"], "channel": r["uploader"], "duration": r["duration"]} for r in results[:8]],
+            },
+        )
 
         with self._cache_lock:
             self._search_cache[cache_key] = results
@@ -479,6 +501,20 @@ class YouTubeClient:
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
 
         best_score, best_candidate = scored_candidates[0]
+        log_test_event(
+            category="match_selected",
+            title=f"Selected best audio for '{artist} - {title}': '{best_candidate.get('title')}' (score={best_score:.1f})",
+            details={
+                "artist": artist,
+                "title": title,
+                "score": round(best_score, 1),
+                "candidate_title": best_candidate.get("title"),
+                "candidate_url": best_candidate.get("url"),
+                "channel": best_candidate.get("uploader"),
+                "duration": best_candidate.get("duration"),
+                "expected_duration": expected_duration,
+            },
+        )
         logger.debug(
             "resolve_best_audio_match for '%s - %s': selected '%s' (%s, score=%.1f)",
             artist,
@@ -639,6 +675,11 @@ class YouTubeClient:
                 )
 
         target_expr = clean_expr if clean_expr.startswith(("http://", "https://")) else f"ytsearch1:{clean_expr}"
+        log_test_event(
+            category="download_stream",
+            title=f"Starting yt-dlp download pipeline for: {url_or_query}",
+            details={"target_expr": target_expr, "bitrate": valid_bitrate, "stem": stem_name},
+        )
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(target_expr, download=True)
@@ -646,6 +687,12 @@ class YouTubeClient:
                     entries = [e for e in info["entries"] if e]
                     info = entries[0] if entries else {}
         except Exception as exc:
+            log_test_event(
+                category="download_error",
+                title=f"Failed downloading audio from '{url_or_query}': {exc}",
+                details={"target": url_or_query, "error": str(exc)},
+                level="error",
+            )
             raise YouTubeResolutionError(f"Failed downloading audio from '{url_or_query}': {exc}") from exc
 
 
@@ -655,6 +702,12 @@ class YouTubeClient:
             if not candidates:
                 raise YouTubeResolutionError("FFmpeg post-processing did not produce an MP3 file.")
             mp3_path = candidates[0]
+
+        log_test_event(
+            category="download_success",
+            title=f"Stream download & transcode complete ({valid_bitrate} kbps): {mp3_path.name} ({mp3_path.stat().st_size} bytes)",
+            details={"file_name": mp3_path.name, "size_bytes": mp3_path.stat().st_size, "path": str(mp3_path)},
+        )
 
         yt_lrc_fallback = ""
         vtt_files = list(staging_dir.glob(f"{stem_name}*.vtt"))

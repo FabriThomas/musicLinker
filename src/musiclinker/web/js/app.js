@@ -60,6 +60,8 @@ class MusicLinkerController {
     this.mobileView = "library";
     this.isMultiSelectActive = false;
     this.selectedTrackIds = new Set();
+    this.candidateModalMode = "swap"; // 'swap' | 'download'
+    this.activePreviewCandidate = null;
     this.previewAudio = null;
     this.activePreviewVideoId = null;
     this.swapCurrentTrack = null;
@@ -70,6 +72,12 @@ class MusicLinkerController {
     this.activeInconsistencyIdx = 0;
     this.selectedCanonicalCoverTrackId = null;
     this.selectedCanonicalYear = "";
+
+    // Test Mode Backend Pull Inspection State
+    this.testModeEnabled = false;
+    this.testModePollInterval = null;
+    this.lastTestModeSeq = 0;
+    this.testModeEvents = [];
 
     this.engine = new AudioEngine({
       onTimeUpdate: (cur, dur) => this.handleTimeUpdate(cur, dur),
@@ -94,6 +102,8 @@ class MusicLinkerController {
     this.initMobileNavigation();
     this.initAllSliderFills();
     this.initEqualizerUI();
+    this.initPreviewPlayerControls();
+    this.initTestMode();
     const volBar = document.getElementById("volume-bar");
     if (volBar) {
       const initVal = Number(volBar.value || 85);
@@ -846,10 +856,13 @@ class MusicLinkerController {
       return;
     }
 
+    // Open rich preview modal with timeline, listen buttons, and download controls
+    this.openNewMusicPreviewModal(query);
+
     const btn = document.getElementById("btn-search-single");
     if (btn) btn.disabled = true;
     if (box) {
-      box.innerHTML = `<div class="text-xs text-zinc-400 p-2.5 bg-zinc-900/60 rounded-xl border border-zinc-800 animate-pulse">Searching streams & resolving metadata...</div>`;
+      box.innerHTML = `<div class="text-xs text-zinc-400 p-2.5 bg-zinc-900/60 rounded-xl border border-zinc-800 animate-pulse">Searching streams & opening preview modal...</div>`;
     }
 
     try {
@@ -2966,19 +2979,85 @@ class MusicLinkerController {
     }
   }
 
-  // ---- Audio Version Swap & 15s Snippet Preview ----
+  // ---- Interactive Audio Preview Player (Timeline, ±10s Jump Controls) & Version Swap ----
+
+  initPreviewPlayerControls() {
+    document.getElementById("btn-preview-play-toggle")?.addEventListener("click", () => {
+      if (!this.previewAudio) return;
+      if (this.previewAudio.paused) {
+        this.previewAudio.play().catch((e) => this.showToast(`Preview failed: ${e.message}`, "error"));
+      } else {
+        this.previewAudio.pause();
+      }
+    });
+
+    document.getElementById("btn-preview-jump-back")?.addEventListener("click", () => {
+      this.jumpPreview(-10);
+    });
+
+    document.getElementById("btn-preview-jump-forward")?.addEventListener("click", () => {
+      this.jumpPreview(10);
+    });
+
+    const slider = document.getElementById("preview-timeline-slider");
+    slider?.addEventListener("input", () => {
+      if (!this.previewAudio) return;
+      this.previewAudio.currentTime = Number(slider.value);
+      this.updatePreviewTimelineUI();
+    });
+
+    document.getElementById("btn-preview-choose-action")?.addEventListener("click", () => {
+      if (!this.activePreviewCandidate) return;
+      if (this.candidateModalMode === "download") {
+        this.startDirectTrackDownload(this.activePreviewCandidate);
+        document.getElementById("swap-audio-modal")?.classList.add("hidden");
+        this.stopCandidatePreview();
+      } else if (this.swapCurrentTrack) {
+        this.confirmReplaceAudio(this.swapCurrentTrack.id, this.activePreviewCandidate.url);
+      }
+    });
+  }
+
+  jumpPreview(deltaSeconds) {
+    if (!this.previewAudio) return;
+    const maxDur = this.previewAudio.duration || 60;
+    const current = this.previewAudio.currentTime || 0;
+    const target = Math.max(0, Math.min(maxDur, current + deltaSeconds));
+    this.previewAudio.currentTime = target;
+    this.updatePreviewTimelineUI();
+  }
+
+  updatePreviewTimelineUI() {
+    if (!this.previewAudio) return;
+    const cur = this.previewAudio.currentTime || 0;
+    const dur = this.previewAudio.duration || 60;
+    const slider = document.getElementById("preview-timeline-slider");
+    const curEl = document.getElementById("preview-time-current");
+    const totalEl = document.getElementById("preview-time-total");
+    if (slider) {
+      slider.value = cur;
+      slider.max = dur;
+    }
+    if (curEl) curEl.textContent = this.formatDuration(Math.floor(cur));
+    if (totalEl) totalEl.textContent = this.formatDuration(Math.floor(dur));
+  }
 
   async openSwapAudioModal(track) {
     this.stopCandidatePreview();
+    this.candidateModalMode = "swap";
     this.swapCurrentTrack = track;
 
     const modal = document.getElementById("swap-audio-modal");
+    const titleHeader = document.querySelector("#swap-audio-modal h3");
+    const descEl = document.getElementById("swap-modal-desc");
     const idInput = document.getElementById("swap-track-id");
     const titleEl = document.getElementById("swap-target-title");
     const artistEl = document.getElementById("swap-target-artist");
     const durEl = document.getElementById("swap-target-duration");
     const searchInput = document.getElementById("swap-search-input");
 
+    if (titleHeader) titleHeader.textContent = "Change Audio Version";
+    if (descEl) descEl.textContent = "Listen to audio previews, jump ±10s to inspect any section, and choose which version to swap with.";
     if (idInput) idInput.value = track.id;
     if (titleEl) titleEl.textContent = track.title;
     if (artistEl) artistEl.textContent = track.artist_display;
@@ -2986,7 +3065,69 @@ class MusicLinkerController {
     if (searchInput) searchInput.value = `${track.artist_display} ${track.title}`;
 
     if (modal) modal.classList.remove("hidden");
+    document.getElementById("swap-preview-player-bar")?.classList.add("hidden");
     await this.queryAudioCandidates(track.id, "");
+  }
+
+  async openNewMusicPreviewModal(initialQuery = "") {
+    this.stopCandidatePreview();
+    this.candidateModalMode = "download";
+    this.swapCurrentTrack = null;
+
+    const rawQuery = (initialQuery || document.getElementById("dl-single-query")?.value || "").trim();
+    if (!rawQuery) {
+      this.showToast("Enter a song query, YouTube URL, or Spotify link first.", "warning");
+      return;
+    }
+
+    const modal = document.getElementById("swap-audio-modal");
+    const titleHeader = document.querySelector("#swap-audio-modal h3");
+    const descEl = document.getElementById("swap-modal-desc");
+    const idInput = document.getElementById("swap-track-id");
+    const titleEl = document.getElementById("swap-target-title");
+    const artistEl = document.getElementById("swap-target-artist");
+    const durEl = document.getElementById("swap-target-duration");
+    const searchInput = document.getElementById("swap-search-input");
+
+    if (titleHeader) titleHeader.textContent = "Preview & Choose Music Version";
+    if (descEl) descEl.textContent = "Listen to candidate audio streams, jump ±10s across the timeline to verify the track, and choose which version to download.";
+    if (idInput) idInput.value = "";
+    if (titleEl) titleEl.textContent = rawQuery;
+    if (artistEl) artistEl.textContent = "New Music Preview & Download";
+    if (durEl) durEl.textContent = "Preview";
+    if (searchInput) searchInput.value = rawQuery;
+
+    if (modal) modal.classList.remove("hidden");
+    document.getElementById("swap-preview-player-bar")?.classList.add("hidden");
+    await this.queryNewMusicCandidates(rawQuery);
+  }
+
+  async queryNewMusicCandidates(query) {
+    this.stopCandidatePreview();
+    const listEl = document.getElementById("swap-candidates-list");
+    const statusEl = document.getElementById("swap-status-text");
+
+    if (listEl) {
+      listEl.innerHTML = `
+        <div class="p-8 text-center text-xs text-zinc-400 space-y-2">
+          <div class="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <div>Searching YouTube & streams for "${this.escape(query)}"...</div>
+        </div>
+      `;
+    }
+    if (statusEl) statusEl.textContent = "Searching streams for preview...";
+
+    try {
+      const res = await api.request(`/api/youtube/search?q=${encodeURIComponent(query)}`);
+      const candidates = res.results || [];
+      this.renderAudioCandidates(null, candidates);
+      if (statusEl) statusEl.textContent = `${candidates.length} version(s) found for preview`;
+    } catch (err) {
+      if (listEl) {
+        listEl.innerHTML = `<div class="p-6 text-center text-xs text-red-400">Failed searching: ${this.escape(err.message)}</div>`;
+      }
+      if (statusEl) statusEl.textContent = "Search error";
+    }
   }
 
   async queryAudioCandidates(trackId, customQuery = "") {
@@ -3032,19 +3173,22 @@ class MusicLinkerController {
     if (!candidates || !candidates.length) {
       listEl.innerHTML = `
         <div class="p-8 text-center text-xs text-zinc-400 space-y-2">
-          <div class="text-zinc-300 font-semibold">No alternative versions found</div>
-          <div class="text-zinc-500">Try modifying the search bar above or paste a direct YouTube video URL to swap.</div>
+          <div class="text-zinc-300 font-semibold">No candidate versions found</div>
+          <div class="text-zinc-500">Try modifying the search bar above or paste a direct YouTube video URL.</div>
         </div>
       `;
       return;
     }
 
     listEl.innerHTML = candidates
-      .map((c) => {
+      .map((c, idx) => {
         const vidId = c.video_id || c.id;
         const channelName = c.channel || c.uploader || "YouTube";
         const albumName = c.album || (currentTrack ? currentTrack.album : "");
-        const diffSec = c.duration_diff_sec !== undefined ? c.duration_diff_sec : (c.duration_diff !== undefined ? c.duration_diff : (c.duration - (currentTrack ? currentTrack.duration : 0)));
+        const hasDiff = currentTrack && currentTrack.duration > 0 && c.duration > 0;
+        const diffSec = hasDiff
+          ? (c.duration_diff_sec !== undefined ? c.duration_diff_sec : (c.duration - currentTrack.duration))
+          : 0;
         const diffText = diffSec === 0 ? "Exact duration" : diffSec > 0 ? `+${diffSec}s` : `${diffSec}s`;
         const diffBadgeClass =
           Math.abs(diffSec) <= 3
@@ -3057,8 +3201,35 @@ class MusicLinkerController {
           ? `<img src="${this.escapeAttr(c.thumbnail)}" alt="" class="w-14 h-14 object-cover rounded-xl bg-zinc-800 border border-zinc-700/80 shrink-0" onerror="this.onerror=null; this.src='/icon.svg';" />`
           : `<div class="w-14 h-14 rounded-xl bg-zinc-800 border border-zinc-700/80 shrink-0 flex items-center justify-center text-zinc-500"><svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg></div>`;
 
+        const isCurrentlyPlaying = this.activePreviewVideoId === vidId && this.previewAudio && !this.previewAudio.paused;
+
+        const actionBtnHtml = this.candidateModalMode === "download"
+          ? `<button
+              data-download-cand-idx="${idx}"
+              class="ml-btn ml-btn-primary px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 font-bold shadow active:scale-95 transition"
+              title="Download this exact version into library"
+            >
+              <svg class="w-3.5 h-3.5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Download</span>
+            </button>`
+          : `<button
+              data-replace-url="${this.escapeAttr(c.url)}"
+              class="ml-btn ml-btn-primary px-3.5 py-1.5 text-xs rounded-xl flex items-center gap-1.5 font-bold shadow active:scale-95 transition"
+              title="Swap track audio with this version"
+            >
+              <span>Select & Swap</span>
+            </button>`;
+
+        const testBadge = this.testModeEnabled
+          ? `<div class="mt-1 text-[10px] font-mono text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/30 inline-flex items-center gap-1.5">
+              <span>🧪 ID: ${this.escape(vidId)}</span>
+              <span>• ${c.duration}s</span>
+              <span>• ${this.escape(channelName)}</span>
+            </div>`
+          : "";
+
         return `
-          <div class="candidate-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs p-3 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 hover:border-zinc-700 transition" data-video-card="${vidId}">
+          <div class="candidate-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs p-3 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 hover:border-zinc-700 transition ${isCurrentlyPlaying ? 'border-emerald-500/50 bg-emerald-500/5 ring-1 ring-emerald-500/20' : ''}" data-video-card="${vidId}">
             <div class="flex items-center gap-3 min-w-0 flex-1">
               ${thumbHtml}
               <div class="min-w-0 flex-1">
@@ -3068,36 +3239,45 @@ class MusicLinkerController {
                   ${albumName ? `<span class="px-2 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-zinc-300 text-[10px] inline-flex items-center gap-1 font-medium"><svg class="w-3 h-3 text-emerald-400 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14.5c-2.49 0-4.5-2.01-4.5-4.5S9.51 7.5 12 7.5s4.5 2.01 4.5 4.5-2.01 4.5-4.5 4.5zm0-5.5c-.55 0-1 .45-1 1s.45 1 1 1 1-.45 1-1-.45-1-1-1z"/></svg><span class="truncate max-w-[130px]" title="${this.escapeAttr(albumName)}">${this.escape(albumName)}</span></span>` : ""}
                   <span class="text-zinc-600">•</span>
                   <span class="font-mono text-zinc-300">${this.formatDuration(c.duration)}</span>
-                  <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border ${diffBadgeClass}">${diffText}</span>
+                  ${hasDiff ? `<span class="text-[10px] font-mono px-1.5 py-0.5 rounded border ${diffBadgeClass}">${diffText}</span>` : ""}
                 </div>
+                ${testBadge}
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0 self-end sm:self-center">
               <button
-                data-preview-video-id="${vidId}"
-                class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 text-emerald-300 hover:text-white"
-                title="Play 15-second snippet of this audio start"
+                data-preview-cand-idx="${idx}"
+                class="ml-btn ml-btn-secondary px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 text-emerald-300 hover:text-white border border-zinc-700/80 active:scale-95 transition"
+                title="Listen to audio preview with timeline scrubber & jump controls"
               >
-                <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-                <span>15s Preview</span>
+                ${isCurrentlyPlaying
+                  ? `<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Playing</span>`
+                  : `<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg><span>Listen</span>`}
               </button>
-              <button
-                data-replace-url="${this.escapeAttr(c.url)}"
-                class="ml-btn ml-btn-primary px-3.5 py-1.5 text-xs rounded-xl flex items-center gap-1.5 font-bold"
-                title="Swap track audio with this version"
-              >
-                <span>Select & Swap</span>
-              </button>
+              ${actionBtnHtml}
             </div>
           </div>
         `;
       })
       .join("");
 
-    listEl.querySelectorAll("[data-preview-video-id]").forEach((btn) => {
+    listEl.querySelectorAll("[data-preview-cand-idx]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const vid = btn.dataset.previewVideoId;
-        this.playCandidatePreview(vid, btn);
+        const idx = Number(btn.dataset.previewCandIdx);
+        const cand = candidates[idx];
+        if (cand) this.playCandidatePreview(cand, btn);
+      });
+    });
+
+    listEl.querySelectorAll("[data-download-cand-idx]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.downloadCandIdx);
+        const cand = candidates[idx];
+        if (cand) {
+          this.startDirectTrackDownload(cand);
+          document.getElementById("swap-audio-modal")?.classList.add("hidden");
+          this.stopCandidatePreview();
+        }
       });
     });
 
@@ -3111,16 +3291,22 @@ class MusicLinkerController {
     });
   }
 
-  playCandidatePreview(videoId, btnEl) {
-    if (this.activePreviewVideoId === videoId && this.previewAudio && !this.previewAudio.paused) {
-      this.stopCandidatePreview();
+  playCandidatePreview(candidate, btnEl) {
+    const vidId = candidate.video_id || candidate.id;
+    if (this.activePreviewVideoId === vidId && this.previewAudio) {
+      if (this.previewAudio.paused) {
+        this.previewAudio.play().catch(() => {});
+      } else {
+        this.previewAudio.pause();
+      }
       return;
     }
 
     this.stopCandidatePreview();
-    this.activePreviewVideoId = videoId;
+    this.activePreviewCandidate = candidate;
+    this.activePreviewVideoId = vidId;
 
-    const url = api.getCandidatePreviewUrl(videoId);
+    const url = api.getCandidatePreviewUrl(vidId, 60);
     this.previewAudio = new Audio(url);
     this.previewAudio.volume = this.engine.masterGain?.gain.value || 0.85;
 
@@ -3129,22 +3315,72 @@ class MusicLinkerController {
       this.engine.pause();
     }
 
-    btnEl.innerHTML = `<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Playing...</span>`;
-    const card = document.querySelector(`[data-video-card="${videoId}"]`);
-    if (card) card.classList.add("is-playing");
+    // Show preview player bar at bottom of modal
+    const bar = document.getElementById("swap-preview-player-bar");
+    const thumbEl = document.getElementById("preview-bar-thumb");
+    const titleEl = document.getElementById("preview-bar-title");
+    const chanEl = document.getElementById("preview-bar-channel");
+    const actionLabel = document.getElementById("preview-choose-action-label");
+    const playIcon = document.getElementById("preview-play-icon");
+    const pauseIcon = document.getElementById("preview-pause-icon");
+
+    if (bar) bar.classList.remove("hidden");
+    if (thumbEl) thumbEl.src = candidate.thumbnail || "/icon.svg";
+    if (titleEl) titleEl.textContent = candidate.title;
+    if (chanEl) chanEl.textContent = candidate.channel || candidate.uploader || "YouTube";
+    if (actionLabel) {
+      actionLabel.textContent = this.candidateModalMode === "download" ? "Download This Version" : "Select & Swap";
+    }
+
+    const card = document.querySelector(`[data-video-card="${vidId}"]`);
+    if (card) {
+      card.classList.add("border-emerald-500/50", "bg-emerald-500/5");
+    }
+    if (btnEl) {
+      btnEl.innerHTML = `<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Playing</span>`;
+    }
+
+    this.previewAudio.addEventListener("timeupdate", () => {
+      this.updatePreviewTimelineUI();
+    });
+
+    this.previewAudio.addEventListener("loadedmetadata", () => {
+      this.updatePreviewTimelineUI();
+    });
+
+    this.previewAudio.addEventListener("play", () => {
+      if (playIcon) playIcon.classList.add("hidden");
+      if (pauseIcon) pauseIcon.classList.remove("hidden");
+      if (btnEl) {
+        btnEl.innerHTML = `<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Playing</span>`;
+      }
+    });
+
+    this.previewAudio.addEventListener("pause", () => {
+      if (playIcon) playIcon.classList.remove("hidden");
+      if (pauseIcon) pauseIcon.classList.add("hidden");
+      if (btnEl) {
+        btnEl.innerHTML = `<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg><span>Listen</span>`;
+      }
+    });
+
+    this.previewAudio.addEventListener("ended", () => {
+      if (playIcon) playIcon.classList.remove("hidden");
+      if (pauseIcon) pauseIcon.classList.add("hidden");
+      if (btnEl) {
+        btnEl.innerHTML = `<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg><span>Listen</span>`;
+      }
+    });
+
+    this.previewAudio.addEventListener("error", () => {
+      this.showToast("Could not load preview stream.", "error");
+      this.stopCandidatePreview();
+    });
 
     this.previewAudio.play().catch((err) => {
       this.showToast(`Preview failed: ${err.message}`, "error");
       this.stopCandidatePreview();
     });
-
-    this.previewAudio.onended = () => {
-      this.stopCandidatePreview();
-    };
-    this.previewAudio.onerror = () => {
-      this.showToast("Could not load 15s snippet preview.", "error");
-      this.stopCandidatePreview();
-    };
   }
 
   stopCandidatePreview() {
@@ -3157,13 +3393,193 @@ class MusicLinkerController {
     }
     if (this.activePreviewVideoId) {
       const card = document.querySelector(`[data-video-card="${this.activePreviewVideoId}"]`);
-      if (card) card.classList.remove("is-playing");
-      const btn = document.querySelector(`[data-preview-video-id="${this.activePreviewVideoId}"]`);
+      if (card) {
+        card.classList.remove("border-emerald-500/50", "bg-emerald-500/5");
+      }
+      const btn = document.querySelector(`[data-video-card="${this.activePreviewVideoId}"] [data-preview-cand-idx]`);
       if (btn) {
-        btn.innerHTML = `<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg><span>15s Preview</span>`;
+        btn.innerHTML = `<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg><span>Listen</span>`;
       }
       this.activePreviewVideoId = null;
     }
+    this.activePreviewCandidate = null;
+    document.getElementById("swap-preview-player-bar")?.classList.add("hidden");
+  }
+
+  // ---- Backend Pull Inspection & Test Mode UI ----
+
+  async initTestMode() {
+    try {
+      const res = await api.getTestModeStatus();
+      this.testModeEnabled = Boolean(res?.enabled);
+      this.updateTestModeUI();
+      if (this.testModeEnabled) {
+        this.startTestModePolling();
+      }
+    } catch (_e) {
+      this.testModeEnabled = false;
+      this.updateTestModeUI();
+    }
+
+    document.getElementById("btn-toggle-test-mode")?.addEventListener("click", () => this.toggleTestMode());
+    document.getElementById("btn-open-test-console-from-modal")?.addEventListener("click", () => this.openTestModeConsole());
+    document.getElementById("btn-close-test-console")?.addEventListener("click", () => this.closeTestModeConsole());
+    document.getElementById("btn-test-clear-logs")?.addEventListener("click", () => this.clearTestModeLogs());
+    document.getElementById("btn-test-copy-logs")?.addEventListener("click", () => this.copyTestModeLogs());
+    document.getElementById("test-console-filter")?.addEventListener("change", () => this.renderTestModeEvents(this.testModeEvents));
+  }
+
+  async toggleTestMode() {
+    const next = !this.testModeEnabled;
+    try {
+      const res = await api.setTestMode(next);
+      this.testModeEnabled = Boolean(res.enabled);
+      this.updateTestModeUI();
+      if (this.testModeEnabled) {
+        this.showToast("Test Mode ENABLED: Live backend pull inspection active", "info");
+        this.startTestModePolling();
+        this.openTestModeConsole();
+        await this.pollTestModeEvents();
+      } else {
+        this.showToast("Test Mode DISABLED", "info");
+        this.stopTestModePolling();
+      }
+    } catch (err) {
+      this.showToast(`Failed toggling test mode: ${err.message}`, "error");
+    }
+  }
+
+  updateTestModeUI() {
+    const btn = document.getElementById("btn-toggle-test-mode");
+    const label = document.getElementById("test-mode-btn-label");
+    const modalBtn = document.getElementById("btn-open-test-console-from-modal");
+
+    if (btn) {
+      if (this.testModeEnabled) {
+        btn.className = "ml-btn px-2.5 py-1.5 text-xs flex items-center gap-1.5 transition rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-sm animate-pulse";
+      } else {
+        btn.className = "ml-btn ml-btn-secondary px-2.5 py-1.5 text-xs flex items-center gap-1.5 transition text-zinc-400 hover:text-amber-300";
+      }
+    }
+    if (label) {
+      label.textContent = this.testModeEnabled ? "Test Mode ON" : "Test Mode";
+    }
+    if (modalBtn) {
+      if (this.testModeEnabled) {
+        modalBtn.classList.remove("hidden");
+      } else {
+        modalBtn.classList.add("hidden");
+      }
+    }
+  }
+
+  startTestModePolling() {
+    this.stopTestModePolling();
+    this.testModePollInterval = setInterval(() => {
+      this.pollTestModeEvents();
+    }, 2000);
+  }
+
+  stopTestModePolling() {
+    if (this.testModePollInterval) {
+      clearInterval(this.testModePollInterval);
+      this.testModePollInterval = null;
+    }
+  }
+
+  async pollTestModeEvents() {
+    try {
+      const res = await api.getTestModeEvents(this.lastTestModeSeq);
+      if (res.events && res.events.length) {
+        this.testModeEvents.push(...res.events);
+        this.lastTestModeSeq = res.events[res.events.length - 1].seq;
+        if (this.testModeEvents.length > 500) {
+          this.testModeEvents = this.testModeEvents.slice(-500);
+        }
+        this.renderTestModeEvents(this.testModeEvents);
+      }
+    } catch (_e) {}
+  }
+
+  renderTestModeEvents(events) {
+    const container = document.getElementById("test-console-logs");
+    const countBadge = document.getElementById("test-console-count");
+    const filterVal = document.getElementById("test-console-filter")?.value || "all";
+    const autoScroll = document.getElementById("test-console-autoscroll")?.checked ?? true;
+    if (!container) return;
+
+    let filtered = events;
+    if (filterVal !== "all") {
+      filtered = events.filter((e) => (e.category || "").toLowerCase().includes(filterVal.toLowerCase()));
+    }
+
+    if (countBadge) countBadge.textContent = `${filtered.length} event(s)`;
+
+    if (!filtered.length) {
+      container.innerHTML = `<div class="text-zinc-500 text-center py-8">No events match filter "${this.escape(filterVal)}". Start music searches or downloads to inspect.</div>`;
+      return;
+    }
+
+    container.innerHTML = filtered
+      .map((e) => {
+        const cat = (e.category || "INFO").toUpperCase();
+        let badgeClass = "bg-zinc-800 text-zinc-300 border-zinc-700";
+        if (cat.includes("SEARCH")) badgeClass = "bg-cyan-500/20 text-cyan-300 border-cyan-500/40";
+        else if (cat.includes("CANDIDATE")) badgeClass = "bg-indigo-500/20 text-indigo-300 border-indigo-500/40";
+        else if (cat.includes("MATCH") || cat.includes("SELECT")) badgeClass = "bg-emerald-500/20 text-emerald-300 border-emerald-500/40";
+        else if (cat.includes("STREAM") || cat.includes("PREVIEW")) badgeClass = "bg-purple-500/20 text-purple-300 border-purple-500/40";
+        else if (cat.includes("DOWNLOAD")) badgeClass = "bg-blue-500/20 text-blue-300 border-blue-500/40";
+        else if (cat.includes("ERROR") || e.level === "error") badgeClass = "bg-rose-500/20 text-rose-300 border-rose-500/40";
+
+        const hasDetails = e.details && Object.keys(e.details).length > 0;
+        const detailsStr = hasDetails ? JSON.stringify(e.details, null, 2) : "";
+
+        return `
+          <div class="p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-1">
+            <div class="flex items-center justify-between gap-2 text-[11px]">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="text-zinc-500 font-mono">${e.time_str || ""}</span>
+                <span class="px-1.5 py-0.2 rounded font-mono text-[9px] border ${badgeClass}">${this.escape(cat)}</span>
+                <span class="font-semibold text-zinc-200 truncate">${this.escape(e.title)}</span>
+              </div>
+            </div>
+            ${hasDetails ? `<details class="text-[10px] text-zinc-400 mt-1 cursor-pointer select-text"><summary class="text-zinc-500 hover:text-amber-400">View Payload Details</summary><pre class="p-2 bg-zinc-950 rounded-lg text-emerald-400 font-mono overflow-x-auto mt-1">${this.escape(detailsStr)}</pre></details>` : ""}
+          </div>
+        `;
+      })
+      .join("");
+
+    if (autoScroll) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  openTestModeConsole() {
+    const modal = document.getElementById("test-mode-console-modal");
+    if (modal) modal.classList.remove("hidden");
+    this.pollTestModeEvents();
+  }
+
+  closeTestModeConsole() {
+    const modal = document.getElementById("test-mode-console-modal");
+    if (modal) modal.classList.add("hidden");
+  }
+
+  async clearTestModeLogs() {
+    await api.clearTestModeLogs();
+    this.testModeEvents = [];
+    this.lastTestModeSeq = 0;
+    this.renderTestModeEvents([]);
+    this.showToast("Test inspection logs cleared.");
+  }
+
+  copyTestModeLogs() {
+    const text = JSON.stringify(this.testModeEvents, null, 2);
+    navigator.clipboard.writeText(text).then(() => {
+      this.showToast("Copied all test mode inspection logs to clipboard!");
+    }).catch((e) => {
+      this.showToast(`Clipboard error: ${e.message}`, "error");
+    });
   }
 
   async confirmReplaceAudio(trackId, youtubeUrl, btnEl) {
@@ -4372,11 +4788,13 @@ class MusicLinkerController {
     document.getElementById("btn-bulk-compare-official")?.addEventListener("click", () => this.matchBulkAlbumTracklist());
     document.getElementById("btn-bulk-apply-album-submit")?.addEventListener("click", () => this.submitBulkAssignAlbum());
 
-    // Audio Version Swap Modal & Search Form
+    // Audio Version Swap & Preview Modal Search Form
     document.getElementById("swap-search-form")?.addEventListener("submit", (e) => {
       e.preventDefault();
       const q = document.getElementById("swap-search-input")?.value.trim() || "";
-      if (this.swapCurrentTrack) {
+      if (this.candidateModalMode === "download") {
+        this.queryNewMusicCandidates(q);
+      } else if (this.swapCurrentTrack) {
         this.queryAudioCandidates(this.swapCurrentTrack.id, q);
       }
     });

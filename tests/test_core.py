@@ -1119,3 +1119,84 @@ def test_replace_track_audio_complete_flow(tmp_path):
         assert orig_mp3.read_bytes() == b"NEW_REPLACED_AUDIO_CONTENT"
 
 
+def test_v316_test_mode_and_candidate_preview_timeline(tmp_path):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from musiclinker.api.app import app
+    from musiclinker.infrastructure.db import db_repo
+    from musiclinker.infrastructure.test_mode import test_mode_manager, log_test_event
+    from musiclinker.services.library_service import library_service
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    # 1. Test TestModeManager direct recording and clearing
+    test_mode_manager.clear()
+    log_test_event("search", "Searching test query", {"query": "Daft Punk"})
+    log_test_event("download", "Downloading test stream", {"pct": 50})
+
+    events = test_mode_manager.get_events()
+    assert len(events) >= 2
+    assert events[-2]["category"] == "search"
+    assert events[-1]["category"] == "download"
+
+    filtered = test_mode_manager.get_events(category="search")
+    assert any(e["category"] == "search" for e in filtered)
+
+    # 2. Test API endpoints for Test Mode
+    res_get = client.get("/api/system/test-mode")
+    assert res_get.status_code == 200
+    data_get = res_get.json()
+    assert "enabled" in data_get
+    assert "events" in data_get
+
+    # Toggle test mode to True
+    res_post = client.post("/api/system/test-mode", json={"enabled": True})
+    assert res_post.status_code == 200
+    assert res_post.json()["enabled"] is True
+    assert test_mode_manager.is_enabled() is True
+
+    # Check settings persisted
+    settings = db_repo.get_settings()
+    assert settings.get("test_mode") is True
+
+    # Query events via endpoint
+    res_evts = client.get("/api/system/test-mode/events?since=0")
+    assert res_evts.status_code == 200
+    assert len(res_evts.json()["events"]) > 0
+
+    # Clear logs via endpoint
+    res_clear = client.post("/api/system/test-mode/clear")
+    assert res_clear.status_code == 200
+    assert res_clear.json()["status"] == "cleared"
+
+    # 3. Test candidate preview endpoint with duration parameter
+    dummy_mp3 = tmp_path / "preview_dummy.mp3"
+    dummy_mp3.write_bytes(b"PREVIEW_MP3_BYTES")
+    with patch("musiclinker.services.library_service.library_service.generate_audio_snippet") as mock_snippet:
+        mock_snippet.return_value = dummy_mp3
+        res_prev = client.get("/api/tracks/candidate-preview/test_vid_123?duration=60")
+        assert res_prev.status_code == 200
+        assert res_prev.content == b"PREVIEW_MP3_BYTES"
+        mock_snippet.assert_called_once_with(video_id="test_vid_123", duration_sec=60.0)
+
+    # 4. Verify candidate search logs telemetry
+    t = db_repo.upsert_track(
+        track_hash="hash_telemetry_test",
+        title="Telemetry Song",
+        artist_display="Telemetry Band",
+        artists=["Telemetry Band"],
+        album="Telemetry Album",
+        album_artist="Telemetry Band",
+        duration=180,
+        file_path=str(dummy_mp3),
+    )
+    with patch("musiclinker.infrastructure.youtube_client.youtube_client.search_videos") as mock_search:
+        mock_search.return_value = [
+            {"id": "vid_tel_1", "title": "Telemetry Song (Official)", "uploader": "Telemetry Band", "duration": 180, "url": "https://youtube.com/watch?v=vid_tel_1"}
+        ]
+        candidates = library_service.get_track_audio_candidates(t.id)
+        assert len(candidates["candidates"]) == 1
+        assert candidates["candidates"][0]["video_id"] == "vid_tel_1"
+
+
+

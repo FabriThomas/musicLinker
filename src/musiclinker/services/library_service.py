@@ -19,6 +19,7 @@ from musiclinker.infrastructure.lyrics_client import lyrics_client
 from musiclinker.infrastructure.musicbrainz_client import musicbrainz_client
 from musiclinker.infrastructure.spotify_client import spotify_client
 from musiclinker.infrastructure.tagger import audio_tagger
+from musiclinker.infrastructure.test_mode import log_test_event
 from musiclinker.infrastructure.youtube_client import youtube_client
 
 
@@ -213,6 +214,12 @@ class LibraryService:
         if not cleaned:
             return []
 
+        log_test_event(
+            category="search_preview",
+            title=f"Resolving music preview for: '{cleaned}'",
+            details={"query_or_url": cleaned},
+        )
+
         if spotify_client.is_spotify_url(cleaned):
             try:
                 sp_meta = spotify_client.fetch_spotify_metadata(cleaned)
@@ -237,11 +244,33 @@ class LibraryService:
                                 "source": "spotify",
                             }
                         )
+                    log_test_event(
+                        category="spotify_resolved",
+                        title=f"Spotify resolved {len(results)} track(s) for '{sp_meta.get('album') or cleaned}'",
+                        details={"tracks": [{"title": r["title"], "artist": r["artist"]} for r in results]},
+                    )
                     return results
             except Exception as exc:
                 logger.warning("Spotify track preview failed for '%s': %s", cleaned, exc)
 
-        return youtube_client.preview_track_or_link(cleaned, max_results=6)
+        yt_results = youtube_client.preview_track_or_link(cleaned, max_results=8)
+        log_test_event(
+            category="youtube_preview_resolved",
+            title=f"YouTube preview found {len(yt_results)} candidate(s) for '{cleaned}'",
+            details={
+                "query": cleaned,
+                "candidates": [
+                    {
+                        "id": r.get("id"),
+                        "title": r.get("title"),
+                        "uploader": r.get("uploader"),
+                        "duration": r.get("duration"),
+                    }
+                    for r in yt_results
+                ],
+            },
+        )
+        return yt_results
 
 
 
@@ -497,10 +526,22 @@ class LibraryService:
         self.repo.delete_album_alias(alias_id)
         return True
 
-    def get_track_audio_candidates(self, track_id: int, custom_query: str = "", max_results: int = 6) -> dict[str, Any]:
+    def get_track_audio_candidates(self, track_id: int, custom_query: str = "", max_results: int = 8) -> dict[str, Any]:
         track = self.repo.get_track(track_id)
         if not track:
             raise ValueError(f"Track ID {track_id} not found.")
+
+        log_test_event(
+            category="swap_query",
+            title=f"Querying audio versions for Track #{track_id}: '{track.artist_display} - {track.title}'",
+            details={
+                "track_id": track_id,
+                "title": track.title,
+                "artist": track.artist_display,
+                "target_duration": track.duration,
+                "custom_query": custom_query,
+            },
+        )
 
         raw_results: list[dict[str, Any]] = []
         clean_title = re.sub(r"\(.*?\)|\[.*?\]", "", track.title).strip()
@@ -508,7 +549,13 @@ class LibraryService:
         if custom_query.strip():
             cq = custom_query.strip()
             try:
-                raw_results.extend(youtube_client.search_videos(cq, max_results=max_results))
+                found_cq = youtube_client.search_videos(cq, max_results=max_results)
+                raw_results.extend(found_cq)
+                log_test_event(
+                    category="candidates",
+                    title=f"Custom query '{cq}' returned {len(found_cq)} result(s)",
+                    details={"query": cq, "count": len(found_cq)},
+                )
             except Exception as exc:
                 logger.debug("Custom candidate search failed for '%s': %s", cq, exc)
 
@@ -525,6 +572,11 @@ class LibraryService:
                 try:
                     found = youtube_client.search_videos(q, max_results=max_results)
                     raw_results.extend(found)
+                    log_test_event(
+                        category="candidates",
+                        title=f"Search strategy '{q}' returned {len(found)} candidate(s)",
+                        details={"query": q, "count": len(found)},
+                    )
                 except Exception as exc:
                     logger.debug("Candidate search fallback failed for '%s': %s", q, exc)
 
@@ -554,22 +606,62 @@ class LibraryService:
                 "thumbnail": r.get("thumbnail", ""),
                 "preview_url": f"/api/tracks/candidate-preview/{vid_id}",
             })
+
+        log_test_event(
+            category="candidates_evaluated",
+            title=f"Evaluated {len(candidates)} candidate(s) for '{track.title}'",
+            details={
+                "track_id": track_id,
+                "candidates": [
+                    {
+                        "video_id": c["video_id"],
+                        "title": c["title"],
+                        "channel": c["channel"],
+                        "duration": c["duration"],
+                        "diff": c["duration_diff_sec"],
+                    }
+                    for c in candidates[:max_results]
+                ],
+            },
+        )
+
         return {
             "track": track.to_dict(),
             "candidates": candidates[:max_results],
         }
 
-    def generate_audio_snippet(self, video_id: str, duration_sec: float = 15.0) -> Path:
+    def generate_audio_snippet(self, video_id: str, duration_sec: float = 60.0) -> Path:
         import subprocess
         import yt_dlp
 
+        # Extract clean video ID if passed as a full URL
+        clean_vid = video_id.strip()
+        if "watch?v=" in clean_vid:
+            clean_vid = clean_vid.split("watch?v=")[-1].split("&")[0]
+        elif "youtu.be/" in clean_vid:
+            clean_vid = clean_vid.split("youtu.be/")[-1].split("?")[0]
+        elif clean_vid.startswith("http"):
+            match = re.search(r"(?:v=|\/|youtu\.be\/)([a-zA-Z0-9_-]{11})", clean_vid)
+            if match:
+                clean_vid = match.group(1)
+
         cache_dir = PATHS.app_data_dir / "preview_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        out_mp3 = cache_dir / f"{video_id}_snippet.mp3"
-        if out_mp3.exists() and out_mp3.stat().st_size > 5000:
-            return out_mp3
+        out_mp3 = cache_dir / f"{clean_vid}_snippet_{int(duration_sec)}.mp3"
+        legacy_mp3 = cache_dir / f"{clean_vid}_snippet.mp3"
 
-        target_url = f"https://www.youtube.com/watch?v={video_id}"
+        if out_mp3.exists() and out_mp3.stat().st_size > 10000:
+            return out_mp3
+        if legacy_mp3.exists() and legacy_mp3.stat().st_size > 10000 and duration_sec <= 15.0:
+            return legacy_mp3
+
+        target_url = f"https://www.youtube.com/watch?v={clean_vid}"
+        log_test_event(
+            category="preview_stream",
+            title=f"Extracting {int(duration_sec)}s audio preview stream for: {clean_vid}",
+            details={"video_id": clean_vid, "target_url": target_url, "duration_sec": duration_sec},
+        )
+
         ydl_opts = {
             "format": "bestaudio[ext=m4a]/bestaudio/best",
             "quiet": True,
@@ -580,7 +672,7 @@ class LibraryService:
             info = ydl.extract_info(target_url, download=False)
         audio_stream_url = info.get("url") if isinstance(info, dict) else None
         if not audio_stream_url:
-            raise ValueError(f"Could not extract audio stream URL for video {video_id}")
+            raise ValueError(f"Could not extract audio stream URL for video {clean_vid}")
 
         cmd = [
             youtube_client.ffmpeg_exe,
@@ -592,9 +684,16 @@ class LibraryService:
             "-b:a", "128k",
             str(out_mp3),
         ]
-        p = subprocess.run(cmd, capture_output=True, timeout=25)
+        p = subprocess.run(cmd, capture_output=True, timeout=35)
         if p.returncode != 0 or not out_mp3.exists():
             raise RuntimeError(f"FFmpeg snippet generation failed: {p.stderr.decode('utf-8', errors='ignore')}")
+
+        log_test_event(
+            category="preview_ready",
+            title=f"Preview audio snippet ready for {clean_vid} ({out_mp3.stat().st_size} bytes)",
+            details={"video_id": clean_vid, "size_bytes": out_mp3.stat().st_size, "path": str(out_mp3)},
+        )
+
         return out_mp3
 
     def replace_track_audio(self, track_id: int, youtube_url: str, bitrate_kbps: int = 320) -> TrackEntity:
@@ -605,6 +704,12 @@ class LibraryService:
         track = self.repo.get_track(track_id)
         if not track:
             raise ValueError(f"Track ID {track_id} not found.")
+
+        log_test_event(
+            category="swap_start",
+            title=f"Starting audio swap for Track #{track_id} '{track.title}' with {youtube_url}",
+            details={"track_id": track_id, "title": track.title, "url": youtube_url, "bitrate": bitrate_kbps},
+        )
 
         target_mp3 = Path(track.file_path)
         backup_mp3 = target_mp3.with_suffix(".mp3.bak")
@@ -736,6 +841,17 @@ class LibraryService:
             )
 
             result_track = updated_track or track
+            log_test_event(
+                category="swap_complete",
+                title=f"Audio swap successfully finished for Track #{track_id} '{track.title}'",
+                details={
+                    "track_id": track_id,
+                    "title": track.title,
+                    "new_duration": new_duration,
+                    "bitrate_kbps": bitrate_kbps or calc_bitrate,
+                    "file_path": str(final_mp3_path),
+                },
+            )
             with self._swap_lock:
                 self._active_swaps[track_id] = {
                     "status": "completed",
@@ -746,6 +862,12 @@ class LibraryService:
                 }
             return result_track
         except Exception as exc:
+            log_test_event(
+                category="swap_error",
+                title=f"Audio swap failed for Track #{track_id}: {exc}",
+                details={"track_id": track_id, "error": str(exc)},
+                level="error",
+            )
             with self._swap_lock:
                 self._active_swaps[track_id] = {
                     "status": "error",

@@ -36,12 +36,14 @@ from musiclinker.domain.models import (
     ReplaceTrackAudioPayload,
     ScrobblePayload,
     SettingsUpdatePayload,
+    TestModeTogglePayload,
     TrackMetadataUpdatePayload,
     TransitionRulePayload,
 )
 from musiclinker.infrastructure.db import db_repo
 from musiclinker.infrastructure.lastfm_client import LastFMClient
 from musiclinker.infrastructure.tagger import audio_tagger
+from musiclinker.infrastructure.test_mode import log_test_event, test_mode_manager
 from musiclinker.infrastructure.youtube_client import youtube_client
 from musiclinker.services.curation_service import curation_service
 from musiclinker.services.job_service import job_service
@@ -52,6 +54,7 @@ from musiclinker.services.scrobble_service import scrobble_service
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
+        test_mode_manager.init_from_settings(db_repo.get_settings())
         library_service.scan_and_sync_downloads()
         scrobble_service.flush_pending_queue()
     except Exception as exc:
@@ -71,7 +74,7 @@ def require_paired_client(request: Request) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MusicLinker Personal Server",
-        version="3.1.5",
+        version="3.1.6",
         lifespan=lifespan,
     )
 
@@ -158,10 +161,10 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/tracks/candidate-preview/{video_id}")
-    async def get_candidate_preview_endpoint(video_id: str) -> FileResponse:
-        """Stream a 15-second MP3 snippet of a candidate YouTube video for instant verification."""
+    async def get_candidate_preview_endpoint(video_id: str, duration: float = 60.0) -> FileResponse:
+        """Stream an MP3 preview snippet of a candidate YouTube video for instant verification (up to 60s)."""
         try:
-            snippet_path = await asyncio.to_thread(library_service.generate_audio_snippet, video_id=video_id)
+            snippet_path = await asyncio.to_thread(library_service.generate_audio_snippet, video_id=video_id, duration_sec=duration)
             return FileResponse(
                 path=str(snippet_path),
                 media_type="audio/mpeg",
@@ -722,6 +725,7 @@ def create_app() -> FastAPI:
             "proxy_password_configured": bool(cfg.get("proxy_password")),
             "proxy_password": cfg.get("proxy_password", ""),
             "preferred_download_method": cfg.get("preferred_download_method", "auto"),
+            "test_mode": test_mode_manager.is_enabled(),
         }
 
     @app.put("/api/settings", dependencies=[Depends(require_paired_client)])
@@ -764,6 +768,40 @@ def create_app() -> FastAPI:
     def flush_pending_scrobbles_endpoint() -> dict[str, Any]:
         flushed = scrobble_service.flush_pending_queue()
         return {"flushed": flushed, "pending_count": len(db_repo.get_pending_scrobbles(limit=500))}
+
+    # ---- Backend Pull Inspection & Test Mode Endpoints ----
+
+    @app.get("/api/system/test-mode", dependencies=[Depends(require_paired_client)])
+    def get_test_mode_status() -> dict[str, Any]:
+        """Get current test mode status and recent telemetry pull events."""
+        return {
+            "enabled": test_mode_manager.is_enabled(),
+            "events": test_mode_manager.get_events(limit=200),
+            "total_count": len(test_mode_manager._events),
+        }
+
+    @app.post("/api/system/test-mode", dependencies=[Depends(require_paired_client)])
+    def set_test_mode_status(payload: TestModeTogglePayload) -> dict[str, Any]:
+        """Enable or disable backend test mode telemetry and inspection logging."""
+        test_mode_manager.set_enabled(payload.enabled)
+        db_repo.update_settings({"test_mode": payload.enabled})
+        return {"status": "success", "enabled": payload.enabled}
+
+    @app.post("/api/system/test-mode/clear", dependencies=[Depends(require_paired_client)])
+    def clear_test_mode_events() -> dict[str, Any]:
+        """Clear all stored backend inspection logs."""
+        test_mode_manager.clear()
+        return {"status": "cleared"}
+
+    @app.get("/api/system/test-mode/events", dependencies=[Depends(require_paired_client)])
+    def query_test_mode_events(
+        since: int = 0, category: str = "", limit: int = 200
+    ) -> dict[str, Any]:
+        """Poll for recent backend pull events since sequence number."""
+        return {
+            "enabled": test_mode_manager.is_enabled(),
+            "events": test_mode_manager.get_events(since_seq=since, category=category, limit=limit),
+        }
 
     # ---- PWA / APK Static Files & Root Entrypoint ----
 

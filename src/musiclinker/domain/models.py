@@ -346,3 +346,9 @@ class AlbumResolveInconsistencyPayload(BaseModel):
     canonical_album_artist: str = Field(default="")
     custom_cover_b64: str | None = Field(default=None)
     custom_cover_url: str | None = Field(default=None)
+
+
+class TestModeTogglePayload(BaseModel):
+    """Payload to toggle backend test mode and inspection logging."""
+
+    enabled: bool = Field(...)

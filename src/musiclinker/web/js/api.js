@@ -235,6 +235,32 @@ class MusicLinkerAPI {
     source.onerror = () => source.close();
     return source;
   }
+
+  getCandidatePreviewUrl(videoId, duration = 60) {
+    const clean = encodeURIComponent(videoId);
+    return this.resolveUrl(`/api/tracks/candidate-preview/${clean}?duration=${duration}`);
+  }
+
+  async getTestModeStatus() {
+    return this.request("/api/system/test-mode");
+  }
+
+  async setTestMode(enabled) {
+    return this.request("/api/system/test-mode", {
+      method: "POST",
+      body: JSON.stringify({ enabled: Boolean(enabled) }),
+    });
+  }
+
+  async clearTestModeLogs() {
+    return this.request("/api/system/test-mode/clear", { method: "POST" });
+  }
+
+  async getTestModeEvents(sinceSeq = 0, category = "") {
+    let url = `/api/system/test-mode/events?since=${sinceSeq}`;
+    if (category) url += `&category=${encodeURIComponent(category)}`;
+    return this.request(url);
+  }
 }
 
 export const api = new MusicLinkerAPI();
